@@ -1,66 +1,59 @@
-import os
-import logging
-import sys
-import pandas as pd
-from llama_index.core import VectorStoreIndex
-from llama_index.core import PromptTemplate
-from IPython.display import Markdown, display
-from llama_index.llms.ollama import Ollama
-from llama_index.llms.openai import OpenAI
-import openai
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.core import Settings
-from pathlib import Path
-from llama_index.readers.file import CSVReader
-import tempfile
 import json
-import re
+import tempfile
+from typing import List
 
-regex = re.compile("\[\s?(\{.*?\})+\]")
+import faiss
+import torch
+from datasets import load_dataset
+from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from pydantic import BaseModel
+import outlines
+from outlines.models import Transformers
+
+torch.set_grad_enabled(False)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+def split_text(text: str, n=100, character=" ") -> List[str]:
+    """Split the text every ``n``-th occurrence of ``character``"""
+    text = text.split(character)
+    return [character.join(text[i : i + n]).strip() for i in range(0, len(text), n)]
+
+def split_documents(documents: dict) -> dict:
+    """Split documents into passages"""
+    titles, texts = [], []
+    for title, text in zip(documents["title"], documents["text"]):
+        if text is not None:
+            for passage in split_text(text):
+                titles.append(title if title is not None else "")
+                texts.append(passage)
+    return {"title": titles, "text": texts}
+
+class GoTerm(BaseModel):
+    rank: int
+    name: str
+    reason: str
+
+class Response(BaseModel):
+    terms: List[GoTerm]
 
 class LLM:
 
     def __init__(self, llm="llama3",  embedding_model="w601sxs/b1ade-embed-kd",
-                 prompt_template=None, temperature=1.0, request_timeout=120.0, 
-                 ollama_host="localhost", ollama_port="11434"):
+                 prompt_template=None, temperature=1.0,
+                 embed_dim=768, hf_token=None):
         """
-        :param llm: The language model to use. Currently, either LLama3 or OpenAI GPT-4
+        :param llm: The language model to use. It has to be a model name that's accepted by the Transformers library
         :param embedding_model: The name of the hugging face model to use for embedding
-        :param temperature: Temperature parameter for LLama3
-        :param request_timeout: Request parameter for LLama3
-        :param ollama_host: Hostname for Ollama
-        :param ollama_port: Port for Ollama
+        :param temperature: The model temperature parameter
+        :param embed_dim: The dimension of the embeddings
+        :param hf_token: The hugging face token to use (if needed)
         """
-
-        if llm == "llama3":
-            ollama_api_url = f"http://{ollama_host}:{ollama_port}"
-            self.llm = Ollama(model="llama3", request_timeout=request_timeout,
-                              temperature=temperature, base_url=ollama_api_url)
-        elif llm.startswith("gpt"):
-            openai.api_key = os.environ["OPENAI_API_KEY"]
-            self.llm = OpenAI(model=llm)
-
-        else:
-            raise ValueError(f"Unknown Large Language Model - {llm}. Currently supportered are llama3, "
-                             f"gpt-3.5-turbo,  gpt-4")
-
-        self.embed_model = HuggingFaceEmbedding(model_name=embedding_model) #TODO add option to use OpenAI embedding
-
-        if prompt_template is None:
-            qa_prompt_tmpl_str = """\
-            Context information is below.
-            ---------------------
-            <s>[INST] <<SYS>>
-            You are an AI assistant helping biologists understand the mechanism of action of genomic mutation and how it brings about a phenotype .You should explain each of your response. Don't write introductions or conclusions.
-            <</SYS>>
-            Here's a context
-            {context_str}
-            
-            ---------------------
-            Query: {query_str}
-            Answer: \
-            """
-            self.prompt_template = PromptTemplate(qa_prompt_tmpl_str)
+        self.embed_dim = embed_dim
+        self.embed_model = SentenceTransformer(embedding_model, truncate_dim=self.embed_dim)
+        self.temperature = temperature
+        self.model = AutoModelForCausalLM.from_pretrained(llm, token=hf_token)
+        self.tokenizer = AutoTokenizer.from_pretrained(llm, token=hf_token)
 
     def get_relevant_go(self, phentoype, variant, enrich_tbl, k=10):
         """
@@ -75,42 +68,76 @@ class LLM:
         df.drop(columns=["ID", "Adjusted P-value"], inplace=True)
         df.to_csv(tmp_file, index=False)
         #Embed the GO terms and their descriptions.
-        Settings.embed_model = self.embed_model
-        reader = CSVReader(concat_rows=False) #Embed each row separately
-        docs = reader.load_data(file=Path(tmp_file.name))
-        index = VectorStoreIndex.from_documents(docs)
+        dataset = load_dataset("csv", data_files=[tmp_file.name],
+                                split="train",
+                               delimiter=",", column_names=["Term", "Desc"])
+        dataset = dataset.map(split_documents, batched=True)
+        dataset = dataset.map(self._embed_dataset, batched=True)
+        index = faiss.IndexHNSWFlat(self.embed_dim, 128, faiss.METRIC_INNER_PRODUCT)
+        dataset.add_faiss_index("embeddings", custom_index=index)
+        query = f"A biologist is studying the causal relationship between SNP {variant} and {phentoype}. Select {k} most relevant GO terms that are most likely to explain {phentoype}."
+        context = self._retrieve_top_k_documents(query, dataset, k)
+        prompt = f"""
+            <s>[INST] <<SYS>>
+            You are an AI assistant helping biologists understand the mechanism of action of genomic mutation and how it brings about a phenotype .You should explain each of your response. Don't write introductions or conclusions.
+            <</SYS>>
+            Here's a context
+            {context}
+            
+            ---------------------
+            Query: {query}
+            Answer: \
+            """
 
-        query_engine = index.as_query_engine(similarity_top_k=k, llm=self.llm,
-                                             text_qa_template=self.prompt_template)
+        llm_response = self.get_structured_response(prompt, enrich_tbl)
+        return llm_response
 
-        query_str = f"A biologist is studying the causal relationship between SNP {variant} and {phentoype}. Select {k} most relevant GO terms that are most likely to explain {phentoype}. Your response should be a parseable json that includes two fields 'Name' for name of the term and 'Reason' for the reason of your answer. Don't include introduction and conclusion remarks. Your response should be in the following format" + "[{'Name': 'GO_1', 'Reason': 'Reason Here'}]. Don't include statements such as 'Here is the response', 'The answer is', etc"
+    def _embed_dataset(self, batch):
+        combined_text = []
+        for title, text in zip(batch['title'], batch['text']):
+            combined_text.append(' [SEP] '.join([title, text]))
 
-        llm_response = query_engine.query(query_str)
-        result = llm_response.response
-        print(f"LLM Response: {result}")
-        parsed_res = self.parse_llm_response(result, enrich_tbl)
-        return parsed_res
+        return {"embeddings" : self.embed_model.encode(combined_text)}
 
-    def parse_llm_response(self, response, enrich_table):
-        # s = ''.join(response.split("\n"))
-        # matches = regex.findall(s)
-        # s = ''.join(matches)
-        # s = f"[{s}]"
-        response = json.loads(response)
-        subset_go = {"ID": [], "Name": [], "Reason": [], "Genes": [], "Adjusted P-value": []}
+    def _retrieve_top_k_documents(self, query, dataset, k):
+        """
+        Given a query and a dataset containing document embeddings, retrieve the top k most relevant documents using a metric (e.g MIPS)
+        :param query: The query to use for retrieval
+        :param dataset: The embedded documents
+        :param k: Number of documents to retrieve
+        :return:
+        """
+        embedded_query = self.embed_model.encode(query)
+        _, retrieved_docs = dataset.get_nearset_examples("embeddings", embedded_query, k)
+        return retrieved_docs
 
-        for res in response:
-            row = enrich_table[enrich_table["Term"].str.contains(res["Name"], case=False)]
+    def get_structured_response(self, prompt, enrich_table):
+        """
+        Use outlines to generate a structured response to a prompt
+        :param prompt: Prompt to use
+        :param enrich_table: Enrichment table
+        :return:
+        """
+        model = Transformers(self.model, self.tokenizer)
+        generator = outlines.generate.json(model, Response)
+        # rng = torch.Generator(device="cuda")
+        # rng.manual_seed(42)
+        response = generator(prompt)
+        subset_go = {"ID": [], "Name": [], "Rank": [],   "Reason": [], "Genes": [], "Adjusted P-value": []}
+
+        for res in response.terms:
+            row = enrich_table[enrich_table["Term"].str.contains(res.name, case=False)]
             if len(row) == 0:
                 print(f"Couldn't find {res['Name']}")
                 continue
             elif len(row) > 1:
                 row = row.head(1)
-            go_id, name, reason, pval, genes = row["ID"].iloc[0], row["Term"].iloc[0], \
-                res["Reason"], row["Adjusted P-value"].iloc[0], row["Genes"].iloc[0]
+            go_id, name, rank, reason, pval, genes = row["ID"].iloc[0], row["Term"].iloc[0], res.rank, \
+                res.reason, row["Adjusted P-value"].iloc[0], row["Genes"].iloc[0]
             if go_id not in subset_go["ID"]:
                 subset_go["ID"].append(go_id)
                 subset_go["Name"].append(name)
+                subset_go["Rank"].append(rank)
                 subset_go["Reason"].append(reason)
                 subset_go["Genes"].append(genes)
                 subset_go["Adjusted P-value"].append(pval)
