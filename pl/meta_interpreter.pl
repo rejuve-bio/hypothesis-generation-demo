@@ -198,3 +198,87 @@ without_hidden(X, X) :-
 %   (S1 = explanation_of_(E)
 %   -> S1 = explanation(E)
 %   ;explanation_of_(S2, E)).
+
+% Predicate to convert an 'and' compound clause to a list of terms
+and_to_list(and(Term1, Term2), List) :-
+    and_to_list(Term1, List1),
+    and_to_list(Term2, List2),
+    append(List1, List2, List).
+and_to_list(Term, [Term]).
+
+
+% Predicate to extract terms that do not contain variables or 'hideme(_)'
+extract_ground_terms(Term, List) :-
+    extract_terms(Term, AllTerms),
+    exclude(contains_var_or_hideme, AllTerms, FilteredTerms),
+    exclude(is_true_term, FilteredTerms, List).
+
+% Recursive helper predicate to extract all terms
+extract_terms(true, []) :- !.
+extract_terms(hideme(_), []) :- !.
+extract_terms(t(true, true, []), []) :- !.
+extract_terms(t(built_in, G, []), [G]) :- !.
+extract_terms(t(and, _, SubProof), Terms) :- !,
+    maplist(extract_terms, SubProof, SubTerms),
+    flatten(SubTerms, Terms).
+extract_terms(t(_, C, SubProof), Terms) :- !,
+    extract_terms(C, Term),
+    maplist(extract_terms, SubProof, SubTerms),
+    flatten(SubTerms, FlatSubTerms),
+    append(Term, FlatSubTerms, Terms).
+    
+extract_terms(Term, [Term]) :- !.
+
+% Helper predicate to check if a term contains variables or 'hideme(_)'
+contains_var_or_hideme(Term) :-
+    term_variables(Term, Vars),
+    Vars \= [],
+    !.
+contains_var_or_hideme(Term) :-
+    compound(Term),
+    Term =.. [hideme|_],
+    !.
+contains_var_or_hideme(Term) :-
+    compound(Term),
+    Term =.. [_|Args],
+    maplist(contains_var_or_hideme, Args).
+
+% Helper predicate to check if a term is 't(true, true, [])'
+is_true_term(t(true, true, [])).
+
+% Flatten a list of lists
+% Predicate to flatten a list of lists
+flatten([], []).
+flatten([L|Ls], Flat) :-
+    flatten(L, NewL),
+    flatten(Ls, NewLs),
+    append(NewL, NewLs, Flat).
+flatten(L, [L]).
+
+% % Append two lists
+% append([], L, L).
+% append([H|T], L, [H|R]) :-
+%     append(T, L, R).
+
+% Predicate to extract nodes and edges
+extract_nodes_edges([], [], []).
+extract_nodes_edges([Term|Terms], Nodes, Edges) :-
+    Term =.. [Relation, Subject, Object],
+    extract_nodes_edges(Terms, NodesTail, EdgesTail),
+    sort([Subject, Object | NodesTail], Nodes), % Remove duplicates
+    Edges = [[label(Relation), source(Subject), target(Object)] | EdgesTail].
+
+node_to_json(Node, json([id=NodeId, type=Type])) :-
+  Node =.. [Type, NodeId].
+
+edge_to_json([label(Relation), source(Subject), target(Object)], json([source=Source, target=Target, 
+                                label=Relation])) :-
+  Subject =.. [_, Source],
+  Object =.. [_, Target].
+
+% Predicate to create JSON graph
+create_json_graph([_|Terms], JSONGraph) :-
+    extract_nodes_edges(Terms, NodesList, EdgesList),
+    maplist(node_to_json, NodesList, NodesJSON),
+    maplist(edge_to_json, EdgesList, EdgesJSON),
+    JSONGraph = json([nodes=NodesJSON, edges=EdgesJSON]).

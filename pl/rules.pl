@@ -3,16 +3,16 @@
 
 % :- use_module(library(sldnfdraw)).
 % :- sldnf.
-% overlaps_with(A, B) :-
-%     chr(A, ChrA),
-%     chr(B, ChrB),
-%     start(A, StartA),
-%     start(B, StartB),
-%     end(A, EndA),
-%     end(B, EndB),
-%     ChrA = ChrB,
-%     StartA < StartB,
-%     EndB < EndA.
+overlaps_with(A, B) :-
+    chr(A, ChrA),
+    chr(B, ChrB),
+    start(A, StartA),
+    start(B, StartB),
+    end(A, EndA),
+    end(B, EndB),
+    ChrA = ChrB,
+    StartB < StartA,
+    EndA < EndB.
 
 codes_for(G, P) :-
     transcribed_to(G, T),
@@ -24,8 +24,8 @@ in_tad_with(S, G1) :-
     in_tad_region(G1, T).
 
 
-eqtl_association(S, G) :-
-    eqtl(S, G).
+% eqtl_association(S, G) :-
+%     eqtl(S, G).
 
 relevant_gene(G, S) :-
     in_tad_with(S, G),
