@@ -1,3 +1,8 @@
+:- module(meta_intepreter, [
+    prooftree/2,
+    json_proof_tree/2
+  ]).
+
 :- style_check(-discontiguous).
 :- op(500, xfy, =>).
 :- use_module(library(clpfd)).
@@ -10,7 +15,7 @@
 :- use_module(library(term_ext)).
 :- use_module(library(process)).
 :- use_module(library(readutil)).
-
+:- use_module(library(http/json)).
 
 t(_,_,_).
 
@@ -23,16 +28,6 @@ write_proof(File, Proof, Options) :-
     option(format(Format), Options, json),
     gv_export(File, {Proof}/[Out0]>>export_proof(Out0, Proof), [format(Format), directed(true)]).
 
-json_proof(A, PT) :-
-    prooftree(A, Proof),
-    tmp_file_stream(text, File, Out),
-    gv_export(File, {Proof}/[Out0]>>export_proof(Out0, Proof), [format(json), directed(true)]),
-    close(Out),
-    read_file_to_string(File, PT, []).
-
-prooftree(A, PT):-
-  mi(A, PT),
-  numbervars(PT).
 
 export_proof(Out, t(true, true, _)) :- !.
 export_proof(Out, t(hideme, hideme, [])) :- !.
@@ -95,15 +90,24 @@ mi((A, B), t(and, C, [PA, PB])) :- !, %conjuction
     mi(A, PA), mi(B, PB).
 
 %TODO Fix Me!
-mi((A;B), t(or, C, [PA, PB])) :- !, %disjunction
-    copy_term(or(A, B), C),
-    (mi(A, PA)
-    ; mi(B, PB)).
+% mi((A;B), t(or, C, [PA, PB])) :- !, %disjunction
+%     copy_term(or(A, B), C),
+%     (mi(A, PA)
+%     ; mi(B, PB)).
 
-% mi((_;B), t(or, C, [PB])) :- !,
-%     copy_term(or_right(A, B), C),
+% mi((A;_), t(or_left, C, [PA])) :- !,
+%   mi(A, PA).
+
+% mi((_;B), t(or_right, C, [PB])) :- !,
 %     mi(B, PB).
 
+
+mi((A;B), Proof) :- !,
+    findall(ProofA, mi(A, ProofA), ProofAs),
+    findall(ProofB, mi(B, ProofB), ProofBs),
+    (ProofAs = [ProofA], ProofBs = [ProofB] -> Proof = t(or, _, [ProofA, ProofB]) ;
+     ProofAs = [ProofA] -> Proof = ProofA ;
+     ProofBs = [ProofB] -> Proof = ProofB).
 
 mi(findall(X, G, Ls), t(R, C, SP)) :- !,
     findall(t(G, X, [P]), mi(G, P), Xs),
@@ -221,6 +225,15 @@ extract_terms(t(built_in, G, []), [G]) :- !.
 extract_terms(t(and, _, SubProof), Terms) :- !,
     maplist(extract_terms, SubProof, SubTerms),
     flatten(SubTerms, Terms).
+
+extract_terms(t(or_left, _, SubProof), Terms) :- !,
+    maplist(extract_terms, SubProof, SubTerms),
+    flatten(SubTerms, Terms).
+
+extract_terms(t(or_right, _, SubProof), Terms) :- !,
+    maplist(extract_terms, SubProof, SubTerms),
+    flatten(SubTerms, Terms).
+    
 extract_terms(t(_, C, SubProof), Terms) :- !,
     extract_terms(C, Term),
     maplist(extract_terms, SubProof, SubTerms),
@@ -255,10 +268,6 @@ flatten([L|Ls], Flat) :-
     append(NewL, NewLs, Flat).
 flatten(L, [L]).
 
-% % Append two lists
-% append([], L, L).
-% append([H|T], L, [H|R]) :-
-%     append(T, L, R).
 
 % Predicate to extract nodes and edges
 extract_nodes_edges([], [], []).
@@ -282,3 +291,32 @@ create_json_graph([_|Terms], JSONGraph) :-
     maplist(node_to_json, NodesList, NodesJSON),
     maplist(edge_to_json, EdgesList, EdgesJSON),
     JSONGraph = json([nodes=NodesJSON, edges=EdgesJSON]).
+
+prooftree(A, PT):-
+  mi(A, PT),
+  numbervars(PT).
+
+% json_proof_tree(A, PT) :-
+%   prooftree(A, Proof),
+%   tmp_file_stream(text, File, Out),
+%   gv_export(File, {Proof}/[Out0]>>export_proof(Out0, Proof), [format(json), directed(true)]),
+%   close(Out),
+%   read_file_to_string(File, PT, []).
+
+json_proof_tree(A, Graph) :-
+  prooftree(A, Proof),
+  extract_ground_terms(Proof, Terms),
+  create_json_graph(Terms, JsonGraph),
+  atom_json_term(Graph, JsonGraph, []).
+  % tmp_file_stream(text, File, Out), 
+  % json_write(Out, JsonGraph), 
+  % close(Out),
+  % read_file_to_string(File, Graph, []).
+
+% :- use_module(pengine_sandbox:library(meta_intepreter)).
+:- use_module(library(sandbox)).
+
+:- multifile sandbox:safe_primitive/1.
+
+sandbox:safe_primitive(meta_intepreter:prooftree(_,_)).
+sandbox:safe_primitive(meta_intepreter:json_proof_tree(_,_)).

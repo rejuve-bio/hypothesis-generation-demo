@@ -31,7 +31,6 @@ relevant_gene(G, S) :-
     in_tad_with(S, G),
     eqtl_association(S, G).
 
-
 relevant_gene_coexpression(G1, S) :-
     relevant_gene(G2, S),
     coexpressed_with(G1, G2).
@@ -46,9 +45,6 @@ member_(G, O, D) :-
     member_(G, X, D0).
 
 hideme(_).
-
-belongs_to(G, O) :-
-    hideme(member_(G, O, D)).
 
 relevant_go(O, S, SigGenes, Pval) :- 
     findall(G, relevant_gene_coexpression(gene(G), sequence_variant(S)), Gs),
@@ -76,7 +72,7 @@ relevant_go(O, S, SigGenes, Pval) :-
 %is CT a relevant cell type for sequence variant S
 % relevant_cell_type(CT, S) :-
 %     in_dnase_hypersensitive_site(S, CT);
-%     histone_mark(S, CT). %enhancer h3 marks
+% histone_mark(S, CT). %enhancer h3 marks
 
 % eqtl_association(S, G, CT) :-
 %     eqtl(S, G), 

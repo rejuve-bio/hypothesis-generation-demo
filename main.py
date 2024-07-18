@@ -3,6 +3,7 @@ from flask import Flask
 from flask_restful import Resource, Api
 from enrich import Enrich
 from semantic_search import SemanticSearch
+from llm import LLM
 from query_swipl import PrologQuery
 from api import EnrichAPI, HypothesisAPI
 import os
@@ -17,9 +18,8 @@ def parse_arguments():
     args.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
     # args.add_argument("--temperature", type=float, default=1.0)
     #Prolog arguments
-    # args.add_argument("--swipl_host", type=str, default="localhost")
+    args.add_argument("--swipl-host", type=str, default="localhost")
     args.add_argument("--swipl-port", type=int, default=4242)
-    args.add_argument("--swipl-pass", type=str, required=True)
     #Enrich arguments
     args.add_argument("--ensembl-hgnc-map", type=str, required=True)
     args.add_argument("--hgnc-ensembl-map", type=str, required=True)
@@ -35,10 +35,11 @@ def setup_api(args):
         hf_token = os.environ["HF_TOKEN"]
     except KeyError:
         hf_token = None
-    semantic_search = SemanticSearch(args.embedding_model, hf_token=hf_token)
-    prolog_query = PrologQuery(args.swipl_port, args.swipl_pass)
-    api.add_resource(EnrichAPI, "/enrich", resource_class_kwargs={"enrichr": enrichr, "semantic_search": semantic_search, "prolog_query": prolog_query})
-    api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query})
+    # semantic_search = SemanticSearch(args.embedding_model, hf_token=hf_token)
+    prolog_query = PrologQuery(args.swipl_host, args.swipl_port)
+    llm = LLM()
+    api.add_resource(EnrichAPI, "/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query})
+    api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm})
     return app
 
 def main():
