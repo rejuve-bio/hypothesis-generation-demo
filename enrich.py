@@ -34,9 +34,10 @@ class Enrich:
 
     def get_coexpression_net(self, relevant_gene):
         """
-        Given a tissue and a gene, return the top correlated genes.
-        :param tissue: Tissue name
+        Given a gene, tissue and cell_type, return the top correlated genes.
         :param gene: Gene ID
+        :param tissue: Tissue name
+        :param cell_type: Cell Type
         :return: List of genes
         """
         #TODO: Implement this using CellxGene API
