@@ -5,7 +5,7 @@ from enrich import Enrich
 from semantic_search import SemanticSearch
 from llm import LLM
 from query_swipl import PrologQuery
-from api import EnrichAPI, HypothesisAPI
+from api import EnrichAPI, HypothesisAPI, ChatAPI
 import os
 from flask_cors import CORS
 
@@ -40,6 +40,7 @@ def setup_api(args):
     llm = LLM()
     api.add_resource(EnrichAPI, "/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query})
     api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm})
+    api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm})
     return app
 
 def main():
