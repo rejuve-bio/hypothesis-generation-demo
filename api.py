@@ -28,14 +28,12 @@ class HypothesisAPI(Resource):
 
     def get(self):
         args = request.args
-        print(f"Got request for args: {args}")
+
         causal_gene, go_id, go_name, \
             variant_id, coexpressed_genes, pval, phenotype = args['causal_gene'] ,args['go_id'], \
                                 args['go_name'], args['variant_id'], args['genes'], args['pval'], \
                                 args['phenotype']
         coexpressed_gene_names = coexpressed_genes.split(";")
-        # # print(f"genes: {genes}, length: {len(genes)}")
-        # ensembl_ids = self.enrichr.get_ensembl_ids(genes)
         causal_gene_id = self.prolog_query.get_gene_ids([causal_gene.lower()])[0]
         coexpressed_gene_ids = self.prolog_query.get_gene_ids([g.lower() for g in coexpressed_gene_names])
         causal_graph = self.prolog_query.get_relevant_gene_proof(variant_id, causal_gene)
@@ -79,4 +77,15 @@ class HypothesisAPI(Resource):
         causal_graph = {"nodes": nodes, "edges": edges}
         summary = self.llm.summarize_graph(causal_graph)
         response = {"summary": summary, "graph": causal_graph}
+        return response
+    
+class ChatAPI(Resource):
+    def __init__(self, llm):
+        self.llm = llm
+
+    def post(self):
+        query = request.form.get('query')
+        graph = request.form.get('graph')
+        response = self.llm.chat(query, graph)
+        response = {"response": response}
         return response
