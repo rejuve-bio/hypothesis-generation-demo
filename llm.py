@@ -200,3 +200,27 @@ class LLM:
             response = self.llm.chat(messages).message.content #retry
             response = json.loads(response)
             return response["summary"]
+        
+    
+    def chat(self, query, graph):
+        """
+        Given a graph as a context, chat with the LLM
+        """
+        
+        system_prompt = f"""You are an expert in biology and genetics. You have been provided with a graph provides a hypothesis for the connection of a SNP to a phenotype in terms of genes and Go terms.
+                     Your task is to answer questions based on the graph. Return your response in JSON format with the key 'response'. Your answer shouldn't exceed 200 words.
+                     Don't add any additional information to the response."""
+                     
+        query = f"Graph: {graph}\nQuery: {query}"
+        messages = [
+                        ChatMessage(role="system", content=system_prompt),
+                        ChatMessage(role="user", content=query),
+                    ]
+        response = self.llm.chat(messages).message.content
+        try:
+            response = json.loads(response)
+            return response["response"]
+        except:
+            response = self.llm.chat(messages).message.content
+            response = json.loads(response)
+            return response["response"]
