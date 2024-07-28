@@ -1,0 +1,16 @@
+Flask
+flask-restful
+gseapy
+faiss-gpu
+outlines
+python-dotenv
+PyJWT
+pymongo
+torch
+torchvision
+torchaudio
+sentence-transformers
+llama_index
+llama-index-llms-anthropic
+pengines
+flask-cors

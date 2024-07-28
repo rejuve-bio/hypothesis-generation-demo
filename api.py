@@ -1,5 +1,43 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from flask_restful import Resource, Api, reqparse
+from auth import token_required, JWT_SECRET_KEY
+from datetime import datetime, timedelta
+import jwt
+from uuid import uuid4
+
+class SignupAPI(Resource):
+    def __init__(self, **kwargs):
+        self.db = kwargs['db']
+
+    def post(self):
+        args = request.get_json()
+        email = args.get('email')
+        password = args.get('password')
+
+        if not email or not password:
+            return {'message': 'email and password are required'}, 400
+        
+        return self.db.create_user(email, password)
+
+class LoginAPI(Resource):
+    def __init__(self, **kwargs):
+        self.db = kwargs['db']
+
+    def post(self):
+        args = request.get_json()
+        email = args.get('email')
+        password = args.get('password')
+
+        if not email or not password:
+            return {'message': 'email and password are required'}, 400
+        response, status = self.db.verify_user(email, password)
+        if status == 200:
+            user_id = response.get('user_id')
+            token = jwt.encode({'user_id': user_id, 'exp': datetime.utcnow() + timedelta(hours=1)}, JWT_SECRET_KEY, algorithm="HS256")
+            return jsonify({'token': token})
+
+        return response, status
+
 
 class EnrichAPI(Resource):
     def __init__(self, enrichr, llm, prolog_query):
@@ -20,20 +58,40 @@ class EnrichAPI(Resource):
         return {"causal_gene": causal_gene, "GO":  relevant_gos}
 
 class HypothesisAPI(Resource):
-    def __init__(self, enrichr, prolog_query, llm):
+    def __init__(self, enrichr, prolog_query, llm, db):
         self.enrichr = enrichr
         self.prolog_query = prolog_query
         self.llm = llm
+        self.db = db
 
+    @token_required
+    def get(self, current_user_id):
+        # Get the hypothesis_id from the query parameters
+        hypothesis_id = request.args.get('hypothesis_id')
 
-    def get(self):
+        if hypothesis_id:
+            # Fetch a specific hypothesis by hypothesis_id and user_id
+            print("this is hypothesis id: ", hypothesis_id)
+            hypothesis = self.db.get_hypotheses(current_user_id, hypothesis_id)
+            if not hypothesis:
+                return {"message": "Hypothesis not found or access denied."}, 404
+            return hypothesis, 200
+
+        # Fetch all hypotheses for the current user
+        hypotheses = self.db.get_hypotheses(user_id=current_user_id)
+        return hypotheses, 200
+
+    @token_required
+    def post(self, current_user_id):
         args = request.args
-
+        print(f"Got request for args: {args}")
         causal_gene, go_id, go_name, \
             variant_id, coexpressed_genes, pval, phenotype = args['causal_gene'] ,args['go_id'], \
                                 args['go_name'], args['variant_id'], args['genes'], args['pval'], \
                                 args['phenotype']
         coexpressed_gene_names = coexpressed_genes.split(";")
+        # # print(f"genes: {genes}, length: {len(genes)}")
+        # ensembl_ids = self.enrichr.get_ensembl_ids(genes)
         causal_gene_id = self.prolog_query.get_gene_ids([causal_gene.lower()])[0]
         coexpressed_gene_ids = self.prolog_query.get_gene_ids([g.lower() for g in coexpressed_gene_names])
         causal_graph = self.prolog_query.get_relevant_gene_proof(variant_id, causal_gene)
@@ -76,8 +134,26 @@ class HypothesisAPI(Resource):
 
         causal_graph = {"nodes": nodes, "edges": edges}
         summary = self.llm.summarize_graph(causal_graph)
+
+        hypothesis_data = {
+            "hypothesis_id": str(uuid4()),
+            "variant_id": variant_id,
+            "phenotype": phenotype,
+            "causal_gene": causal_gene,
+            "causal_graph": causal_graph,
+            "summary": summary,
+            "biological_context": ""
+        }
+        self.db.create_hypothesis(current_user_id, hypothesis_data)
         response = {"summary": summary, "graph": causal_graph}
         return response
+
+    @token_required
+    def delete(self, current_user_id):
+        hypothesis_id = request.args.get('hypothesis_id')
+        if hypothesis_id:
+            return self.db.delete_hypothesis(current_user_id, hypothesis_id)
+        return {"message": "hypothesis id is required!"}
     
 class ChatAPI(Resource):
     def __init__(self, llm):
