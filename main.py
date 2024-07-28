@@ -4,8 +4,9 @@ from flask_restful import Resource, Api
 from enrich import Enrich
 from semantic_search import SemanticSearch
 from llm import LLM
+from db import Database
 from query_swipl import PrologQuery
-from api import EnrichAPI, HypothesisAPI
+from api import EnrichAPI, HypothesisAPI, SignupAPI, LoginAPI
 import os
 from flask_cors import CORS
 
@@ -30,6 +31,13 @@ def setup_api(args):
     app = Flask(__name__)
     CORS(app)
     api = Api(app)
+
+    # Use environment variables
+    mongodb_uri = os.getenv("MONGODB_URI")
+    db_name = os.getenv("DB_NAME")
+
+    db = Database(mongodb_uri, db_name)
+
     enrichr = Enrich(args.ensembl_hgnc_map, args.hgnc_ensembl_map, args.go_map)
     try:
         hf_token = os.environ["HF_TOKEN"]
@@ -39,7 +47,10 @@ def setup_api(args):
     prolog_query = PrologQuery(args.swipl_host, args.swipl_port)
     llm = LLM()
     api.add_resource(EnrichAPI, "/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query})
-    api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm})
+    api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
+    api.add_resource(SignupAPI, '/signup', resource_class_kwargs={'db': db})
+    api.add_resource(LoginAPI, '/login', resource_class_kwargs={'db': db})
+
     return app
 
 def main():
