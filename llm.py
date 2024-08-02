@@ -95,7 +95,7 @@ class LLM:
                         """
             
         
-        print(f"Systen Prompt: {system_prompt}")
+        # print(f"Systen Prompt: {system_prompt}")
         query = f"GWAS Phenotype: {phenotype}\nGenes: {genes_str}"
         print(f"Query: {query}")
         messages = [
@@ -226,7 +226,10 @@ class LLM:
         Given a graph as a context, chat with the LLM
         """
         
-        system_prompt = f"""You are an expert in biology and genetics. Your task is to identify likely causal genes within a locus for a given GWAS phenotype based on literature evidence. Focus on genes that are significantly regulated by the SNPs in the locus and have a downstream effect on the phenotype. From the list, provide the likely causal gene (matching one of the given genes), confidence (0: very unsure to 1: very confident), and a brief reason (50 words or less) for your choice, specifically mentioning how SNPs in the locus affect the gene's expression or function."""
+        system_prompt = f"""You are an expert in biology and genetics. 
+        Use the provided graph, which describes a potential hypothesis as to why a SNP is causally related to a phenotype, as a context and answer the query. Your answer should be 100 words or less.
+        
+        Return your response in JSON format. JSON key should be `response`. Don't add any additional information to the response."""
                      
         query = f"Graph: {graph}\nQuery: {query}"
         messages = [
@@ -234,6 +237,7 @@ class LLM:
                         ChatMessage(role="user", content=query),
                     ]
         response = self.llm.chat(messages).message.content
+        print(f"LLM Response: {response}")
         try:
             response = json.loads(response)
             return response["response"]
