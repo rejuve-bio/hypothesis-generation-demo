@@ -26,6 +26,7 @@ class PrologQuery:
     def get_relevant_gene_proof(self, variant_id, gene):
         gene_id = self.get_gene_ids([gene])[0]
         query  = f"json_proof_tree(relevant_gene(gene({gene_id}), snp({variant_id})), Graph)"
+        print("this is prolog query: ", query)
         pengine = Pengine(builder=self.pengine_builder)
         pengine.doAsk(pengine.ask(query))
         graph = pengine.currentQuery.availProofs[0]["Graph"]
