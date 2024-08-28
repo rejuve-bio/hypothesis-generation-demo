@@ -84,7 +84,7 @@ class EnrichAPI(Resource):
             "relevant_gos": relevant_gos
         }
         self.db.create_enrich(current_user_id, enrich_data)
-        return {"causal_gene": causal_gene, "GO":  relevant_gos}
+        return {"enrich_id": enrich_data["enrich_id"], "causal_gene": causal_gene, "GO":  relevant_gos}
     
     @token_required
     def delete(self, current_user_id):
@@ -120,23 +120,27 @@ class HypothesisAPI(Resource):
     @token_required
     def post(self, current_user_id):
         form_data = request.form
-        print(f"Got request for form data: {form_data}")
-        
-        causal_gene = form_data['causal_gene']
+        enrich_id = form_data['enrich_id']
+
+        enrich_data = self.db.get_enrich(current_user_id, enrich_id)
+        if not enrich_data:
+            return {"message": "Invalid enrich_id or access denied."}, 404
+    
+    
         go_id = form_data['go_id']
         go_name = form_data['go_name']
-        variant_id = form_data['variant_id']
+        causal_gene = enrich_data['casual_gene']
+        variant_id = enrich_data['variant_id']
+        phenotype = enrich_data['phenotype']
         coexpressed_genes = form_data['genes']
-        pval = form_data.get('pval', None)  # Use .get() to avoid KeyError if pval is not sent
-        phenotype = form_data['phenotype']
+
         coexpressed_gene_names = coexpressed_genes.split(";")
-        # # print(f"genes: {genes}, length: {len(genes)}")
-        # ensembl_ids = self.enrichr.get_ensembl_ids(genes)
         causal_gene_id = self.prolog_query.get_gene_ids([causal_gene.lower()])[0]
-        print("this is causal gene id: ", causal_gene_id)
         coexpressed_gene_ids = self.prolog_query.get_gene_ids([g.lower() for g in coexpressed_gene_names])
+        
         causal_graph = self.prolog_query.get_relevant_gene_proof(variant_id, causal_gene)
         nodes, edges = causal_graph["nodes"], causal_graph["edges"]
+
         gene_nodes = [n for n in nodes if n["type"] == "gene"]
         gene_ids = [n['id'] for n in gene_nodes]
         gene_entities = [f"gene({id})" for id in gene_ids]
@@ -156,7 +160,6 @@ class HypothesisAPI(Resource):
             variant_id = variant_id.replace("'", "")
             node["id"] = variant_id
             node["name"] = rsid
-            #Get the edges for the variant and update them
             source_edges = [e for e in edges if e["source"] == rsid]
             target_edges = [e for e in edges if e["target"] == rsid]
             for edge in source_edges:
@@ -174,11 +177,12 @@ class HypothesisAPI(Resource):
             edges.append({"source": causal_gene_id, "target": gene_id, "label": "coexpressed_with"})
 
         causal_graph = {"nodes": nodes, "edges": edges}
+
         summary = self.llm.summarize_graph(causal_graph)
 
         hypothesis_data = {
             "hypothesis_id": str(uuid4()),
-            "variant_id": form_data['variant_id'],
+            "variant_id": variant_id,
             "phenotype": phenotype,
             "causal_gene": causal_gene,
             "causal_graph": causal_graph,
@@ -186,10 +190,8 @@ class HypothesisAPI(Resource):
             "biological_context": ""
         }
         self.db.create_hypothesis(current_user_id, hypothesis_data)
-        response = {"summary": summary, "graph": causal_graph}
-        print("response: ", response)
-        return response
-
+        return {"summary": summary, "graph": causal_graph}, 201
+    
     @token_required
     def delete(self, current_user_id):
         hypothesis_id = request.args.get('hypothesis_id')
