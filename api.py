@@ -67,6 +67,11 @@ class EnrichAPI(Resource):
     def post(self, current_user_id):
         args = request.args
         phenotype, variant = args['phenotype'], args['variant']
+        # if self.db.check_enrich(current_user_id, phenotype, variant):
+        #     enrich = self.db.get_enrich_by_phenotype_and_variant(phenotype, variant)
+        #     print("Retrieved enrich data from saved db")
+        #     return {"enrich_id": enrich.get('enrich_id')}
+        
         print(f"Got request for phenotype: {phenotype}, variant: {variant}")
         candidate_genes = self.prolog_query.get_candidate_genes(variant)
         print(f"Candidate genes: {candidate_genes}")
@@ -84,7 +89,7 @@ class EnrichAPI(Resource):
             "relevant_gos": relevant_gos
         }
         self.db.create_enrich(current_user_id, enrich_data)
-        return {"enrich_id": enrich_data["enrich_id"], "causal_gene": causal_gene, "GO":  relevant_gos}
+        return {"enrich_id": enrich_data["enrich_id"]}
     
     @token_required
     def delete(self, current_user_id):
@@ -119,20 +124,36 @@ class HypothesisAPI(Resource):
 
     @token_required
     def post(self, current_user_id):
-        form_data = request.form
-        enrich_id = form_data['enrich_id']
+        args = request.args
+        enrich_id = args['enrich_id']
+    
+        go_id = args['go_id']
+        print("go_id: ", go_id)
 
+        if self.db.check_hypothesis(current_user_id, enrich_id, go_id):
+            hypothesis = self.db.get_hypothesis_by_enrich_and_go(enrich_id, go_id)
+            summary = hypothesis.get('summary', 'No summary available')
+            causal_graph = hypothesis.get('causal_graph', 'No graph available')
+            print("retrieved the hypothesis from saved db.")
+            return {"summary": summary, "graph": causal_graph}, 201
+                    
+        
         enrich_data = self.db.get_enrich(current_user_id, enrich_id)
         if not enrich_data:
             return {"message": "Invalid enrich_id or access denied."}, 404
-    
-    
-        go_id = form_data['go_id']
-        go_name = form_data['go_name']
-        causal_gene = enrich_data['casual_gene']
+        
+        go_id_name_dict = dict(zip(enrich_data['relevant_gos']['ID'], enrich_data['relevant_gos']['Name']))
+        go_name = go_id_name_dict.get(go_id, "GO name not found.")
+        print("go_name: ", go_name)
+        causal_gene = "IRX3" #enrich_data['casual_gene']
+        print("causal_gene: ", causal_gene)
         variant_id = enrich_data['variant_id']
+        print("variant_id", variant_id)
         phenotype = enrich_data['phenotype']
-        coexpressed_genes = form_data['genes']
+        print("phenotype: ", phenotype)
+        go_id_genes_dict = dict(zip(enrich_data['relevant_gos']['ID'], enrich_data['relevant_gos']['Genes']))
+        coexpressed_genes = go_id_genes_dict.get(go_id, "Coexpressed genes not found.")
+        print("coexpressed_genes: ", coexpressed_genes)
 
         coexpressed_gene_names = coexpressed_genes.split(";")
         causal_gene_id = self.prolog_query.get_gene_ids([causal_gene.lower()])[0]
@@ -182,6 +203,8 @@ class HypothesisAPI(Resource):
 
         hypothesis_data = {
             "hypothesis_id": str(uuid4()),
+            "enrich_id": enrich_id,
+            "go_id": go_id,
             "variant_id": variant_id,
             "phenotype": phenotype,
             "causal_gene": causal_gene,
@@ -190,6 +213,7 @@ class HypothesisAPI(Resource):
             "biological_context": ""
         }
         self.db.create_hypothesis(current_user_id, hypothesis_data)
+        print("Casual graph: ", causal_graph)
         return {"summary": summary, "graph": causal_graph}, 201
     
     @token_required
