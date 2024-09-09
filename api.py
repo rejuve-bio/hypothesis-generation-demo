@@ -33,7 +33,7 @@ class LoginAPI(Resource):
         response, status = self.db.verify_user(email, password)
         if status == 200:
             user_id = response.get('user_id')
-            token = jwt.encode({'user_id': user_id, 'exp': datetime.utcnow() + timedelta(hours=1)}, JWT_SECRET_KEY, algorithm="HS256")
+            token = jwt.encode({'user_id': user_id, 'exp': datetime.utcnow() + timedelta(hours=12)}, JWT_SECRET_KEY, algorithm="HS256")
             return jsonify({'token': token})
 
         return response, status
@@ -49,8 +49,8 @@ class EnrichAPI(Resource):
     @token_required
     def get(self, current_user_id):
         # Get the enrich_id from the query parameters
-        enrich_id = request.args.get('enrich_id')
-
+        enrich_id = request.args.get('id')
+        print("this is current user id: ", current_user_id)
         if enrich_id:
             # Fetch a specific enrich by enrich_id and user_id
             print("this is enrich id: ", enrich_id)
@@ -67,33 +67,44 @@ class EnrichAPI(Resource):
     def post(self, current_user_id):
         args = request.args
         phenotype, variant = args['phenotype'], args['variant']
-        # if self.db.check_enrich(current_user_id, phenotype, variant):
-        #     enrich = self.db.get_enrich_by_phenotype_and_variant(phenotype, variant)
-        #     print("Retrieved enrich data from saved db")
-        #     return {"enrich_id": enrich.get('enrich_id')}
+        if self.db.check_enrich(current_user_id, phenotype, variant):
+            enrich = self.db.get_enrich_by_phenotype_and_variant(phenotype, variant, current_user_id)
+            print("Retrieved enrich data from saved db")
+            return {"id": enrich.get('id')}, 409
         
         print(f"Got request for phenotype: {phenotype}, variant: {variant}")
         candidate_genes = self.prolog_query.get_candidate_genes(variant)
         print(f"Candidate genes: {candidate_genes}")
         causal_gene = self.llm.predict_casual_gene(phenotype, candidate_genes)["causal_gene"]
         print(f"Predicted causal gene: {causal_gene}")
+        causal_graph, proof = self.prolog_query.get_relevant_gene_proof(variant, causal_gene)
+
+        if causal_graph is None:
+            print(f"Failed to get proof for causal gene: {causal_gene}. Retrying with proof {proof}")
+            # Re-prompt the llm with the proof
+            causal_gene = self.llm.predict_casual_gene(phenotype, candidate_genes, rule=proof, prev_gene=causal_gene)["causal_gene"]
+            # Re-try proof
+            causal_graph, proof = self.prolog_query.get_relevant_gene_proof(variant, causal_gene)
+            if causal_graph is None:
+                return {"error": "Failed to get proof for causal gene"}
+            
+        print(f"Predicted causal gene: {causal_gene}")
         enrich_tbl = self.enrichr.run(causal_gene)
         relevant_gos = self.llm.get_relevant_go(phenotype, enrich_tbl)
         enrich_data = {
-            "enrich_id": str(uuid4()),
+            "id": str(uuid4()),
+            "created_on": datetime.utcnow().isoformat(timespec='milliseconds') + "Z",
+            "variant": variant,
             "phenotype": phenotype,
-            "variant_id": variant,
-            "candidate_genes": candidate_genes,
-            "casual_gene": causal_gene,
-            # "enrich_tbl": enrich_tbl.to_dict(orient="records"),
-            "relevant_gos": relevant_gos
+            "causal_gene": causal_gene,
+            "GO_terms": relevant_gos
         }
         self.db.create_enrich(current_user_id, enrich_data)
-        return {"enrich_id": enrich_data["enrich_id"]}
+        return {"id": enrich_data["id"]}
     
     @token_required
     def delete(self, current_user_id):
-        enrich_id = request.args.get('enrich_id')
+        enrich_id = request.args.get('id')
         if enrich_id:
             return self.db.delete_enrich(current_user_id, enrich_id)
         return {"message": "enrich id is required!"}
@@ -108,7 +119,7 @@ class HypothesisAPI(Resource):
     @token_required
     def get(self, current_user_id):
         # Get the hypothesis_id from the query parameters
-        hypothesis_id = request.args.get('hypothesis_id')
+        hypothesis_id = request.args.get('id')
 
         if hypothesis_id:
             # Fetch a specific hypothesis by hypothesis_id and user_id
@@ -124,14 +135,12 @@ class HypothesisAPI(Resource):
 
     @token_required
     def post(self, current_user_id):
-        args = request.args
-        enrich_id = args['enrich_id']
-    
-        go_id = args['go_id']
+        enrich_id = request.args.get('id')
+        go_id = request.args.get('go')
         print("go_id: ", go_id)
 
         if self.db.check_hypothesis(current_user_id, enrich_id, go_id):
-            hypothesis = self.db.get_hypothesis_by_enrich_and_go(enrich_id, go_id)
+            hypothesis = self.db.get_hypothesis_by_enrich_and_go(enrich_id, go_id, current_user_id)
             summary = hypothesis.get('summary', 'No summary available')
             causal_graph = hypothesis.get('causal_graph', 'No graph available')
             print("retrieved the hypothesis from saved db.")
@@ -141,26 +150,27 @@ class HypothesisAPI(Resource):
         enrich_data = self.db.get_enrich(current_user_id, enrich_id)
         if not enrich_data:
             return {"message": "Invalid enrich_id or access denied."}, 404
-        
-        go_id_name_dict = dict(zip(enrich_data['relevant_gos']['ID'], enrich_data['relevant_gos']['Name']))
-        go_name = go_id_name_dict.get(go_id, "GO name not found.")
+                
+        go_term = [go for go in enrich_data[0]["GO_terms"] if go["id"] == go_id]
+        print("this is go term: ", go_term)
+        go_name = go_term[0]["name"]
         print("go_name: ", go_name)
-        causal_gene = "IRX3" #enrich_data['casual_gene']
+        causal_gene = enrich_data[0]['causal_gene']
         print("causal_gene: ", causal_gene)
-        variant_id = enrich_data['variant_id']
+        variant_id = enrich_data[0]['variant']
         print("variant_id", variant_id)
-        phenotype = enrich_data['phenotype']
+        phenotype = enrich_data[0]['phenotype']
         print("phenotype: ", phenotype)
-        go_id_genes_dict = dict(zip(enrich_data['relevant_gos']['ID'], enrich_data['relevant_gos']['Genes']))
-        coexpressed_genes = go_id_genes_dict.get(go_id, "Coexpressed genes not found.")
-        print("coexpressed_genes: ", coexpressed_genes)
+        coexpressed_gene_names = go_term[0]["genes"] 
+        print("coexpressed_genes: ", coexpressed_gene_names)
 
-        coexpressed_gene_names = coexpressed_genes.split(";")
+        # coexpressed_gene_names = coexpressed_genes.split(";")
         causal_gene_id = self.prolog_query.get_gene_ids([causal_gene.lower()])[0]
         coexpressed_gene_ids = self.prolog_query.get_gene_ids([g.lower() for g in coexpressed_gene_names])
         
         causal_graph = self.prolog_query.get_relevant_gene_proof(variant_id, causal_gene)
-        nodes, edges = causal_graph["nodes"], causal_graph["edges"]
+        print("this is the causal_graph: ", causal_graph)
+        nodes, edges = causal_graph[0]["nodes"], causal_graph[0]["edges"]
 
         gene_nodes = [n for n in nodes if n["type"] == "gene"]
         gene_ids = [n['id'] for n in gene_nodes]
@@ -202,7 +212,7 @@ class HypothesisAPI(Resource):
         summary = self.llm.summarize_graph(causal_graph)
 
         hypothesis_data = {
-            "hypothesis_id": str(uuid4()),
+            "id": str(uuid4()),
             "enrich_id": enrich_id,
             "go_id": go_id,
             "variant_id": variant_id,
@@ -213,7 +223,6 @@ class HypothesisAPI(Resource):
             "biological_context": ""
         }
         self.db.create_hypothesis(current_user_id, hypothesis_data)
-        print("Casual graph: ", causal_graph)
         return {"summary": summary, "graph": causal_graph}, 201
     
     @token_required

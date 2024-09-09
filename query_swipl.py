@@ -26,12 +26,17 @@ class PrologQuery:
     def get_relevant_gene_proof(self, variant_id, gene):
         gene_id = self.get_gene_ids([gene])[0]
         query  = f"json_proof_tree(relevant_gene(gene({gene_id}), snp({variant_id})), Graph)"
-        print("this is prolog query: ", query)
         pengine = Pengine(builder=self.pengine_builder)
         pengine.doAsk(pengine.ask(query))
+        if pengine.currentQuery is None:
+            pengine = Pengine(builder=self.pengine_builder)
+            pengine.doAsk(pengine.ask("meta_intepreter:rule_body(relevant_gene(G, S), R)")) #Get the body of the failed rule
+            rule = pengine.currentQuery.availProofs[0]["R"]
+            print(f"Failed rule: {rule}")
+            return None, rule
         graph = pengine.currentQuery.availProofs[0]["Graph"]
         # pengine.doStop()
-        return json.loads(graph)
+        return json.loads(graph), True
     
     def get_gene_ids(self, genes):
         genes = [g.lower() for g in genes]
