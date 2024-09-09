@@ -56,7 +56,7 @@ def setup_api(args):
 def main():
     args = parse_arguments()
     app = setup_api(args)
-    app.run(host=args.host, port=args.port)
+    app.run(host=args.host, port=args.port, debug=True)
 
 if __name__ == "__main__":
     main()
