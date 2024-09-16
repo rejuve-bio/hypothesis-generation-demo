@@ -1,0 +1,11 @@
+{
+    "port": 5001,
+    "host": "0.0.0.0",
+    "embedding_model": "w601sxs/b1ade-embed-kd",
+    "swipl_host": "100.67.47.42",
+    "swipl_port": 4242,
+    "ensembl_hgnc_map": "data/ensembl_to_hgnc.pkl",
+    "hgnc_ensembl_map": "data/hgnc_to_ensembl.pkl",
+    "go_map": "data/go_map.pkl"
+}
+  

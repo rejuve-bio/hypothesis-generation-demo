@@ -19,7 +19,7 @@ def parse_arguments():
     args.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
     # args.add_argument("--temperature", type=float, default=1.0)
     #Prolog arguments
-    args.add_argument("--swipl-host", type=str, default="localhost")
+    args.add_argument("--swipl-host", type=str, default="100.67.47.42")
     args.add_argument("--swipl-port", type=int, default=4242)
     #Enrich arguments
     args.add_argument("--ensembl-hgnc-map", type=str, required=True)

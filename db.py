@@ -41,6 +41,14 @@ class Database:
             query['user_id'] = user_id
         if hypothesis_id:
             query['id'] = hypothesis_id
+            hypothesis = self.hypothesis_collection.find_one(query)
+            if hypothesis:
+                hypothesis["_id"] = str(hypothesis["_id"])
+            else:
+                print("No document found for the given hypothesis id.")
+            return hypothesis
+
+
 
         hypotheses = list(self.hypothesis_collection.find(query))
         for hypothesis in hypotheses:
@@ -113,6 +121,12 @@ class Database:
             query['user_id'] = user_id
         if enrich_id:
             query['id'] = enrich_id
+            enrich = self.enrich_collection.find_one(query)  
+            if enrich:
+                enrich['_id'] = str(enrich['_id'])
+            else:
+                print("No document found for the given enrich_id.")
+            return enrich
 
         print("this is query: ", query)
         enriches = list(self.enrich_collection.find(query))
