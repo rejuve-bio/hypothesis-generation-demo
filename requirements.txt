@@ -1,7 +1,7 @@
 Flask
 flask-restful
 gseapy
-faiss-gpu
+faiss-gpu==1.7.2
 outlines
 python-dotenv
 PyJWT
@@ -14,3 +14,4 @@ llama_index
 llama-index-llms-anthropic
 pengines
 flask-cors
+prefect
