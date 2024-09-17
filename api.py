@@ -97,7 +97,8 @@ class EnrichAPI(Resource):
             "variant": variant,
             "phenotype": phenotype,
             "causal_gene": causal_gene,
-            "GO_terms": relevant_gos
+            "GO_terms": relevant_gos,
+            "causal_graph": causal_graph
         }
         self.db.create_enrich(current_user_id, enrich_data)
         return {"id": enrich_data["id"]}
@@ -151,26 +152,27 @@ class HypothesisAPI(Resource):
         if not enrich_data:
             return {"message": "Invalid enrich_id or access denied."}, 404
                 
-        go_term = [go for go in enrich_data[0]["GO_terms"] if go["id"] == go_id]
+        go_term = [go for go in enrich_data["GO_terms"] if go["id"] == go_id]
         print("this is go term: ", go_term)
         go_name = go_term[0]["name"]
         print("go_name: ", go_name)
-        causal_gene = enrich_data[0]['causal_gene']
+        causal_gene = enrich_data['causal_gene']
         print("causal_gene: ", causal_gene)
-        variant_id = enrich_data[0]['variant']
+        variant_id = enrich_data['variant']
         print("variant_id", variant_id)
-        phenotype = enrich_data[0]['phenotype']
+        phenotype = enrich_data['phenotype']
         print("phenotype: ", phenotype)
         coexpressed_gene_names = go_term[0]["genes"] 
         print("coexpressed_genes: ", coexpressed_gene_names)
+        causal_graph = enrich_data['causal_graph']
+        print("this is the causal_graph: ", causal_graph)
 
         # coexpressed_gene_names = coexpressed_genes.split(";")
         causal_gene_id = self.prolog_query.get_gene_ids([causal_gene.lower()])[0]
         coexpressed_gene_ids = self.prolog_query.get_gene_ids([g.lower() for g in coexpressed_gene_names])
         
-        causal_graph = self.prolog_query.get_relevant_gene_proof(variant_id, causal_gene)
         print("this is the causal_graph: ", causal_graph)
-        nodes, edges = causal_graph[0]["nodes"], causal_graph[0]["edges"]
+        nodes, edges = causal_graph["nodes"], causal_graph["edges"]
 
         gene_nodes = [n for n in nodes if n["type"] == "gene"]
         gene_ids = [n['id'] for n in gene_nodes]
@@ -218,7 +220,7 @@ class HypothesisAPI(Resource):
             "variant_id": variant_id,
             "phenotype": phenotype,
             "causal_gene": causal_gene,
-            "causal_graph": causal_graph,
+            "graph": causal_graph,
             "summary": summary,
             "biological_context": ""
         }
