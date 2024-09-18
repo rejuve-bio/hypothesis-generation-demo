@@ -54,10 +54,8 @@ class EnrichAPI(Resource):
     def get(self, current_user_id):
         # Get the enrich_id from the query parameters
         enrich_id = request.args.get('id')
-        print("this is current user id: ", current_user_id)
         if enrich_id:
             # Fetch a specific enrich by enrich_id and user_id
-            print("this is enrich id: ", enrich_id)
             enrich = self.db.get_enrich(current_user_id, enrich_id)
             if not enrich:
                 return {"message": "Enrich not found or access denied."}, 404
@@ -84,7 +82,6 @@ class EnrichAPI(Resource):
             return result, 200
         return {"message": "enrich id is required!"}, 400
     
-    
 
 class HypothesisAPI(Resource):
     def __init__(self, enrichr, prolog_query, llm, db):
@@ -100,7 +97,6 @@ class HypothesisAPI(Resource):
 
         if hypothesis_id:
             # Fetch a specific hypothesis by hypothesis_id and user_id
-            print("this is hypothesis id: ", hypothesis_id)
             hypothesis = self.db.get_hypotheses(current_user_id, hypothesis_id)
             if not hypothesis:
                 return {"message": "Hypothesis not found or access denied."}, 404
@@ -114,11 +110,10 @@ class HypothesisAPI(Resource):
     def post(self, current_user_id):
         enrich_id = request.args.get('id')
         go_id = request.args.get('go')
-        print("go_id: ", go_id)
         
         # Run the Prefect flow and return the result
-
         flow_result = hypothesis_flow(current_user_id, enrich_id, go_id, self.db, self.prolog_query, self.llm)
+
         return flow_result
     
     @token_required
