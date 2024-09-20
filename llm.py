@@ -58,8 +58,7 @@ class LLM:
                 raise ValueError("Please set the ANTHROPIC_API_KEY environment variable")
     
     
-    def predict_casual_gene(self, phenotype, genes, 
-                            prev_gene = None, rule=None):
+    def predict_casual_gene(self, phenotype, genes):
         """
         Given a variant, a list of candidate genes and a phenotype, query the LLM to predict the causal gene
         """
@@ -69,33 +68,15 @@ class LLM:
             genes_fmt.append("{" + gene + "}")
             
         genes_str = ",".join(genes_fmt)
-        if rule is None:
-            system_prompt = """You are an expert in biology and genetics.
-                            Your task is to identify likely causal genes within a locus for a given GWAS phenotype based on literature evidence.
+        system_prompt = """You are an expert in biology and genetics.
+                        Your task is to identify likely causal genes within a locus for a given GWAS phenotype based on literature evidence.
 
-                            From the list, provide the likely causal gene (matching one of the given genes), confidence (0: very unsure to 1: very confident), and a brief reason (50 words or less) for your choice.
+                        From the list, provide the likely causal gene (matching one of the given genes), confidence (0: very unsure to 1: very confident), and a brief reason (50 words or less) for your choice.
 
-                            Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
-                            Don't add any additional information to the response.
+                        Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
+                        Don't add any additional information to the response.
                         """
-        else:
-            assert prev_gene is not None, "Previous gene must be provided when rule is provided"
-            system_prompt = f"""You are an expert in biology and genetics.
-                            Your task is to identify likely causal genes within a locus for a given GWAS phenotype based on literature evidence.
 
-                            From the list, provide the likely causal gene (matching one of the given genes), confidence (0: very unsure to 1: very confident), and a brief reason (50 words or less) for your choice.
-                            
-                            You previously identified {prev_gene} as a causal gene. Your prediction couldn't be verified by the following prolog rule:
-                            
-                            {rule}
-                            
-                            Make sure your prediction is consistent with the rule.
-                            Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
-                            Don't add any additional information to the response.
-                        """
-            
-        
-        # print(f"Systen Prompt: {system_prompt}")
         query = f"GWAS Phenotype: {phenotype}\nGenes: {genes_str}"
         print(f"Query: {query}")
         messages = [
@@ -154,34 +135,18 @@ class LLM:
         data["embeddings"] = [emb.embedding for emb in embeddings]
         query_embedding = client.embeddings.create(input = [query], model="text-embedding-3-small").data[0].embedding
         data["similarity"] = data.embeddings.apply(lambda x: 1 - scipy.spatial.distance.cosine(x, query_embedding))
-        res = data.sort_values("similarity", ascending=False).head(k)
-        print("these are response: ", type(res))     
-        # subset_go = {"ID": [], "Name": [], "Rank": [],  "Genes": [], "Adjusted P-value": []}
-        # i = 1
-        # for _, row in res.iterrows():
-        #     go_id, name, rank, pval, genes = row["ID"], row["Term"], i, row["Adjusted P-value"], row["Genes"]
-        #     subset_go["ID"].append(go_id.strip())
-        #     subset_go["Name"].append(name.strip())
-        #     subset_go["Rank"].append(rank)
-        #     subset_go["Genes"].append(genes)
-        #     subset_go["Adjusted P-value"].append(pval)
-        #     i += 1
-        # return subset_go
-        subset_go = []
+        res = data.sort_values("similarity", ascending=False).head(k)     
+        subset_go = {"ID": [], "Name": [], "Rank": [],  "Genes": [], "Adjusted P-value": []}
         i = 1
         for _, row in res.iterrows():
-            go_entry = {
-                "id": row["ID"].strip(),
-                "name": row["Term"].strip(),
-                "genes": row["Genes"].split(';'),
-                "p": row["Adjusted P-value"],
-                "rank": i
-            }
-            subset_go.append(go_entry)
+            go_id, name, rank, pval, genes = row["ID"], row["Term"], i, row["Adjusted P-value"], row["Genes"]
+            subset_go["ID"].append(go_id.strip())
+            subset_go["Name"].append(name.strip())
+            subset_go["Rank"].append(rank)
+            subset_go["Genes"].append(genes)
+            subset_go["Adjusted P-value"].append(pval)
             i += 1
-
         return subset_go
-
 
     def get_structured_response(self, response, enrich_table):
         """
@@ -242,10 +207,9 @@ class LLM:
         Given a graph as a context, chat with the LLM
         """
         
-        system_prompt = f"""You are an expert in biology and genetics. 
-        Use the provided graph, which describes a potential hypothesis as to why a SNP is causally related to a phenotype, as a context and answer the query. Your answer should be 100 words or less.
-        
-        Return your response in JSON format. JSON key should be `response`. Don't add any additional information to the response."""
+        system_prompt = f"""You are an expert in biology and genetics. You have been provided with a graph provides a hypothesis for the connection of a SNP to a phenotype in terms of genes and Go terms.
+                     Your task is to answer questions based on the graph. Return your response in JSON format with the key 'response'. Your answer shouldn't exceed 200 words.
+                     Don't add any additional information to the response."""
                      
         query = f"Graph: {graph}\nQuery: {query}"
         messages = [
@@ -253,7 +217,6 @@ class LLM:
                         ChatMessage(role="user", content=query),
                     ]
         response = self.llm.chat(messages).message.content
-        print(f"LLM Response: {response}")
         try:
             response = json.loads(response)
             return response["response"]
