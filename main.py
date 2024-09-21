@@ -1,6 +1,7 @@
 import argparse
 from flask import Flask
 from flask_restful import Resource, Api
+from flask_socketio import SocketIO
 from enrich import Enrich
 from semantic_search import SemanticSearch
 from llm import LLM
@@ -14,14 +15,14 @@ def parse_arguments():
     args = argparse.ArgumentParser()
     args.add_argument("--port", type=int, default=5001)
     args.add_argument("--host", type=str, default="0.0.0.0")
-    #LLM arguments
+    # LLM arguments
     # args.add_argument("--llm", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct")
     args.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
     # args.add_argument("--temperature", type=float, default=1.0)
-    #Prolog arguments
+    # Prolog arguments
     args.add_argument("--swipl-host", type=str, default="100.67.47.42")
     args.add_argument("--swipl-port", type=int, default=4242)
-    #Enrich arguments
+    # Enrich arguments
     args.add_argument("--ensembl-hgnc-map", type=str, required=True)
     args.add_argument("--hgnc-ensembl-map", type=str, required=True)
     args.add_argument("--go-map", type=str, required=True)
@@ -31,6 +32,7 @@ def setup_api(args):
     app = Flask(__name__)
     CORS(app)
     api = Api(app)
+    socketio = SocketIO(app)
 
     # Use environment variables
     mongodb_uri = os.getenv("MONGODB_URI")
@@ -51,12 +53,12 @@ def setup_api(args):
     api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm})
     api.add_resource(SignupAPI, '/signup', resource_class_kwargs={'db': db})
     api.add_resource(LoginAPI, '/login', resource_class_kwargs={'db': db})
-    return app
+    return app, socketio
 
 def main():
     args = parse_arguments()
-    app = setup_api(args)
-    app.run(host=args.host, port=args.port, debug=True)
+    app, socketio = setup_api(args)
+    socketio.run(app, host=args.host, port=args.port, debug=True)
 
 if __name__ == "__main__":
     main()
