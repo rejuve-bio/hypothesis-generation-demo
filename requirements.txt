@@ -15,3 +15,4 @@ llama-index-llms-anthropic
 pengines
 flask-cors
 prefect
+flask-socketio
