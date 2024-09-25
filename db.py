@@ -77,8 +77,6 @@ class Database:
             query['phenotype'] = phenotype
         if variant_id:
             query['variant'] = variant_id
-
-        print("this is the query: ", query)
         
         enrich = self.enrich_collection.find_one(query)
         
@@ -126,10 +124,8 @@ class Database:
                 print("No document found for the given enrich_id.")
             return enrich
 
-        print("this is query: ", query)
         enriches = list(self.enrich_collection.find(query))
-        print("these are enriches: ", enriches)
-        # enrich = {}
+        
         for enrich in enriches:
             enrich['_id'] = str(enrich['_id'])
 
@@ -146,4 +142,3 @@ class Database:
         if result.deleted_count > 0:
             return {'message': 'Enrich deleted'}, 200
         return {'message': 'Enrich not found or not authorized'}, 404
-    
