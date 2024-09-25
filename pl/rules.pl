@@ -3,16 +3,16 @@
 
 % :- use_module(library(sldnfdraw)).
 % :- sldnf.
-%overlaps_with(A, B) :-
-%    chr(A, ChrA),
-%    chr(B, ChrB),
-%    start(A, StartA),
-%    start(B, StartB),
-%    end(A, EndA),
-%    end(B, EndB),
-%    ChrA = ChrB,
-%    StartB < StartA,
-%    EndA < EndB.
+% overlaps_with(A, B) :-
+%     chr(A, ChrA),
+%     chr(B, ChrB),
+%     start(A, StartA),
+%     start(B, StartB),
+%     end(A, EndA),
+%     end(B, EndB),
+%     ChrA = ChrB,
+%     StartB < StartA,
+%     EndA < EndB.
 
 %TODO Fix hideme for variable size
 hideme(A) :- A.
@@ -33,7 +33,7 @@ codes_for(G, P) :-
     transcribed_to(G, T),
     translates_to(T, P).
 
-in_tad_with(S, G1) :-
+in_tad_with(S, G1) :- 
     hideme((S = snp(_),
             closest_gene(S, G2),
             in_tad_region(G2, T),
@@ -45,12 +45,12 @@ in_tad_with(G1, G2) :-
             in_tad_region(G2, T),
             in_tad_region(G1, T))).
 
-% eqtl_association(S, G) :-
-%     eqtl(S, G).
 
-%relevant_gene(G, S) :-
-%    in_tad_with(S, G),
-%    eqtl_association(S, G).
+in_tad_with(G1, G2) :- 
+    hideme((G1 = gene(_),
+            G2 = gene(_),
+            in_tad_region(G2, T),
+            in_tad_region(G1, T))).
 
 % relevant_gene(G, S) :-
 %     eqtl_association(S, G),
@@ -84,6 +84,7 @@ alters_tfbs(S, Tf, G) :-
     hideme(find_and_rank_tfs(S, Tf, G)).
 
 
+
 % relevant_gene(G, S) :-
 %     (in_tad_with(S, G),
 %     eqtl_association(S, G))
@@ -103,8 +104,6 @@ member_(G, O, D) :-
     D #= D0 + 1,
     rel_type(ontology_relationship(X, O), subclass),
     member_(G, X, D0).
-
-%hideme(_).
 
 relevant_go(O, S, SigGenes, Pval) :- 
     findall(G, relevant_gene_coexpression(gene(G), sequence_variant(S)), Gs),

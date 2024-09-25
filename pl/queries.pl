@@ -4,11 +4,10 @@
 :- use_module(library(interpolate)).
 
 candidate_genes(S, Genes) :-
-    setof(Gene, in_tad_with(S, Gene), Gs),
-    %TODO optimize with_k_distance
+    setof(Gene, in_tad_with(S, Gene), InTadGenes),
     % setof(Gene, within_k_distance(Gene, S, 500000), ClosestGenes),
     % union(InTadGenes, ClosestGenes, Gs),
-    maplist(gene_name, Gs, Genes).
+    maplist(gene_name, InTadGenes, Genes).
 
 gene_id(Name, Id) :- gene_name(gene(Id), Name).
 
@@ -49,6 +48,9 @@ within_k_distance(G, S, K) :-
     % G = gene(_), % limit the search to Genes
     chr(S, Chr),
     start(S, Pos),
+    % G = gene(_), % limit the search to Genes
+    chr(S, Chr),
+    start(S, Pos),
     chr(G, Chr),
     start(G, StartG),
     end(G, EndG),
@@ -71,6 +73,7 @@ take(N, [H|T], [H|Rest]) :-
     take(N1, T, Rest).
 
 server_start(Port) :- http_server(http_dispatch, [port(Port)]).
+server_stop(Port) :- http_stop_server(Port, []).
 server_stop(Port) :- http_stop_server(Port, []).
 
 :- use_module(library(sandbox)).
