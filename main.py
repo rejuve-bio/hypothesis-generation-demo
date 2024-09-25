@@ -12,7 +12,7 @@ from flask_cors import CORS
 
 def parse_arguments():
     args = argparse.ArgumentParser()
-    args.add_argument("--port", type=int, default=5003)
+    args.add_argument("--port", type=int, default=5001)
     args.add_argument("--host", type=str, default="0.0.0.0")
     #LLM arguments
     # args.add_argument("--llm", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct")
