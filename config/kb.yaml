@@ -23,20 +23,15 @@ pathway:
   nodes: True
   edges: True
 
-gene_ontology:
-  path: gene_ontology
-  nodes: True
-  edges: True
-
 gaf:
   path: gaf
   nodes: False
   edges: True
 
-# coexpression:
-#   path: coxpressdb
-#   nodes: False
-#   edges: True
+coexpression:
+  path: coxpressdb
+  nodes: False
+  edges: True
 
 tflink:
   path: tflink
@@ -58,10 +53,10 @@ gtex_eqtl:
   nodes: False
   edges: True
 
-# hocomoco:
-#   path: hocomoco
-#   nodes: True
-#   edges: False
+hocomoco:
+  path: hocomoco
+  nodes: True
+  edges: False
 
 roadmap_chromatin_state:
   path: roadmap/chromatin_state
@@ -98,41 +93,41 @@ topld_eur:
   nodes: False
   edges: True
 
-# topld_afr:
-#   path: top_ld/AFR
-#   nodes: False
-#   edges: True
+topld_afr:
+  path: top_ld/AFR
+  nodes: False
+  edges: True
 
-# topld_eas:
-#   path: top_ld/EAS
-#   nodes: False
-#   edges: True
+topld_eas:
+  path: top_ld/EAS
+  nodes: False
+  edges: True
 
-# topld_sas:
-#   path: top_ld/SAS
-#   nodes: False
-#   edges: True
+topld_sas:
+  path: top_ld/SAS
+  nodes: False
+  edges: True
 
 
-# rna_central_non_coding_rna:
-#   path: rna_central
-#   nodes: True
-#   edges: True
+rna_central_non_coding_rna:
+  path: rna_central
+  nodes: True
+  edges: True
 
-# dgv_variant:
-#   path: dgv
-#   nodes: True
-#   edges: False
+dgv_variant:
+  path: dgv
+  nodes: True
+  edges: False
 
 epd_promoter:
   path: epd
   nodes: True
   edges: True
 
-# dbvar_variant:
-#   path: dbvar
-#   nodes: True
-#   edges: False
+dbvar_variant:
+  path: dbvar
+  nodes: True
+  edges: False
 
 peregrine_enhancer:
   path: peregrine
@@ -141,10 +136,10 @@ peregrine_enhancer:
 
 dbsuper_super_enhancer:
   path: dbsuper
-  nodes: False
-  edges: True #TODO check this.
+  nodes: True
+  edges: True
 
-dbsnp_snp:
+dbsnp:
   path: dbsnp
   nodes: True
   edges: False
@@ -152,6 +147,16 @@ dbsnp_snp:
 enhancer_atlas_enhancer:
   path: enhancer_atlas
   nodes: False
+  edges: True
+
+encode_tfbs:
+  path: tfbs
+  nodes: True
+  edges: True
+
+gene_ontology:
+  path: gene_ontology
+  nodes: True
   edges: True
 
 uberon:

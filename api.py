@@ -50,10 +50,8 @@ class EnrichAPI(Resource):
     def get(self, current_user_id):
         # Get the enrich_id from the query parameters
         enrich_id = request.args.get('id')
-        print("this is current user id: ", current_user_id)
         if enrich_id:
             # Fetch a specific enrich by enrich_id and user_id
-            print("this is enrich id: ", enrich_id)
             enrich = self.db.get_enrich(current_user_id, enrich_id)
             if not enrich:
                 return {"message": "Enrich not found or access denied."}, 404
@@ -69,7 +67,7 @@ class EnrichAPI(Resource):
         phenotype, variant = args['phenotype'], args['variant']
         if self.db.check_enrich(current_user_id, phenotype, variant):
             enrich = self.db.get_enrich_by_phenotype_and_variant(phenotype, variant, current_user_id)
-            print("Retrieved enrich data from saved db")
+            # Return a 409 status code to notify the user that the enrichment has already been created and exists in the database.
             return {"id": enrich.get('id')}, 409
         
         print(f"Got request for phenotype: {phenotype}, variant: {variant}")
@@ -124,7 +122,6 @@ class HypothesisAPI(Resource):
 
         if hypothesis_id:
             # Fetch a specific hypothesis by hypothesis_id and user_id
-            print("this is hypothesis id: ", hypothesis_id)
             hypothesis = self.db.get_hypotheses(current_user_id, hypothesis_id)
             if not hypothesis:
                 return {"message": "Hypothesis not found or access denied."}, 404
@@ -138,13 +135,11 @@ class HypothesisAPI(Resource):
     def post(self, current_user_id):
         enrich_id = request.args.get('id')
         go_id = request.args.get('go')
-        print("go_id: ", go_id)
 
         if self.db.check_hypothesis(current_user_id, enrich_id, go_id):
             hypothesis = self.db.get_hypothesis_by_enrich_and_go(enrich_id, go_id, current_user_id)
             summary = hypothesis.get('summary', 'No summary available')
             causal_graph = hypothesis.get('causal_graph', 'No graph available')
-            print("retrieved the hypothesis from saved db.")
             return {"summary": summary, "graph": causal_graph}, 201
                     
         
@@ -201,7 +196,8 @@ class HypothesisAPI(Resource):
                 edge["target"] = variant_id
         
         nodes.append({"id": go_id, "type": "go", "name": go_name})
-        phenotype_id = self.prolog_query.execute_query(f"term_name(efo(X), {phenotype})")
+        # phenotype_id = self.prolog_query.execute_query(f"term_name(efo(X), {phenotype})") #TODO: Fix this
+        phenotype_id = "EFO_0001073"
         nodes.append({"id": phenotype_id, "type": "phenotype", "name": phenotype})
         edges.append({"source": go_id, "target": phenotype_id, "label": "involved_in"})
         for gene_id, gene_name in zip(coexpressed_gene_ids, coexpressed_gene_names):
