@@ -58,8 +58,7 @@ class LLM:
                 raise ValueError("Please set the ANTHROPIC_API_KEY environment variable")
     
     
-    def predict_casual_gene(self, phenotype, genes, 
-                            prev_gene = None, rule=None):
+
     def predict_casual_gene(self, phenotype, genes, 
                             prev_gene = None, rule=None):
         """
@@ -71,39 +70,19 @@ class LLM:
             genes_fmt.append("{" + gene + "}")
             
         genes_str = ",".join(genes_fmt)
-        if rule is None:
-            system_prompt = """You are an expert in biology and genetics.
-                            Your task is to identify likely causal genes within a locus for a given GWAS phenotype based on literature evidence.
-        if rule is None:
-            system_prompt = """You are an expert in biology and genetics.
-                            Your task is to identify likely causal genes within a locus for a given GWAS phenotype based on literature evidence.
-
-                            From the list, provide the likely causal gene (matching one of the given genes), confidence (0: very unsure to 1: very confident), and a brief reason (50 words or less) for your choice.
-                            From the list, provide the likely causal gene (matching one of the given genes), confidence (0: very unsure to 1: very confident), and a brief reason (50 words or less) for your choice.
-
-                            Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
-                            Don't add any additional information to the response.
-                            Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
-                            Don't add any additional information to the response.
-                        """
-        else:
-            assert prev_gene is not None, "Previous gene must be provided when rule is provided"
-            system_prompt = f"""You are an expert in biology and genetics.
-                            Your task is to identify likely causal genes within a locus for a given GWAS phenotype based on literature evidence.
-
-                            From the list, provide the likely causal gene (matching one of the given genes), confidence (0: very unsure to 1: very confident), and a brief reason (50 words or less) for your choice.
-                            
-                            You previously identified {prev_gene} as a causal gene. Your prediction couldn't be verified by the following prolog rule:
-                            
-                            {rule}
-                            
-                            Make sure your prediction is consistent with the rule.
-                            Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
-                            Don't add any additional information to the response.
-                        """
-            
         
-        # print(f"Systen Prompt: {system_prompt}")
+        if rule is None:
+            system_prompt = """You are an expert in biology and genetics.
+                            Your task is to identify likely causal genes within a locus for a given GWAS phenotype based on literature evidence.
+
+                            From the list, provide the likely causal gene (matching one of the given genes), confidence (0: very unsure to 1: very confident), and a brief reason (50 words or less) for your choice.
+                            From the list, provide the likely causal gene (matching one of the given genes), confidence (0: very unsure to 1: very confident), and a brief reason (50 words or less) for your choice.
+
+                            Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
+                            Don't add any additional information to the response.
+                            Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
+                            Don't add any additional information to the response.
+                        """
         else:
             assert prev_gene is not None, "Previous gene must be provided when rule is provided"
             system_prompt = f"""You are an expert in biology and genetics.
@@ -119,7 +98,6 @@ class LLM:
                             Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
                             Don't add any additional information to the response.
                         """
-            
         
         # print(f"Systen Prompt: {system_prompt}")
         query = f"GWAS Phenotype: {phenotype}\nGenes: {genes_str}"
