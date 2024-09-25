@@ -196,7 +196,8 @@ class HypothesisAPI(Resource):
                 edge["target"] = variant_id
         
         nodes.append({"id": go_id, "type": "go", "name": go_name})
-        phenotype_id = self.prolog_query.execute_query(f"term_name(efo(X), {phenotype})")
+        # phenotype_id = self.prolog_query.execute_query(f"term_name(efo(X), {phenotype})") #TODO: Fix this
+        phenotype_id = "EFO_0001073"
         nodes.append({"id": phenotype_id, "type": "phenotype", "name": phenotype})
         edges.append({"source": go_id, "target": phenotype_id, "label": "involved_in"})
         for gene_id, gene_name in zip(coexpressed_gene_ids, coexpressed_gene_names):
