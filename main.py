@@ -1,7 +1,7 @@
+import logging
 import argparse
 from flask import Flask
 from flask_restful import Resource, Api
-from flask_socketio import SocketIO
 from enrich import Enrich
 from semantic_search import SemanticSearch
 from llm import LLM
@@ -10,10 +10,11 @@ from query_swipl import PrologQuery
 from api import EnrichAPI, HypothesisAPI, ChatAPI, SignupAPI, LoginAPI
 import os
 from flask_cors import CORS
+from socketio_instance import socketio
 
 def parse_arguments():
     args = argparse.ArgumentParser()
-    args.add_argument("--port", type=int, default=5001)
+    args.add_argument("--port", type=int, default=5003)
     args.add_argument("--host", type=str, default="0.0.0.0")
     # LLM arguments
     # args.add_argument("--llm", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct")
@@ -30,9 +31,13 @@ def parse_arguments():
 
 def setup_api(args):
     app = Flask(__name__)
-    CORS(app)
     api = Api(app)
-    socketio = SocketIO(app)
+
+    socketio.init_app(app)
+
+    # Enable Werkzeug request logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.INFO)
 
     # Use environment variables
     mongodb_uri = os.getenv("MONGODB_URI")

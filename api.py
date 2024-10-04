@@ -72,6 +72,7 @@ class EnrichAPI(Resource):
         
         # Run the Prefect flow and return the result
         flow_result = enrichment_flow(self.enrichr, self.llm, self.prolog_query, self.db, current_user_id, phenotype, variant)
+        print(flow_result)
         return flow_result, 200
 
     @token_required

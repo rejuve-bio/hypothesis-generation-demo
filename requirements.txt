@@ -16,3 +16,4 @@ pengines
 flask-cors
 prefect
 flask-socketio
+eventlet
