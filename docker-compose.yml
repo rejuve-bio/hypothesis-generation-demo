@@ -1,10 +1,19 @@
 version: '3.8'
 
 services:
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - app_network
+
   flask-app:
     build: .
     ports:
-      - "5001:5001"
+      - "5003:5003"
     environment:
       - FLASK_ENV=development
       - MONGO_URI=mongodb://mongo:27017
@@ -18,13 +27,27 @@ services:
       prefect server start & 
       python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl --go-map data/go_map.pkl
       "
+    networks:
+      - app_network
 
-  mongo:
-    image: mongo:latest
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo-data:/data/db
+  # prolog-service:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.prolog
+  #   ports:
+  #     - "4243:4243"
+  #   volumes:
+  #     - ./pl:/app/pl
+  #     - /mnt/hdd_2/abdu/prolog_out_v2:/app/mnt/hdd_2/abdu/prolog_out_v2
+  #     - /mnt/hdd_2/abdu/prolog_out_v3:/app/mnt/hdd_2/abdu/prolog_out_v3
+  #   networks:
+  #     - app_network
+  #   command: >
+  #     swipl -s /app/pl/load_kbs.pl -s /app/pl/meta_interpreter.pl -s /app/pl/queries.pl -s /app/pl/rules.pl -g server_start
 
 volumes:
   mongo-data:
+
+networks:
+  app_network:
+    driver: bridge
