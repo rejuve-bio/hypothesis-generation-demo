@@ -14,14 +14,14 @@ from socketio_instance import socketio
 
 def parse_arguments():
     args = argparse.ArgumentParser()
-    args.add_argument("--port", type=int, default=5003)
+    args.add_argument("--port", type=int, default=5000)
     args.add_argument("--host", type=str, default="0.0.0.0")
     # LLM arguments
     # args.add_argument("--llm", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct")
     args.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
     # args.add_argument("--temperature", type=float, default=1.0)
     # Prolog arguments
-    args.add_argument("--swipl-host", type=str, default="100.67.47.42")
+    args.add_argument("--swipl-host", type=str, default="localhost")
     args.add_argument("--swipl-port", type=int, default=4242)
     # Enrich arguments
     args.add_argument("--ensembl-hgnc-map", type=str, required=True)
