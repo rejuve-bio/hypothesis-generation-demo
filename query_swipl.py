@@ -51,11 +51,6 @@ class PrologQuery:
         pengine = Pengine(builder=self.pengine_builder)
         pengine.doAsk(pengine.ask(query))
         return pengine.currentQuery.availProofs[0]["X"]
-       
-            
-            
-        
-
 
 if __name__ == "__main__":
     prolog_query = PrologQuery(host="100.67.47.42", port=4242)

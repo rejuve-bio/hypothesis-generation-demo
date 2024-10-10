@@ -1,9 +1,6 @@
 # Use Debian slim as the base image to install SWI-Prolog 9.3.11
 FROM debian:bookworm-slim
 
-# Set a maintainer label (optional)
-LABEL maintainer "Your Name <your.email@example.com>"
-
 # Install runtime dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \

@@ -1,47 +1,9 @@
 from flask import Flask, request, jsonify
 from flask_restful import Resource, Api, reqparse
-from auth import token_required, JWT_SECRET_KEY
+from auth import token_required
 from datetime import datetime, timedelta
-import jwt
 from uuid import uuid4
 from flows import enrichment_flow, hypothesis_flow
-
-class SignupAPI(Resource):
-    def __init__(self, **kwargs):
-        self.db = kwargs['db']
-
-    def post(self):
-        args = request.get_json()
-        email = args.get('email')
-        password = args.get('password')
-
-        if not email or not password:
-            return {'message': 'email and password are required'}, 400
-        
-        return self.db.create_user(email, password)
-
-class LoginAPI(Resource):
-    def __init__(self, **kwargs):
-        self.db = kwargs['db']
-
-    def post(self):
-        args = request.get_json()
-        email = args.get('email')
-        password = args.get('password')
-
-        if not email or not password:
-            return {'message': 'email and password are required'}, 400
-        response, status = self.db.verify_user(email, password)
-        if status == 200:
-            user_id = response.get('user_id')
-            token = jwt.encode({'user_id': user_id, 'exp': datetime.utcnow() + timedelta(hours=12)}, JWT_SECRET_KEY, algorithm="HS256")
-            return jsonify({'token': token})
-
-        return response, status
-    
-
-
-
 
 class EnrichAPI(Resource):
     def __init__(self, enrichr, llm, prolog_query, db):
@@ -72,7 +34,6 @@ class EnrichAPI(Resource):
         
         # Run the Prefect flow and return the result
         flow_result = enrichment_flow(self.enrichr, self.llm, self.prolog_query, self.db, current_user_id, phenotype, variant)
-        print(flow_result)
         return flow_result, 200
 
     @token_required
@@ -82,7 +43,7 @@ class EnrichAPI(Resource):
             result = self.db.delete_enrich(current_user_id, enrich_id)
             return result, 200
         return {"message": "enrich id is required!"}, 400
-    
+
 
 class HypothesisAPI(Resource):
     def __init__(self, enrichr, prolog_query, llm, db):
