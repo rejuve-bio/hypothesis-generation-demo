@@ -36,12 +36,15 @@ services:
     depends_on:
       - mongo
       - prolog-service
-    command: >
-      sh -c "
-      sleep 60 &&
-      prefect server start & 
-      python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl --go-map data/go_map.pkl
-      "
+      - prefect-service
+    networks:
+      - app_network
+
+  prefect-service:
+    image: prefecthq/prefect:2.10.7-python3.9
+    ports:
+      - "4200:4200"
+    command: prefect server start
     networks:
       - app_network
 
