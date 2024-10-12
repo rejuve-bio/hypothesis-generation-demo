@@ -23,3 +23,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Expose port 5000 for Flask
 EXPOSE 5000
+
+# Command to run the Python script with the required arguments
+CMD ["python", "main.py", "--ensembl-hgnc-map", "data/ensembl_to_hgnc.pkl", "--hgnc-ensembl-map", "data/hgnc_to_ensembl.pkl", "--go-map", "data/go_map.pkl"]
