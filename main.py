@@ -1,15 +1,18 @@
 import argparse
 from flask import Flask
 from flask_restful import Resource, Api
+from flask_socketio import SocketIO
 from enrich import Enrich
 from semantic_search import SemanticSearch
 from llm import LLM
 from db import Database
 from query_swipl import PrologQuery
 from api import EnrichAPI, HypothesisAPI, ChatAPI
+from dotenv import load_dotenv
 import os
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
+from socketio_instance import socketio
 
 def parse_arguments():
     args = argparse.ArgumentParser()
@@ -29,6 +32,7 @@ def parse_arguments():
     return args.parse_args()
 
 def setup_api(args):
+    load_dotenv()
     app = Flask(__name__)
 
     # JWT Configuration
@@ -41,6 +45,7 @@ def setup_api(args):
     jwt = JWTManager(app)
     CORS(app)
     api = Api(app)
+    socketio.init_app(app)
 
     # Use environment variables
     mongodb_uri = os.getenv("MONGODB_URI")
@@ -60,12 +65,13 @@ def setup_api(args):
     api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
     api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm})
     
-    return app
+    return app, socketio
+
 
 def main():
     args = parse_arguments()
-    app = setup_api(args)
-    app.run(host=args.host, port=args.port, debug=True)
+    app, socketio = setup_api(args)
+    socketio.run(app, host=args.host, port=args.port, debug=True)
 
 if __name__ == "__main__":
     main()
