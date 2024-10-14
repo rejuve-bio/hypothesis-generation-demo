@@ -46,6 +46,11 @@ in_tad_with(G1, G2) :-
             in_tad_region(G1, T))).
 
 
+in_tad_with(G1, G2) :- 
+    hideme((G1 = gene(_),
+            G2 = gene(_),
+            in_tad_region(G2, T),
+            in_tad_region(G1, T))).
 
 % relevant_gene(G, S) :-
 %     eqtl_association(S, G),
