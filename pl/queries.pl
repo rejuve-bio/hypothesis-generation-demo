@@ -21,6 +21,18 @@ variant_id(S, Id) :-
     upcase_atom(A, Alt),
     Id = "$Chr:$Start-$End-$Ref>$Alt".
 
+%within_k_distance(G, S, K) :-
+%    chr(G, Chr),
+%    chr(S, Chr),
+%    start(G, StartG),
+%    end(G, EndG),
+%    start(S, StartS),
+%    end(S, EndS),
+%    StartDist is abs(StartS - StartG),
+%    EndDist is abs(EndS - EndG), 
+%    (StartDist =< K
+%    ; EndDist =< K).
+
 % within_k_distance(G, S, K) :-
 %     G = gene(_), % limit the search to Genes
 %     chr(G, Chr),
@@ -36,12 +48,14 @@ within_k_distance(G, S, K) :-
     % G = gene(_), % limit the search to Genes
     chr(S, Chr),
     start(S, Pos),
+    % G = gene(_), % limit the search to Genes
+    chr(S, Chr),
+    start(S, Pos),
     chr(G, Chr),
     start(G, StartG),
     end(G, EndG),
     (abs(Pos - StartG) =< K, !
     ; abs(Pos - EndG) =< K).
-
 
 % Get the TF with lowest loss score for a SNP.
 find_and_rank_tfs(SNP, T, G) :-
@@ -59,6 +73,7 @@ take(N, [H|T], [H|Rest]) :-
     take(N1, T, Rest).
 
 server_start(Port) :- http_server(http_dispatch, [port(Port)]).
+server_stop(Port) :- http_stop_server(Port, []).
 server_stop(Port) :- http_stop_server(Port, []).
 
 :- use_module(library(sandbox)).
