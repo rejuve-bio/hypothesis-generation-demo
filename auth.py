@@ -1,33 +1,17 @@
-from flask import Flask, request, jsonify
-import jwt
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from functools import wraps
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-import os
-from uuid import uuid4
-# Load environment variables from .env file
-load_dotenv()
-
-# JWT Secret Key
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+from flask import jsonify
 
 def token_required(f):
     @wraps(f)
+    @jwt_required()  # This ensures the token is valid
     def decorated(self, *args, **kwargs):
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'message': 'Token is missing!'}), 403
-        
-        try:
-            # Remove 'Bearer' prefix if present
-            if 'Bearer' in token:
-                token = token.split()[1]
-            
-            data = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
-            current_user_id = data['user_id']
-        except Exception as e:
-            return {'message': 'Token is invalid!'}, 403
-        
-        # Pass current_user_id and maintain other args
+        current_user_id = get_jwt_identity()  # Fetch the user identity from the token
+        if not current_user_id:
+            return jsonify({'message': 'Token is invalid!'}), 403
+
+
+        # Pass current_user_id to the decorated function
         return f(self, current_user_id, *args, **kwargs)
+    
     return decorated
