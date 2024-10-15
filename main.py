@@ -23,7 +23,7 @@ def parse_arguments():
     args.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
     # args.add_argument("--temperature", type=float, default=1.0)
     #Prolog arguments
-    args.add_argument("--swipl-host", type=str, default="100.67.47.42")
+    args.add_argument("--swipl-host", type=str, default="194.87.13.20")
     args.add_argument("--swipl-port", type=int, default=4242)
     #Enrich arguments
     args.add_argument("--ensembl-hgnc-map", type=str, required=True)
@@ -36,10 +36,10 @@ def setup_api(args):
     app = Flask(__name__)
 
     # JWT Configuration
-    app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY")  # Secret key for JWT
-    app.config['JWT_TOKEN_LOCATION'] = ['headers']  # Specify where JWT token will be located (default is headers)
-    app.config['JWT_HEADER_NAME'] = 'Authorization'  # Default header to find the JWT
-    app.config['JWT_HEADER_TYPE'] = 'Bearer'  # 'Bearer' token type
+    app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY")
+    app.config['JWT_TOKEN_LOCATION'] = ['headers']
+    app.config['JWT_HEADER_NAME'] = 'Authorization'
+    app.config['JWT_HEADER_TYPE'] = 'Bearer'
 
     # Initialize JWTManager
     jwt = JWTManager(app)

@@ -10,7 +10,6 @@ def token_required(f):
         if not current_user_id:
             return jsonify({'message': 'Token is invalid!'}), 403
 
-
         # Pass current_user_id to the decorated function
         return f(self, current_user_id, *args, **kwargs)
     
