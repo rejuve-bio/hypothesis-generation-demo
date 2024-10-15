@@ -57,4 +57,3 @@ if __name__ == "__main__":
     result = prolog_query.execute_query("maplist(variant_id, [snp(rs1421085)], X)")
 #     # result = prolog_query.get_candidate_genes("rs1421085")
     print(result)
-            

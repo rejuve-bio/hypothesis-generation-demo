@@ -48,8 +48,6 @@ class Database:
                 print("No document found for the given hypothesis id.")
             return hypothesis
 
-
-
         hypotheses = list(self.hypothesis_collection.find(query))
         for hypothesis in hypotheses:
             hypothesis['_id'] = str(hypothesis['_id'])
@@ -127,7 +125,6 @@ class Database:
             return enrich
 
         enriches = list(self.enrich_collection.find(query))
-
         for enrich in enriches:
             enrich['_id'] = str(enrich['_id'])
 
@@ -144,4 +141,3 @@ class Database:
         if result.deleted_count > 0:
             return {'message': 'Enrich deleted'}, 200
         return {'message': 'Enrich not found or not authorized'}, 404
-    

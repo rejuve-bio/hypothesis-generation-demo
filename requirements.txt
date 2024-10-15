@@ -13,6 +13,7 @@ sentence-transformers
 llama_index
 llama-index-llms-anthropic
 pengines
+
 flask-cors
 prefect
 flask-socketio

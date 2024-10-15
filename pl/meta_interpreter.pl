@@ -331,3 +331,4 @@ sandbox:safe_primitive(meta_intepreter:proof_tree(_,_)).
 sandbox:safe_primitive(meta_intepreter:proof_tree(_,_)).
 sandbox:safe_primitive(meta_intepreter:json_proof_tree(_,_)).
 sandbox:safe_primitive(meta_intepreter:rule_body(_,_)).
+

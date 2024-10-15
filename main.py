@@ -47,6 +47,7 @@ def setup_api(args):
     api = Api(app)
     socketio.init_app(app)
 
+
     # Use environment variables
     mongodb_uri = os.getenv("MONGODB_URI")
     db_name = os.getenv("DB_NAME")
@@ -63,7 +64,7 @@ def setup_api(args):
     llm = LLM()
     api.add_resource(EnrichAPI, "/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query, "db": db})
     api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
-    api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm})
+    api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm}
     
     return app, socketio
 
@@ -72,6 +73,7 @@ def main():
     args = parse_arguments()
     app, socketio = setup_api(args)
     socketio.run(app, host=args.host, port=args.port, debug=True)
+
 
 if __name__ == "__main__":
     main()

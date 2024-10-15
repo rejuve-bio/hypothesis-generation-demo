@@ -22,7 +22,7 @@ class EnrichAPI(Resource):
             if not enrich:
                 return {"message": "Enrich not found or access denied."}, 404
             return enrich, 200
-
+          
         # Fetch all hypotheses for the current user
         enrich = self.db.get_enrich(user_id=current_user_id)
         return enrich, 200
@@ -77,6 +77,7 @@ class HypothesisAPI(Resource):
         flow_result = hypothesis_flow(current_user_id, enrich_id, go_id, self.db, self.prolog_query, self.llm)
 
         return flow_result
+
     
     @token_required
     def delete(self, current_user_id):
