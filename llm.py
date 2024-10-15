@@ -77,6 +77,7 @@ class LLM:
 
                             Return your response in JSON format, excluding the GWAS phenotype name and gene list in the locus. JSON keys should be ‘causal_gene’,‘confidence’,‘reason’.
                             Don't add any additional information to the response.
+
                         """
         else:
             assert prev_gene is not None, "Previous gene must be provided when rule is provided"
