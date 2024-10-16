@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+# Create and set the working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Prefect and other dependencies
+RUN pip install --upgrade pip \
+    && pip install -U prefect
+
+# Expose port 4200
+EXPOSE 4200
+
+# Define the entry point for your application
+CMD ["prefect", "server", "start"]
