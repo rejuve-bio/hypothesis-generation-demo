@@ -1,14 +1,14 @@
 version: '3.8'
 
 services:
-  # mongo:
-  #   image: mongo:latest
-  #   ports:
-  #     - "27017:27017"
-  #   volumes:
-  #     - mongo-data:/data/db
-  #   networks:
-  #     - app_network
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - app_network
 
   prolog-service:
     build:
@@ -31,31 +31,34 @@ services:
       - FLASK_ENV=development
     volumes:
       - .:/app
-      - prefect-data:/root/.prefect
     depends_on:
       - mongo
       - prolog-service
+      - prefect-service
     command: >
       sh -c "
-      prefect server start &
       python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl --go-map data/go_map.pkl
       "
     networks:
       - app_network
 
-  # prefect-service:
-  #   image: prefecthq/prefect:2.10.7-python3.9
-  #   ports:
-  #     - "4200:4200"
-  #   volumes:
-  #     - prefect-data:/root/.prefect
-  #   command: prefect server start
-  #   networks:
-  #     - app_network
+  prefect-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.prefect
+    ports:
+      - "4200:4200"
+    volumes:
+      - prefect-data:/root/.prefect 
+    environment:
+      - PREFECT_SERVER_PORT=4200
+    command: prefect server start
+    networks:
+      - app_network
 
 volumes:
   mongo-data:
-  prefect-data: 
+  prefect-data:
 
 networks:
   app_network:
