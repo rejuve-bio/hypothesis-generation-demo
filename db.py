@@ -125,12 +125,11 @@ class Database:
             return enrich
 
         enriches = list(self.enrich_collection.find(query))
-        
         for enrich in enriches:
             enrich['_id'] = str(enrich['_id'])
 
         return enriches if enriches else []
-    
+
     def delete_hypothesis(self, user_id, hypothesis_id):
         result = self.hypothesis_collection.delete_one({'id': hypothesis_id, 'user_id': user_id})
         if result.deleted_count > 0:

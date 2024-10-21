@@ -1,8 +1,8 @@
+outlines
 Flask
 flask-restful
 gseapy
-faiss-gpu
-outlines
+faiss-gpu==1.7.2
 python-dotenv
 PyJWT
 pymongo
@@ -13,4 +13,10 @@ sentence-transformers
 llama_index
 llama-index-llms-anthropic
 pengines
+
 flask-cors
+prefect
+flask-socketio
+eventlet
+Flask-JWT-Extended==4.6.0
+python-dotenv
