@@ -19,6 +19,8 @@ def enrichment_flow(enrichr, llm, prolog_query, db, current_user_id, phenotype, 
     if causal_graph is None:
         causal_gene = retry_predict_causal_gene(llm, phenotype, candidate_genes, proof, causal_gene)
         causal_graph, proof = retry_get_relevant_gene_proof(prolog_query, variant, causal_gene)
+        print("Retried causal gene: ", causal_gene)
+        print("Retried causal graph: ", causal_graph)
 
     enrich_tbl = enrichr.run(causal_gene)
     relevant_gos = llm.get_relevant_go(phenotype, enrich_tbl)
@@ -41,19 +43,14 @@ def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
         return {"message": "Invalid enrich_id or access denied."}, 404
 
     go_term = [go for go in enrich_data["GO_terms"] if go["id"] == go_id]
-    print("this is go term: ", go_term)
     go_name = go_term[0]["name"]
-    print("go_name: ", go_name)
     causal_gene = enrich_data['causal_gene']
-    print("causal_gene: ", causal_gene)
     variant_id = enrich_data['variant']
-    print("variant_id", variant_id)
     phenotype = enrich_data['phenotype']
-    print("phenotype: ", phenotype)
-    coexpressed_gene_names = go_term[0]["genes"] 
-    print("coexpressed_genes: ", coexpressed_gene_names)
+    coexpressed_gene_names = go_term[0]["genes"]
     causal_graph = enrich_data['causal_graph']
-    print("this is the causal_graph: ", causal_graph)
+
+    print(f"Enrich data: {enrich_data}")
 
     causal_gene_id = get_gene_ids(prolog_query, [causal_gene.lower()])[0]
     coexpressed_gene_ids = get_gene_ids(prolog_query, [g.lower() for g in coexpressed_gene_names])

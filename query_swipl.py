@@ -2,12 +2,14 @@ import json
 import pickle
 from pengines.Builder import PengineBuilder
 from pengines.Pengine import Pengine
+from loguru import logger
 
 class PrologQuery:
 
     def __init__(self, host: str, port: int):
         self.host = host
         self.port = port
+        logger.info(f"Connecting to Prolog server at {host}:{port}")
         self.pengine_builder = PengineBuilder(urlserver=f"http://{self.host}:{self.port}")
         # self.pengine = Pengine(builder=pengine_builder)
         # self.pengine.create()
@@ -16,6 +18,7 @@ class PrologQuery:
         """
         Given a SNP, get candidate genes that are proximal to it.
         """
+        logger.info(f"Getting candidate genes for variant {variant_id}")
         query = f"candidate_genes(snp({variant_id}), Genes)"
         pengine = Pengine(builder=self.pengine_builder)
         pengine.doAsk(pengine.ask(query))
@@ -25,14 +28,15 @@ class PrologQuery:
     
     def get_relevant_gene_proof(self, variant_id, gene):
         gene_id = self.get_gene_ids([gene])[0]
-        query  = f"json_proof_tree(relevant_gene(gene({gene_id}), snp({variant_id})), Graph)"
+        query = f"json_proof_tree(relevant_gene(gene({gene_id}), snp({variant_id})), Graph)"
+        print(f"Gene Proof Query: {query}")
         pengine = Pengine(builder=self.pengine_builder)
         pengine.doAsk(pengine.ask(query))
         if pengine.currentQuery is None:
             pengine = Pengine(builder=self.pengine_builder)
-            pengine.doAsk(pengine.ask("meta_intepreter:rule_body(relevant_gene(G, S), R)")) #Get the body of the failed rule
+            pengine.doAsk(pengine.ask("meta_interpreter:rule_body(relevant_gene(G, S), R)")) #Get the body of the failed rule
             rule = pengine.currentQuery.availProofs[0]["R"]
-            print(f"Failed rule: {rule}")
+            print(f"q rule: {rule}")
             return None, rule
         graph = pengine.currentQuery.availProofs[0]["Graph"]
         # pengine.doStop()

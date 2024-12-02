@@ -4,7 +4,7 @@ from uuid import uuid4
 from socketio_instance import socketio
 
 ### Enrich Tasks
-@task(retries=2)
+@task(retries=2, cache_policy=None)
 def check_enrich(db, current_user_id, phenotype, variant):
     socketio.emit('task_update', {'message': {'Executing': 'check enrich', 'Next_task': 'get candidate genes'}})
     socketio.sleep(0)
@@ -93,7 +93,7 @@ def retry_get_relevant_gene_proof(prolog_query, variant, causal_gene):
         socketio.sleep(0)
         raise
 
-@task
+@task(cache_policy=None)
 def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal_graph, current_user_id):
     socketio.emit('task_update', {'message': {'Executing': 'create enrich data', 'Next task': None}})
     socketio.sleep(0)
@@ -113,7 +113,7 @@ def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal
     return enrich_data["id"]
 
 ### Hypothesis Tasks
-@task
+@task(cache_policy=None, retries=2)
 def check_hypothesis(db, current_user_id, enrich_id, go_id):
     socketio.emit('task_update', {'message': 'Executing: check hypothesis', 'next_task': 'get enrich'})
     print("Checking hypothesis data")
@@ -124,7 +124,7 @@ def check_hypothesis(db, current_user_id, enrich_id, go_id):
     socketio.emit('task_update', {'message': 'Not found: check hypothesis'})
     return None
 
-@task(retries=2)
+@task(cache_policy=None, retries=2)
 def get_enrich(db, current_user_id, enrich_id):
     socketio.emit('task_update', {'message': 'Executing: get enrich', 'next_task': 'get gene ids'})
     print("Fetching enrich data...")
@@ -172,7 +172,7 @@ def summarize_graph(llm, causal_graph):
     socketio.emit('task_update', {'message': 'Finished: summarize graph'})
     return result
 
-@task(retries=2)
+@task(cache_policy=None, retries=2)
 def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id):
     socketio.emit('task_update', {'message': 'Executing: create hypothesis', 'next_task': 'None'})
     print("Creating hypothesis in the database...")
