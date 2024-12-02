@@ -3,7 +3,7 @@ from flask import Flask
 from flask_restful import Resource, Api
 from flask_socketio import SocketIO
 from enrich import Enrich
-from semantic_search import SemanticSearch
+# from semantic_search import SemanticSearch
 from llm import LLM
 from db import Database
 from query_swipl import PrologQuery
@@ -23,7 +23,7 @@ def parse_arguments():
     args.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
     # args.add_argument("--temperature", type=float, default=1.0)
     #Prolog arguments
-    args.add_argument("--swipl-host", type=str, default="194.87.13.20")
+    args.add_argument("--swipl-host", type=str, default="localhost")
     args.add_argument("--swipl-port", type=int, default=4242)
     #Enrich arguments
     args.add_argument("--ensembl-hgnc-map", type=str, required=True)

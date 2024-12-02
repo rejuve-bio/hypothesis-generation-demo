@@ -1,6 +1,9 @@
 :- style_check(-discontiguous).
 :- use_module(library(clpfd)).
 
+:- dynamic hideme/1.
+:- multifile hideme/1.
+
 % :- use_module(library(sldnfdraw)).
 % :- sldnf.
 % overlaps_with(A, B) :-
@@ -14,19 +17,21 @@
 %     StartB < StartA,
 %     EndA < EndB.
 
-%TODO Fix hideme for variable size
-hideme(A) :- A.
-hideme((A, B)) :- A, B.
+hideme([]).
+hideme([Goal|Goals]) :-
+  call(Goal),
+  hideme(Goals).
+
 
 overlaps_with(A, B) :-
-    hideme((chr(A, Chr),
+    hideme([chr(A, Chr),
              chr(B, Chr),
              start(A, StartA),
              start(B, StartB),
              StartB < StartA,
              end(A, EndA),
              end(B, EndB),
-             EndA < EndB)).
+             EndA < EndB]).
 
 
 codes_for(G, P) :-
@@ -34,23 +39,22 @@ codes_for(G, P) :-
     translates_to(T, P).
 
 in_tad_with(S, G1) :- 
-    hideme((S = snp(_),
+    hideme([S = snp(_),
             closest_gene(S, G2),
             in_tad_region(G2, T),
-            in_tad_region(G1, T))).
+            in_tad_region(G1, T)]).
 
-in_tad_with(G1, G2) :- 
-    hideme((G1 = gene(_),
-            G2 = gene(_),
-            in_tad_region(G2, T),
-            in_tad_region(G1, T))).
+% in_tad_with(S, G1) :- 
+%     S = snp(_),
+%     closest_gene(S, G2),
+%     in_tad_region(G2, T),
+%     in_tad_region(G1, T).
 
-
-in_tad_with(G1, G2) :- 
-    hideme((G1 = gene(_),
-            G2 = gene(_),
-            in_tad_region(G2, T),
-            in_tad_region(G1, T))).
+% in_tad_with(G1, G2) :- 
+%     hideme([G1 = gene(_),
+%             G2 = gene(_),
+%             in_tad_region(G2, T),
+%             in_tad_region(G1, T)]).
 
 % relevant_gene(G, S) :-
 %     eqtl_association(S, G),
@@ -73,24 +77,15 @@ relevant_gene(G, S) :-
     alters_tfbs(S, Tf, G),
     regulates(Tf, G),
     binds_to(Tf, Tfbs),
-    overlaps_with(Tfbs, Enh), hideme(!). %fix choice points
+    overlaps_with(Tfbs, Enh), hideme([!]). %fix choice points
 
 in_regulatory_region(S, Enh) :-
-    hideme(Enh = enhancer(_)
-    ; Enh = super_enhancer(_)),
+    hideme([Enh = enhancer(_)
+    ; Enh = super_enhancer(_)]),
     hideme(within_k_distance(Enh, S, 50000)). %50,000kb obtained from dbsup
 
 alters_tfbs(S, Tf, G) :-
-    hideme(find_and_rank_tfs(S, Tf, G)).
-
-
-
-% relevant_gene(G, S) :-
-%     (in_tad_with(S, G),
-%     eqtl_association(S, G))
-%     ; (overlaps(Tf, S),
-%     regulates(Tf, G))
-%     ; activity_by_contact(S, G).
+    hideme([find_and_rank_tfs(S, Tf, G)]).
 
 relevant_gene_coexpression(G1, S) :-
     relevant_gene(G2, S),
