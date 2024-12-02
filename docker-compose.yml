@@ -26,7 +26,7 @@ services:
   flask-app:
     build: .
     ports:
-      - "5000:5000"
+      - "5005:5000"
     environment:
       - FLASK_ENV=development
     volumes:
@@ -37,7 +37,8 @@ services:
       - prefect-service
     command: >
       sh -c "
-      python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl --go-map data/go_map.pkl
+      python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl \
+      --go-map data/go_map.pkl --swipl-host prolog-service --swipl-port 4242 
       "
     networks:
       - app_network
