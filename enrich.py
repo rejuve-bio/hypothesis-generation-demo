@@ -114,9 +114,6 @@ class Enrich:
         top_negative_hgnc = [(self.ensembl_hgnc_map.get(gene, gene), corr) for gene, corr in top_negative]
         all_genes_hgnc = [self.ensembl_hgnc_map.get(gene, gene) for gene in all_genes]
         print("all_genes_hgnc", all_genes_hgnc[:10])
-       
-        print(all_genes, "gene_list")
-        
       
        
         res = gp.enrichr(gene_list=[gene[0] for gene in top_positive_hgnc],
