@@ -125,8 +125,6 @@ class Enrich:
                                 organism=organism,
                                 outdir=None).results
         
-        res.to_csv("res_results_test_00.csv")
-        
         res.drop("Gene_set", axis=1, inplace=True)
         res.insert(1, "ID", res["Term"].apply(
             lambda x: x.split("(")[1].split(")")[0]))
