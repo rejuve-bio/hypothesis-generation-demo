@@ -147,7 +147,5 @@ class Enrich:
     
         
         res.drop(res.columns.difference(["ID", "Term", "Desc", "Adjusted P-value", "Genes"]), inplace=True, axis=1)
-        res.to_csv("enrichment_results.csv", index=False)
-
         return  res
 
