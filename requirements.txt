@@ -12,6 +12,7 @@ torchvision
 torchaudio
 sentence-transformers
 llama_index
+cellxgene_census
 llama-index-llms-anthropic
 pengines
 
