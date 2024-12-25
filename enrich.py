@@ -101,7 +101,9 @@ class Enrich:
         organism = "Human"
 
         #gene_of_interest = 'ENSG00000140718' #FTO
+        #gene_of_interest= relevant_gene
         gene_of_interest = 'ENSG00000177508' #IRX3
+        
         tissue_type = 'Adipose'
         cell_type = 'preadipocyte'
         top_positive, top_negative, all_genes = self.get_coexpression_matrix(gene_of_interest, tissue_type, cell_type, k=500)
