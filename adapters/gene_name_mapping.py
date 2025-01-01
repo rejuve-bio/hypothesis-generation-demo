@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 
 class HGNCSymbolProcessor:
     def __init__(self):
-        # Ensure paths point to the 'data' folder outside the current directory
         self.base_data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
         self.hgnc_to_ensembl_path = os.path.join(self.base_data_path, 'test_hgnc_to_ensembl.pkl')
         self.ensembl_to_hgnc_path = os.path.join(self.base_data_path, 'test_ensembl_to_hgnc.pkl')
@@ -64,11 +63,10 @@ class HGNCSymbolProcessor:
                 hgnc_to_ensembl[hgnc_symbol] = ensembl_id
                 ensembl_to_hgnc[ensembl_id] = hgnc_symbol
 
-        # Sort the mappings by symbol (hgnc_to_ensembl) and ensembl_id (ensembl_to_hgnc)
+        
         sorted_hgnc_to_ensembl = dict(sorted(hgnc_to_ensembl.items()))
         sorted_ensembl_to_hgnc = dict(sorted(ensembl_to_hgnc.items()))
 
-        # Save the sorted mappings to pickle files
         self.save_pickle(self.hgnc_to_ensembl_path, sorted_hgnc_to_ensembl)
         self.save_pickle(self.ensembl_to_hgnc_path, sorted_ensembl_to_hgnc)
         print("Mappings updated successfully.")
