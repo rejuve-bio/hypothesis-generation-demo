@@ -34,7 +34,7 @@ class EnrichAPI(Resource):
         
         # Run the Prefect flow and return the result
         flow_result = enrichment_flow(self.enrichr, self.llm, self.prolog_query, self.db, current_user_id, phenotype, variant)
-        return flow_result, 200
+        return flow_result[0], flow_result[1]
 
     @token_required
     def delete(self, current_user_id):
@@ -76,15 +76,16 @@ class HypothesisAPI(Resource):
         # Run the Prefect flow and return the result
         flow_result = hypothesis_flow(current_user_id, enrich_id, go_id, self.db, self.prolog_query, self.llm)
 
-        return flow_result
+        return flow_result[0], flow_result[1]
 
     
     @token_required
     def delete(self, current_user_id):
         hypothesis_id = request.args.get('hypothesis_id')
         if hypothesis_id:
-            return self.db.delete_hypothesis(current_user_id, hypothesis_id)
-        return {"message": "hypothesis id is required!"}
+            result = self.db.delete_hypothesis(current_user_id, hypothesis_id)
+            return result, 200
+        return {"message": "hypothesis id is required!"}, 400
     
 class ChatAPI(Resource):
     def __init__(self, llm):
