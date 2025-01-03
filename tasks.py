@@ -195,7 +195,7 @@ def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, 
     return hypothesis_data["id"]
 
 @task(retries=2)
-def get_node_annotations(nodes: List[Dict]):
+def get_node_annotations(nodes: List[Dict], token: str):
     """Query the annotation service to get additional properties for nodes"""
 
     annotation_url = "http://100.67.47.42:5004/query"
@@ -216,10 +216,14 @@ def get_node_annotations(nodes: List[Dict]):
             "predicates": []
         }
     }
+
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
     
     try:
         logging.info(f"Sending request to annotation service at {annotation_url}")
-        response = requests.post(annotation_url, params=params, json=request_body)
+        response = requests.post(annotation_url, params=params, json=request_body, headers = headers)
         response.raise_for_status()
         annotations = response.json()
         
