@@ -32,7 +32,7 @@ def enrichment_flow(enrichr, llm, prolog_query, db, current_user_id, phenotype, 
 
 ### Hypothesis Flow
 @flow(log_prints=True)
-def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
+def hypothesis_flow(current_user_id, token, enrich_id, go_id, db, prolog_query, llm):
     hypothesis = check_hypothesis(db, current_user_id, enrich_id, go_id)
     if hypothesis:
         print("Retrieved hypothesis data from saved db")
@@ -95,7 +95,7 @@ def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
         edges.append({"source": causal_gene_id, "target": gene_id, "label": "coexpressed_with"})
 
     # Get annotations for all nodes
-    node_annotations = get_node_annotations(nodes)
+    node_annotations = get_node_annotations(nodes, token)
     
     # Add properties to nodes
     for node in nodes:
