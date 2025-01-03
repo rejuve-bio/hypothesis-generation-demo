@@ -10,7 +10,7 @@ def enrichment_flow(enrichr, llm, prolog_query, db, current_user_id, phenotype, 
     enrich = check_enrich(db, current_user_id, phenotype, variant)
     if enrich:
         print("Retrieved enrich data from saved db")
-        return {"id": enrich.get('id')}, 409
+        return {"id": enrich.get('id')}, 200
 
     candidate_genes = get_candidate_genes(prolog_query, variant)
     causal_gene = predict_causal_gene(llm, phenotype, candidate_genes)
@@ -28,7 +28,7 @@ def enrichment_flow(enrichr, llm, prolog_query, db, current_user_id, phenotype, 
 
     enrich_id = create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal_graph, current_user_id)
     
-    return {"id": enrich_id}
+    return {"id": enrich_id}, 201
 
 ### Hypothesis Flow
 @flow(log_prints=True)
