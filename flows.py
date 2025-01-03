@@ -1,5 +1,5 @@
 from prefect import flow
-from tasks import check_enrich, get_candidate_genes, predict_causal_gene, get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof, create_enrich_data 
+from tasks import check_enrich, get_candidate_genes, get_node_annotations, predict_causal_gene, get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof, create_enrich_data 
 from tasks import check_hypothesis, get_enrich, get_gene_ids, execute_gene_query, execute_variant_query,summarize_graph, create_hypothesis, execute_phenotype_query
 from uuid import uuid4
 from datetime import datetime, timedelta
@@ -93,6 +93,14 @@ def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
         nodes.append({"id": gene_id, "type": "gene", "name": gene_name})
         edges.append({"source": gene_id, "target": go_id, "label": "enriched_in"})
         edges.append({"source": causal_gene_id, "target": gene_id, "label": "coexpressed_with"})
+
+    # Get annotations for all nodes
+    node_annotations = get_node_annotations(nodes)
+    
+    # Add properties to nodes
+    for node in nodes:
+        if node["id"] in node_annotations:
+            node["properties"] = node_annotations[node["id"]]
 
     causal_graph = {"nodes": nodes, "edges": edges}
 
