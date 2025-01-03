@@ -238,5 +238,7 @@ def get_node_annotations(nodes: List[Dict], token: str):
         return node_properties
         
     except Exception as e:
-        print(f"Error querying annotation service: {e}")
-        return {}
+        logging.error(f"Error querying annotation service: {e}")
+        # Fallback mechanism: return empty properties for all nodes
+        node_properties = {node["id"]: {} for node in nodes}
+        return node_properties
