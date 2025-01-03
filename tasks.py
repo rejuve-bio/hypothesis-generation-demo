@@ -2,6 +2,9 @@ from prefect import task
 from datetime import datetime, timedelta
 from uuid import uuid4
 from socketio_instance import socketio
+from typing import Dict, List
+import requests
+import logging
 
 ### Enrich Tasks
 @task(retries=2, cache_policy=None)
@@ -190,3 +193,46 @@ def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, 
     db.create_hypothesis(current_user_id, hypothesis_data)
     socketio.emit('task_update', {'message': 'Finished: create hypothesis'})
     return hypothesis_data["id"]
+
+@task(retries=2)
+def get_node_annotations(nodes: List[Dict]):
+    """Query the annotation service to get additional properties for nodes"""
+
+    annotation_url = "http://100.67.47.42:5004/query"
+    params = {"source": "hypothesis", "properties": "True"}
+    
+    # Prepare request body
+    request_body = {
+        "requests": {
+            "nodes": [
+                {
+                    "node_id": f"n{i}",
+                    "id": node["id"],
+                    "type": node["type"],
+                    "properties": {}
+                }
+                for i, node in enumerate(nodes)
+            ],
+            "predicates": []
+        }
+    }
+    
+    try:
+        logging.info(f"Sending request to annotation service at {annotation_url}")
+        response = requests.post(annotation_url, params=params, json=request_body)
+        response.raise_for_status()
+        annotations = response.json()
+        
+        # Create a mapping of node id to properties
+        node_properties = {}
+        for node in annotations["nodes"]:
+            node_id = node["data"]["id"].split()[-1]
+            properties = {k: v for k, v in node["data"].items() 
+                        if k not in ["id", "type", "name"]}
+            node_properties[node_id] = properties
+        logging.info(f"Received annotations for {len(node_properties)} nodes")    
+        return node_properties
+        
+    except Exception as e:
+        print(f"Error querying annotation service: {e}")
+        return {}
