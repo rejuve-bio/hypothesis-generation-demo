@@ -13,7 +13,7 @@ class EnrichAPI(Resource):
         self.db = db
 
     @token_required
-    def get(self, current_user_id):
+    def get(self, current_user_id, token):
         # Get the enrich_id from the query parameters
         enrich_id = request.args.get('id')
         if enrich_id:
@@ -28,7 +28,7 @@ class EnrichAPI(Resource):
         return enrich, 200
 
     @token_required
-    def post(self, current_user_id):
+    def post(self, current_user_id, token):
         args = request.args
         phenotype, variant = args['phenotype'], args['variant']
         
@@ -37,7 +37,7 @@ class EnrichAPI(Resource):
         return flow_result, 200
 
     @token_required
-    def delete(self, current_user_id):
+    def delete(self, current_user_id, token):
         enrich_id = request.args.get('id')
         if enrich_id:
             result = self.db.delete_enrich(current_user_id, enrich_id)
@@ -53,7 +53,7 @@ class HypothesisAPI(Resource):
         self.db = db
 
     @token_required
-    def get(self, current_user_id):
+    def get(self, current_user_id, token):
         # Get the hypothesis_id from the query parameters
         hypothesis_id = request.args.get('id')
 
@@ -69,18 +69,18 @@ class HypothesisAPI(Resource):
         return hypotheses, 200
 
     @token_required
-    def post(self, current_user_id):
+    def post(self, current_user_id, token):
         enrich_id = request.args.get('id')
         go_id = request.args.get('go')
         
         # Run the Prefect flow and return the result
-        flow_result = hypothesis_flow(current_user_id, enrich_id, go_id, self.db, self.prolog_query, self.llm)
+        flow_result = hypothesis_flow(current_user_id, token, enrich_id, go_id, self.db, self.prolog_query, self.llm)
 
         return flow_result
 
     
     @token_required
-    def delete(self, current_user_id):
+    def delete(self, current_user_id, token):
         hypothesis_id = request.args.get('hypothesis_id')
         if hypothesis_id:
             return self.db.delete_hypothesis(current_user_id, hypothesis_id)
