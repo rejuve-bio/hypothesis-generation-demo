@@ -21,37 +21,10 @@ variant_id(S, Id) :-
     upcase_atom(A, Alt),
     Id = "$Chr:$Start-$End-$Ref>$Alt".
 
-%within_k_distance(G, S, K) :-
-%    chr(G, Chr),
-%    chr(S, Chr),
-%    start(G, StartG),
-%    end(G, EndG),
-%    start(S, StartS),
-%    end(S, EndS),
-%    StartDist is abs(StartS - StartG),
-%    EndDist is abs(EndS - EndG), 
-%    (StartDist =< K
-%    ; EndDist =< K).
-
-% within_k_distance(G, S, K) :-
-%     G = gene(_), % limit the search to Genes
-%     chr(G, Chr),
-%     chr(S, Chr),
-%     (start(G, StartG),
-%         start(S, StartS),
-%         abs(StartS - StartG) =< K)
-%     ;(end(G, EndG),
-%         end(S, EndS),
-%         abs(EndS - EndG) =< K).
-
 within_k_distance(G, S, K) :-
-    % G = gene(_), % limit the search to Genes
     chr(S, Chr),
-    start(S, Pos),
-    % G = gene(_), % limit the search to Genes
-    chr(S, Chr),
-    start(S, Pos),
     chr(G, Chr),
+    start(S, Pos),
     start(G, StartG),
     end(G, EndG),
     (abs(Pos - StartG) =< K, !
@@ -62,15 +35,7 @@ find_and_rank_tfs(SNP, T, G) :-
     setof(Score-TF, (regulates(TF, G), tfbs_snp(TF, SNP), effect(tfbs_snp(TF, SNP), loss), score(tfbs_snp(TF, SNP), Score)), TFScorePairs),
     keysort(TFScorePairs, RankedPairs),
     pairs_values(RankedPairs, RankedTFs),
-    take(1, RankedTFs, [T]).
-
-
-take(0, _, []).
-take(_, [], []).
-take(N, [H|T], [H|Rest]) :-
-    N > 0,
-    N1 is N - 1,
-    take(N1, T, Rest).
+    RankedTFs = [T|_].
 
 server_start(Port) :- http_server(http_dispatch, [port(Port)]).
 server_stop(Port) :- http_stop_server(Port, []).

@@ -8,8 +8,8 @@ load_with_time(Files, FileName) :-
     format("Loaded ~w!~n", [FileName]).
 
 
-user:file_search_path(prolog_out_v2,'/app/mnt/d2_nfs/wondwossen/prolog_out_v2').
-user:file_search_path(prolog_out_v3,'/app/mnt/d2_nfs/wondwossen/prolog_out_v3').
+user:file_search_path(prolog_out_v2,'/mnt/prolog_out_v2').
+user:file_search_path(prolog_out_v3,'/mnt/prolog_out_v3').
 user:file_search_path(gene, prolog_out_v2('gencode/gene')).
 % user:file_search_path(exon, prolog_out_v2('gencode/exon')).
 user:file_search_path(transcript, prolog_out_v2('gencode/transcript')).
