@@ -217,13 +217,11 @@ def get_node_annotations(nodes: List[Dict], token: str):
         }
     }
 
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
+    headers={"Authorization": f"Bearer {token}"}
     
     try:
         logging.info(f"Sending request to annotation service at {annotation_url}")
-        response = requests.post(annotation_url, params=params, json=request_body, headers = headers)
+        response = requests.post(annotation_url,json=request_body, params=params, headers = headers)
         response.raise_for_status()
         annotations = response.json()
         
