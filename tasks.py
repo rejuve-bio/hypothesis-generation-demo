@@ -199,44 +199,55 @@ def get_node_annotations(nodes: List[Dict], token: str):
     """Query the annotation service to get additional properties for nodes"""
 
     annotation_url = "http://100.67.47.42:5004/query"
-    params = {"source": "hypothesis", "properties": "True"}
+    params = {"source": "hypothesis"}
+    headers = {"Authorization": f"Bearer {token}"}
     
-    # Prepare request body
-    request_body = {
-        "requests": {
-            "nodes": [
-                {
+    # Process each node individually
+    node_properties = {}
+    
+    for i, node in enumerate(nodes):
+        # Prepare request body for single node
+        request_body = {
+            "requests": {
+                "nodes": [{
                     "node_id": f"n{i}",
-                    "id": node["id"],
+                    "id": node.get("name", node["id"]) if node["type"].lower() == "snp" else node["id"],
                     "type": node["type"],
                     "properties": {}
-                }
-                for i, node in enumerate(nodes)
-            ],
-            "predicates": []
+                }],
+                "predicates": []
+            }
         }
-    }
-
-    headers={"Authorization": f"Bearer {token}"}
-    
-    try:
-        logging.info(f"Sending request to annotation service at {annotation_url}")
-        response = requests.post(annotation_url,json=request_body, params=params, headers = headers)
-        response.raise_for_status()
-        annotations = response.json()
         
-        # Create a mapping of node id to properties
-        node_properties = {}
-        for node in annotations["nodes"]:
-            node_id = node["data"]["id"].split()[-1]
-            properties = {k: v for k, v in node["data"].items() 
-                        if k not in ["id", "type", "name"]}
+        try:
+            logging.info(f"Sending request to annotation service for node {i}: {node['id']}")
+            print(f"Sending request to annotation service at {annotation_url} with payload {request_body}")
+            
+            response = requests.post(annotation_url, json=request_body, params=params, headers=headers)
+            response.raise_for_status()
+            annotations = response.json()
+            print(f"Received annotations for node {i}: {annotations}")
+            
+            # Handle empty response
+            if not annotations["nodes"]:
+                print(f"No annotations found for node {i}: {node['id']}")
+                node_properties[node["id"]] = {}
+                continue
+                
+            # Process successful response
+            annotation_node = annotations["nodes"][0]  # We only expect one node
+            node_id = annotation_node["data"]["id"].split()[-1]
+            properties = {
+                k: v for k, v in annotation_node["data"].items() 
+                if k not in ["id", "type", "name"]
+            }
             node_properties[node_id] = properties
-        logging.info(f"Received annotations for {len(node_properties)} nodes")    
-        return node_properties
-        
-    except Exception as e:
-        logging.error(f"Error querying annotation service: {e}")
-        # Fallback mechanism: return empty properties for all nodes
-        node_properties = {node["id"]: {} for node in nodes}
-        return node_properties
+            
+        except Exception as e:
+            logging.error(f"Error querying annotation service for node {i}: {str(e)}")
+            # Add empty properties for failed node
+            node_properties[node["id"]] = {}
+            continue
+    
+    print(f"Final node properties: {node_properties}")
+    return node_properties
