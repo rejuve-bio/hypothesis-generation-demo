@@ -206,12 +206,12 @@ def get_node_annotations(nodes: List[Dict], token: str):
     node_properties = {}
     
     for i, node in enumerate(nodes):
-        # Prepare request body for single node
+        # First attempt with node["id"]
         request_body = {
             "requests": {
                 "nodes": [{
                     "node_id": f"n{i}",
-                    "id": node.get("name", node["id"]) if node["type"].lower() == "snp" else node["id"],
+                    "id": node["id"],
                     "type": node["type"],
                     "properties": {}
                 }],
@@ -220,13 +220,24 @@ def get_node_annotations(nodes: List[Dict], token: str):
         }
         
         try:
-            logging.info(f"Sending request to annotation service for node {i}: {node['id']}")
+            logging.info(f"Sending first request to annotation service for node {i}: {node['id']}")
             print(f"Sending request to annotation service at {annotation_url} with payload {request_body}")
             
             response = requests.post(annotation_url, json=request_body, params=params, headers=headers)
             response.raise_for_status()
             annotations = response.json()
             print(f"Received annotations for node {i}: {annotations}")
+            
+            # If no results found and node has a name, try again with node["name"]
+            if not annotations["nodes"] and "name" in node:
+                request_body["requests"]["nodes"][0]["id"] = node["name"]
+                logging.info(f"Retrying with name for node {i}: {node['name']}")
+                print(f"Retrying request with name: {request_body}")
+                
+                response = requests.post(annotation_url, json=request_body, params=params, headers=headers)
+                response.raise_for_status()
+                annotations = response.json()
+                print(f"Received annotations for retry with name {i}: {annotations}")
             
             # Handle empty response
             if not annotations["nodes"]:
