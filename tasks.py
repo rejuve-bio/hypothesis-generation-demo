@@ -1,3 +1,4 @@
+import traceback
 from prefect import task
 from datetime import datetime, timedelta
 from uuid import uuid4
@@ -205,60 +206,105 @@ def get_node_annotations(nodes: List[Dict], token: str):
     # Process each node individually
     node_properties = {}
     
-    for i, node in enumerate(nodes):
-        # First attempt with node["id"]
-        request_body = {
-            "requests": {
-                "nodes": [{
+    # Prepare batch request for all nodes
+    request_body = {
+        "requests": {
+            "nodes": [
+                {
                     "node_id": f"n{i}",
                     "id": node["id"],
                     "type": node["type"],
                     "properties": {}
-                }],
-                "predicates": []
-            }
+                }
+                for i, node in enumerate(nodes)
+            ],
+            "predicates": []
         }
+    }
+
+    try:
+        logging.info(f"Sending batch request to annotation service for {len(nodes)} nodes")
+        print(f"Sending request to annotation service at {annotation_url} with payload {request_body}")
         
-        try:
-            logging.info(f"Sending first request to annotation service for node {i}: {node['id']}")
-            print(f"Sending request to annotation service at {annotation_url} with payload {request_body}")
-            
-            response = requests.post(annotation_url, json=request_body, params=params, headers=headers)
-            response.raise_for_status()
-            annotations = response.json()
-            print(f"Received annotations for node {i}: {annotations}")
-            
-            # If no results found and node has a name, try again with node["name"]
-            if not annotations["nodes"] and "name" in node:
-                request_body["requests"]["nodes"][0]["id"] = node["name"]
-                logging.info(f"Retrying with name for node {i}: {node['name']}")
-                print(f"Retrying request with name: {request_body}")
-                
-                response = requests.post(annotation_url, json=request_body, params=params, headers=headers)
-                response.raise_for_status()
-                annotations = response.json()
-                print(f"Received annotations for retry with name {i}: {annotations}")
-            
-            # Handle empty response
-            if not annotations["nodes"]:
-                print(f"No annotations found for node {i}: {node['id']}")
-                node_properties[node["id"]] = {}
-                continue
-                
-            # Process successful response
-            annotation_node = annotations["nodes"][0]  # We only expect one node
-            node_id = annotation_node["data"]["id"].split()[-1]
+        response = requests.post(annotation_url, json=request_body, params=params, headers=headers)
+        response.raise_for_status()
+        annotations = response.json()
+        print(f"Received annotations: {annotations}")
+
+        # Process annotations
+        node_properties = {}
+        missed_nodes = []
+        
+        # First pass - process successful annotations
+        found_node_ids = set(node["data"]["id"].split()[-1] for node in annotations.get("nodes", []))
+        
+        # Process successful annotations
+        for node in annotations.get("nodes", []):
+            node_id = node["data"]["id"].split()[-1]
             properties = {
-                k: v for k, v in annotation_node["data"].items() 
-                if k not in ["id", "type", "name"]
+                k: v for k, v in node["data"].items() 
+                if k not in ["id", "type"]
             }
-            node_properties[node_id] = properties
-            
-        except Exception as e:
-            logging.error(f"Error querying annotation service for node {i}: {str(e)}")
-            # Add empty properties for failed node
-            node_properties[node["id"]] = {}
-            continue
-    
-    print(f"Final node properties: {node_properties}")
-    return node_properties
+            if properties:  # If we got properties
+                node_properties[node_id] = properties
+        
+        # Add nodes that weren't returned in the response to missed_nodes
+        missed_nodes = [node for node in nodes if node["id"] not in found_node_ids]
+                
+
+        # Retry with name as ID for missed nodes if they have a name
+        print(f"Missed nodes: {missed_nodes}")
+        if missed_nodes:
+            retry_body = {
+                "requests": {
+                    "nodes": [
+                        {
+                            "node_id": f"retry_{i}",
+                            "id": node.get("name", ""),  # Use name as ID
+                            "type": node["type"],
+                            "properties": {}
+                        }
+                        for i, node in enumerate(missed_nodes)
+                        if node.get("name")  # Only retry nodes with names
+                    ],
+                    "predicates": []
+                }
+            }
+            print(f"Missed nodes: {missed_nodes}")
+            if retry_body["requests"]["nodes"]:  # Only send request if there are nodes to retry
+                logging.info(f"Retrying batch request for {len(retry_body['requests']['nodes'])} nodes")
+                print(f"Retrying request to annotation service at {annotation_url} with payload {retry_body}")
+                retry_response = requests.post(annotation_url, json=retry_body, params=params, headers=headers)
+                retry_response.raise_for_status()
+                retry_annotations = retry_response.json()
+
+                # Process retry results
+                for node in retry_annotations.get("nodes", []):
+                    # Extract the ID portion after the type
+                    node_id = node["data"]["id"].split()[-1]
+                    # Map back to original node ID using name
+                    original_node = next(
+                        (n for n in missed_nodes if n.get("name") == node_id), 
+                        None
+                    )
+                    if original_node:
+                        properties = {
+                            k: v for k, v in node["data"].items() 
+                            if k not in ["id", "type"]
+                        }
+                        if properties:
+                            node_properties[original_node["id"]] = properties
+
+        # Fill in empty properties for any remaining nodes
+        for node in nodes:
+            if node["id"] not in node_properties:
+                node_properties[node["id"]] = {}
+
+        print(f"Final node properties: {node_properties}")
+        return node_properties
+
+    except Exception as e:
+        logging.error(f"Error querying annotation service: {str(e)}")
+        logging.error(traceback.format_exc())
+        # Return empty properties for all nodes on failure
+        return {node["id"]: {} for node in nodes}
