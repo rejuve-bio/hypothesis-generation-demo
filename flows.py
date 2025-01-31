@@ -1,44 +1,58 @@
-from prefect import flow
-from tasks import check_enrich, get_candidate_genes, get_node_annotations, predict_causal_gene, get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof, create_enrich_data 
+from loguru import logger
+from prefect import flow, task
+from status_tracker import TaskState
+from tasks import check_enrich, get_candidate_genes, predict_causal_gene, get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof, create_enrich_data 
 from tasks import check_hypothesis, get_enrich, get_gene_ids, execute_gene_query, execute_variant_query,summarize_graph, create_hypothesis, execute_phenotype_query
 from uuid import uuid4
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+from prefect.task_runners import ConcurrentTaskRunner
+
+from utils import emit_task_update
 
 ### Enrichment Flow
-@flow(log_prints=True)
-def enrichment_flow(enrichr, llm, prolog_query, db, current_user_id, phenotype, variant):
-    enrich = check_enrich(db, current_user_id, phenotype, variant)
-    if enrich:
-        print("Retrieved enrich data from saved db")
-        return {"id": enrich.get('id')}, 200
+@flow(log_prints=True, name="enrichment_flow")
+async def enrichment_flow(enrichr, llm, prolog_query, db, current_user_id, phenotype, variant, hypothesis_id):
+    try:
+        enrich = check_enrich(db, current_user_id, phenotype, variant, hypothesis_id)
+        if enrich:
+            print("Retrieved enrich data from saved db")
+            return {"id": enrich.get('id')}, 200
 
-    candidate_genes = get_candidate_genes(prolog_query, variant)
-    causal_gene = predict_causal_gene(llm, phenotype, candidate_genes)
-    causal_graph, proof = get_relevant_gene_proof(prolog_query, variant, causal_gene)
+        candidate_genes = get_candidate_genes(prolog_query, variant, hypothesis_id)
+        causal_gene = predict_causal_gene(llm, phenotype, candidate_genes, hypothesis_id)
+        causal_graph, proof = get_relevant_gene_proof(prolog_query, variant, causal_gene, hypothesis_id)
 
-    if causal_graph is None:
-        causal_gene = retry_predict_causal_gene(llm, phenotype, candidate_genes, proof, causal_gene)
-        causal_graph, proof = retry_get_relevant_gene_proof(prolog_query, variant, causal_gene)
-        print("Retried causal gene: ", causal_gene)
-        print("Retried causal graph: ", causal_graph)
+        print("Causal graph without mock: ", causal_graph)
+        # mock causal_graph
+        causal_graph = {'nodes': [{'id': 'rs1421085', 'type': 'snp'}, {'id': 'ensg00000177508', 'type': 'gene'}, {'id': 'rs1421085', 'type': 'snp'}, {'id': 'ensg00000177508', 'type': 'gene'}, {'id': 'rs1421085', 'type': 'snp'}, {'id': 'chr16_53741418_53785410_grch38', 'type': 'super_enhancer'}, {'id': 'chr16_53741418_53785410_grch38', 'type': 'super_enhancer'}, {'id': 'ensg00000140718', 'type': 'gene'}, {'id': 'rs1421085', 'type': 'snp'}, {'id': 'ensg00000125798', 'type': 'gene'}, {'id': 'ensg00000125798', 'type': 'gene'}, {'id': 'ensg00000177508', 'type': 'gene'}, {'id': 'ensg00000125798', 'type': 'gene'}, {'id': 'chr16_53744537_53744917_grch38', 'type': 'tfbs'}, {'id': 'chr16_53744537_53744917_grch38', 'type': 'tfbs'}, {'id': 'chr16_53741418_53785410_grch38', 'type': 'super_enhancer'}], 'edges': [{'source': 'rs1421085', 'target': 'ensg00000177508', 'label': 'eqtl_association'}, {'source': 'rs1421085', 'target': 'ensg00000177508', 'label': 'in_tad_with'}, {'source': 'rs1421085', 'target': 'chr16_53741418_53785410_grch38', 'label': 'in_regulatory_region'}, {'source': 'chr16_53741418_53785410_grch38', 'target': 'ensg00000140718', 'label': 'associated_with'}, {'source': 'rs1421085', 'target': 'ensg00000125798', 'label': 'alters_tfbs'}, {'source': 'ensg00000125798', 'target': 'ensg00000177508', 'label': 'regulates'}, {'source': 'ensg00000125798', 'target': 'chr16_53744537_53744917_grch38', 'label': 'binds_to'}, {'source': 'chr16_53744537_53744917_grch38', 'target': 'chr16_53741418_53785410_grch38', 'label': 'overlaps_with'}]}
 
-    enrich_tbl = enrichr.run(causal_gene)
-    relevant_gos = llm.get_relevant_go(phenotype, enrich_tbl)
+        if causal_graph is None:
+            causal_gene = retry_predict_causal_gene(llm, phenotype, candidate_genes, proof, causal_gene, hypothesis_id)
+            causal_graph, proof = retry_get_relevant_gene_proof(prolog_query, variant, causal_gene, hypothesis_id)
+            print("Retried causal gene: ", causal_gene)
+            print("Retried causal graph: ", causal_graph)
+
+        enrich_tbl = enrichr.run(causal_gene)
+        relevant_gos = llm.get_relevant_go(phenotype, enrich_tbl)
 
 
-    enrich_id = create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal_graph, current_user_id)
-    
-    return {"id": enrich_id}, 201
+        enrich_id = create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal_graph, current_user_id, hypothesis_id)
+        
+        return {"id": enrich_id}, 201
+        
+    except Exception as e:
+        logger.error(f"Error in enrichment flow: {str(e)}")
+        raise
 
 ### Hypothesis Flow
 @flow(log_prints=True)
-def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
-    hypothesis = check_hypothesis(db, current_user_id, enrich_id, go_id)
+def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog_query, llm):
+    hypothesis = check_hypothesis(db, current_user_id, enrich_id, go_id, hypothesis_id)
     if hypothesis:
         print("Retrieved hypothesis data from saved db")
         return {"summary": hypothesis.get('summary'), "graph": hypothesis.get('graph')}, 200
 
-    enrich_data = get_enrich(db, current_user_id, enrich_id)
+    enrich_data = get_enrich(db, current_user_id, enrich_id, hypothesis_id)
     if not enrich_data:
         return {"message": "Invalid enrich_id or access denied."}, 404
 
@@ -52,8 +66,8 @@ def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
 
     print(f"Enrich data: {enrich_data}")
 
-    causal_gene_id = get_gene_ids(prolog_query, [causal_gene.lower()])[0]
-    coexpressed_gene_ids = get_gene_ids(prolog_query, [g.lower() for g in coexpressed_gene_names])
+    causal_gene_id = get_gene_ids(prolog_query, [causal_gene.lower()], hypothesis_id)[0]
+    coexpressed_gene_ids = get_gene_ids(prolog_query, [g.lower() for g in coexpressed_gene_names], hypothesis_id)
 
     nodes, edges = causal_graph["nodes"], causal_graph["edges"]
 
@@ -62,7 +76,7 @@ def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
     gene_entities = [f"gene({id})" for id in gene_ids]
     query = f"maplist(gene_name, {gene_entities}, X)".replace("'", "")
 
-    gene_names = execute_gene_query(prolog_query, query)
+    gene_names = execute_gene_query(prolog_query, query, hypothesis_id)
     for id, name, node in zip(gene_ids, gene_names, gene_nodes):
         node["id"] = id
         node["name"] = name.upper()
@@ -72,7 +86,7 @@ def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
     variant_entities = [f"snp({id})" for id in variant_rsids]
     query = f"maplist(variant_id, {variant_entities}, X)".replace("'", "")
 
-    variant_ids = execute_variant_query(prolog_query, query)
+    variant_ids = execute_variant_query(prolog_query, query, hypothesis_id)
     for variant_id, rsid, node in zip(variant_ids, variant_rsids, variant_nodes):
         variant_id = variant_id.replace("'", "")
         node["id"] = variant_id
@@ -85,7 +99,7 @@ def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
             edge["target"] = variant_id
             
     nodes.append({"id": go_id, "type": "go", "name": go_name})
-    phenotype_id = execute_phenotype_query(prolog_query, phenotype)
+    phenotype_id = execute_phenotype_query(prolog_query, phenotype, hypothesis_id)
 
     nodes.append({"id": phenotype_id, "type": "phenotype", "name": phenotype})
     edges.append({"source": go_id, "target": phenotype_id, "label": "involved_in"})
@@ -94,19 +108,83 @@ def hypothesis_flow(current_user_id, enrich_id, go_id, db, prolog_query, llm):
         edges.append({"source": gene_id, "target": go_id, "label": "enriched_in"})
         edges.append({"source": causal_gene_id, "target": gene_id, "label": "coexpressed_with"})
 
-    # Get annotations for all nodes
-    node_annotations = get_node_annotations(nodes)
-    
-    # Add properties to nodes
-    for node in nodes:
-        if node["id"] in node_annotations:
-            node["properties"] = node_annotations[node["id"]]
 
     causal_graph = {"nodes": nodes, "edges": edges}
 
-    summary = summarize_graph(llm, causal_graph)
+    summary = summarize_graph(llm, causal_graph, hypothesis_id)
 
     
-    hypothesis_id = create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id)
+    hypothesis_id = create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id, hypothesis_id)
     
     return {"summary": summary, "graph": causal_graph}, 201
+
+@task(cache_key_fn=None, cache_policy=None)
+async def run_enrichment_task(enrichr, llm, prolog_query, db, current_user_id, phenotype, variant, hypothesis_id):
+    """Async task to run the enrichment flow"""
+    try:
+        # Emit initial task update
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Enrichment process",
+            state=TaskState.IN_PROGRESS,
+            progress=0,
+            next_task="Verify existence of enrichment data"
+        )
+
+        # Run the enrichment flow
+        flow_result = await enrichment_flow(
+            enrichr, 
+            llm, 
+            prolog_query, 
+            db, 
+            current_user_id, 
+            phenotype, 
+            variant, 
+            hypothesis_id
+        )
+        
+        # Update hypothesis with enrichment ID
+        db.update_hypothesis(hypothesis_id, {
+            "enrich_id": flow_result[0].get('id')
+        })
+
+        # Final task update
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Enrichment process",
+            state=TaskState.COMPLETED,
+            progress=50,
+            details={"enrich_id": flow_result[0].get('id')}
+        )
+
+        logger.info(f"Enrichment flow completed: {flow_result}")
+        print(f"Enrichment flow completed: {flow_result}")
+        
+        return flow_result
+    except Exception as e:
+        logger.error(f"Enrichment flow failed: {str(e)}")
+        
+        # Update hypothesis with error state
+        db.update_hypothesis(hypothesis_id, {
+            "status": "failed",
+            "error": str(e),
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+        })
+
+        # Emit failure update
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="enrichment",
+            state=TaskState.FAILED,
+            error=str(e),
+            progress=0
+        )
+        raise
+
+@flow(name="async_enrichment_process", task_runner=ConcurrentTaskRunner())
+async def async_enrichment_process(enrichr, llm, prolog_query, db, current_user_id, phenotype, variant, hypothesis_id):
+    """Wrapper flow to run enrichment process"""
+    return await run_enrichment_task(
+        enrichr, llm, prolog_query, db, 
+        current_user_id, phenotype, variant, hypothesis_id
+    )
