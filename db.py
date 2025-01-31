@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson.objectid import ObjectId
@@ -9,6 +10,7 @@ class Database:
         self.users_collection = self.db['users']
         self.hypothesis_collection = self.db['hypotheses']
         self.enrich_collection = self.db['enrich']
+        self.task_updates_collection = self.db['task_updates'] 
 
     def create_user(self, email, password):
         if self.users_collection.find_one({'email': email}):
@@ -141,3 +143,78 @@ class Database:
         if result.deleted_count > 0:
             return {'message': 'Enrich deleted'}, 200
         return {'message': 'Enrich not found or not authorized'}, 404
+    
+    # def add_task_update(self, hypothesis_id, task_name, state, details=None, error=None):
+    #     task_update = {
+    #         "hypothesis_id": hypothesis_id,
+    #         "task_name": task_name,
+    #         "state": state.value,
+    #         "timestamp": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+    #         "details": details if details else {},
+    #         "error": error if error else None,
+    #         "progress": progress if progress is not None else 0
+    #     }
+      
+    #     self.task_updates_collection.insert_one(task_update)
+
+    def get_task_history(self, hypothesis_id):
+        task_history = list(self.task_updates_collection.find({"hypothesis_id": hypothesis_id}))
+        
+        for update in task_history:
+            update["_id"] = str(update["_id"])
+        return task_history
+    
+    def get_latest_task_state(self, hypothesis_id):
+        task_history = list(self.task_updates_collection.find({"hypothesis_id": hypothesis_id}).sort("timestamp", -1).limit(1))
+        if task_history:
+            return task_history[0]
+        return None
+
+    def update_hypothesis(self, hypothesis_id, data):
+        """
+        Updates an existing hypothesis document with new data.
+        
+        Args:
+            hypothesis_id (str): The ID of the hypothesis to update
+            data (dict): The new data to update the hypothesis with
+        
+        Returns:
+            tuple: (dict with message, status code)
+        """
+        # Remove _id if present in data to avoid modification errors
+        if '_id' in data:
+            del data['_id']
+        
+        result = self.hypothesis_collection.update_one(
+            {'id': hypothesis_id},
+            {'$set': data}
+        )
+        
+        if result.matched_count > 0:
+            return {'message': 'Hypothesis updated successfully'}, 200
+        return {'message': 'Hypothesis not found'}, 404
+
+    def save_task_history(self, hypothesis_id, task_history):
+        """Save complete task history to DB"""
+        # Delete existing history first
+        self.task_updates_collection.delete_many({"hypothesis_id": hypothesis_id})
+        
+        # Insert new history as a batch
+        if task_history:
+            self.task_updates_collection.insert_many([
+                {**update, "hypothesis_id": hypothesis_id}
+                for update in task_history
+            ])
+    
+    def get_hypothesis_by_phenotype_and_variant(self, user_id, phenotype, variant):
+        return self.hypothesis_collection.find_one({
+            'user_id': user_id,
+            'phenotype': phenotype,
+            'variant': variant
+        })
+
+    def get_hypothesis_by_enrich(self, user_id, enrich_id):
+        return self.hypothesis_collection.find_one({
+            'user_id': user_id,
+            'enrich_id': enrich_id
+        })
