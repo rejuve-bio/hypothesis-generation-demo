@@ -1,18 +1,30 @@
+# import eventlet
+# eventlet.monkey_patch(select=True, socket=True)
+import asyncio
 import argparse
-from flask import Flask
+from flask import Flask, json
 from flask_restful import Resource, Api
 from flask_socketio import SocketIO
+from loguru import logger
+
 from enrich import Enrich
 # from semantic_search import SemanticSearch
 from llm import LLM
 from db import Database
 from query_swipl import PrologQuery
-from api import EnrichAPI, HypothesisAPI, ChatAPI
+from api import (
+    EnrichAPI, 
+    HypothesisAPI, 
+    ChatAPI, 
+    HypothesisResultAPI,
+    init_socket_handlers
+)
 from dotenv import load_dotenv
 import os
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from socketio_instance import socketio
+from status_tracker import StatusTracker
 
 def parse_arguments():
     args = argparse.ArgumentParser()
@@ -33,6 +45,8 @@ def parse_arguments():
 
 def setup_api(args):
     load_dotenv()
+ 
+    
     app = Flask(__name__)
 
     # JWT Configuration
@@ -43,8 +57,10 @@ def setup_api(args):
 
     # Initialize JWTManager
     jwt = JWTManager(app)
-    CORS(app)
+    CORS(app, resources={r"/*": {"origins": "*"}}) 
     api = Api(app)
+
+    # Initialize SocketIO with the app
     socketio.init_app(app)
 
 
@@ -53,6 +69,13 @@ def setup_api(args):
     db_name = os.getenv("DB_NAME")
 
     db = Database(mongodb_uri, db_name)
+    status_tracker = StatusTracker()
+    status_tracker.initialize(db)
+
+    # Register socket namespace
+    # socketio.on_namespace(SocketNamespace('/', db))
+    # socket_namespace = SocketNamespace('/', db)
+    # socketio.on_namespace(socket_namespace)
 
     enrichr = Enrich(args.ensembl_hgnc_map, args.hgnc_ensembl_map, args.go_map)
     try:
@@ -65,6 +88,12 @@ def setup_api(args):
     api.add_resource(EnrichAPI, "/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query, "db": db})
     api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
     api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm})
+    api.add_resource(HypothesisResultAPI, "/hypothesis/<string:hypothesis_id>/results", resource_class_kwargs={"db": db})
+
+    # Initialize socket handlers AFTER socketio.init_app
+    socket_namespace = init_socket_handlers(db)
+    logger.info(f"Socket namespace initialized: {socket_namespace}")
+    print(f"Socket namespace initialized: {socket_namespace}")
     
     return app, socketio
 
@@ -72,8 +101,17 @@ def setup_api(args):
 def main():
     args = parse_arguments()
     app, socketio = setup_api(args)
-    socketio.run(app, host=args.host, port=args.port, debug=True)
 
+
+    socketio.run(
+        app, 
+        host=args.host, 
+        port=args.port, 
+        debug=True,
+        use_reloader=False,
+        allow_unsafe_werkzeug=True
+    )
+    
 
 if __name__ == "__main__":
     main()
