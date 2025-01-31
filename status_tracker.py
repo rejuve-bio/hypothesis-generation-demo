@@ -1,0 +1,189 @@
+# status_tracker.py
+from datetime import datetime, timezone
+from enum import Enum
+
+class TaskState(Enum):
+    STARTED = "started"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    RETRYING = "retrying"
+
+class StatusTracker:
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance.task_history = {}  # hypothesis_id -> list of task updates
+            cls._instance.completed_hypotheses = set()
+        return cls._instance
+    
+    @classmethod
+    def initialize(cls, db_instance):
+        """Initialize the status tracker with a database instance"""
+        cls._db = db_instance
+    
+    def add_update(self, hypothesis_id, progress, task_name, state, details=None, error=None):
+        if not hypothesis_id:
+              raise ValueError("Hypothesis ID is required")
+        if not isinstance(state, TaskState):
+            raise ValueError("Invalid task state provided")
+
+        if hypothesis_id not in self.task_history:
+            self.task_history[hypothesis_id] = []
+            
+        update = {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+            "task": task_name,
+            "state": state.value,
+            "progress": progress
+        }
+        
+        if details:
+            update["details"] = details
+        if error:
+            update["error"] = error
+            
+        self.task_history[hypothesis_id].append(update)
+
+        # Persist to DB on completion or failure
+        if state in [TaskState.COMPLETED, TaskState.FAILED]:
+            if task_name in ["Enrichment process", "Generating hypothesis"]:
+                self._persist_and_clear(hypothesis_id)
+    
+    def _persist_and_clear(self, hypothesis_id):
+        """Persist task history to DB and clear from memory"""
+        if hypothesis_id in self.task_history:
+            # Get existing history from DB
+            db_history = self._db.get_task_history(hypothesis_id) or []
+            new_history = self.task_history[hypothesis_id]
+            
+            # Combine and deduplicate
+            combined = db_history + new_history
+            deduplicated = {}
+            for update in combined:
+                key = (update['task'], update['timestamp'])
+                deduplicated[key] = update
+            
+            # Sort by timestamp
+            final_history = sorted(deduplicated.values(), key=lambda x: x['timestamp'])
+            
+            # Save to DB
+            self._db.save_task_history(hypothesis_id, final_history)
+            
+            # Clear from memory
+            del self.task_history[hypothesis_id]
+            self.completed_hypotheses.add(hypothesis_id)
+    
+    def get_history(self, hypothesis_id):
+        """Get complete task history from memory and DB without duplicates"""
+        memory_history = self.task_history.get(hypothesis_id, [])
+        db_history = self._db.get_task_history(hypothesis_id) if hypothesis_id in self.completed_hypotheses else []
+        
+        # Combine histories
+        combined_history = memory_history + db_history
+        
+        if not combined_history:
+            return []
+        
+        # Create a dictionary with timestamp as key to remove duplicates
+        # If there are duplicates, keep the latest one based on the order in the list
+        deduplicated = {}
+        for update in combined_history:
+            key = (update['task'], update['timestamp'])
+            deduplicated[key] = update
+        
+        # Convert back to list and sort by timestamp
+        sorted_history = sorted(deduplicated.values(), key=lambda x: x['timestamp'])
+        
+        return sorted_history
+    
+    def get_latest_state(self, hypothesis_id):
+        history = self.task_history.get(hypothesis_id, [])
+        return history[-1] if history else None
+    
+    def is_complete(self, hypothesis_id):
+        """Check if the hypothesis generation is complete"""
+        latest_state = self.get_latest_state(hypothesis_id)
+        if not latest_state:
+            return False
+            
+        # Check if it's the final task and it's completed
+        return (latest_state.get('task') == 'Generating hypothesis' and 
+                latest_state.get('state') == TaskState.COMPLETED.value)
+    
+    def get_complete_result(self, hypothesis_id):
+        """Get the complete result if available"""
+        if self.is_complete(hypothesis_id):
+            latest_state = self.get_latest_state(hypothesis_id)
+            return latest_state.get('details', {}).get('result')
+        return None
+    
+    def calculate_progress(self, task_history):
+        """
+        Calculate the progress of a task based on its history.
+
+        Args:
+            task_history (list): A list of task updates.
+
+        Returns:
+            float: A percentage representing the progress (0 to 100).
+        """
+        if not task_history:
+            return 0.0  # No tasks, no progress
+        
+        # Define task weights and their process group
+        enrichment_tasks = {
+            "Verify existence of enrichment data": 10,
+            "Getting candidate genes": 10,
+            "Predicting causal gene": 10,
+            "Getting relevant gene proof": 10,
+            "Creating enrich data": 10
+        }
+
+        hypothesis_tasks = {
+            "Veryfing existence of hypothesis data": 5,  # Added weight
+            "Getting enrichement data": 5,
+            "Getting gene data": 5,
+            "Querying gene data": 7,
+            "Querying variant data": 7,
+            "Querying phenotype data": 7,
+            "Generating graph summary": 7,
+            "Generating hypothesis": 7
+        }
+
+        # Filter out retry tasks
+        # filtered_history = [
+        #     task for task in task_history 
+        #     if not task['task'].startswith('Retrying') and task['state'] == TaskState.STARTED.value
+        # ]
+
+        # Filter only completed tasks
+        filtered_history = [
+            task for task in task_history 
+            if task.get('state') == TaskState.COMPLETED.value
+        ]
+
+        enrichment_progress = 0
+        hypothesis_progress = 0
+
+        for task in filtered_history:
+            task_name = task['task']
+            if task_name in enrichment_tasks:
+                enrichment_progress += enrichment_tasks[task_name]
+            elif task_name in hypothesis_tasks:
+                hypothesis_progress += hypothesis_tasks[task_name]
+
+        # Calculate total progress
+        total_enrichment_weight = sum(enrichment_tasks.values())  # 50
+        total_hypothesis_weight = sum(hypothesis_tasks.values())  # 50
+
+        # Normalize to percentages
+        enrichment_percentage = (enrichment_progress / total_enrichment_weight) * 50
+        hypothesis_percentage = (hypothesis_progress / total_hypothesis_weight) * 50
+
+        return round(min(enrichment_percentage + hypothesis_percentage, 100), 2)
+
+# Global instance
+status_tracker = StatusTracker()
