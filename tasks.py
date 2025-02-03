@@ -199,6 +199,7 @@ def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, 
 def get_node_annotations(nodes: List[Dict], token: str):
     """Query the annotation service to get additional properties for nodes"""
 
+    # Configuration for annotation service URL and headers
     annotation_url = "http://100.67.47.42:5004/query"
     params = {"source": "hypothesis"}
     headers = {"Authorization": f"Bearer {token}"}
@@ -223,13 +224,10 @@ def get_node_annotations(nodes: List[Dict], token: str):
     }
 
     try:
-        logging.info(f"Sending batch request to annotation service for {len(nodes)} nodes")
-        print(f"Sending request to annotation service at {annotation_url} with payload {request_body}")
         
         response = requests.post(annotation_url, json=request_body, params=params, headers=headers)
         response.raise_for_status()
         annotations = response.json()
-        print(f"Received annotations: {annotations}")
 
         # Process annotations
         node_properties = {}
@@ -253,7 +251,6 @@ def get_node_annotations(nodes: List[Dict], token: str):
                 
 
         # Retry with name as ID for missed nodes if they have a name
-        print(f"Missed nodes: {missed_nodes}")
         if missed_nodes:
             retry_body = {
                 "requests": {
@@ -270,10 +267,8 @@ def get_node_annotations(nodes: List[Dict], token: str):
                     "predicates": []
                 }
             }
-            print(f"Missed nodes: {missed_nodes}")
+
             if retry_body["requests"]["nodes"]:  # Only send request if there are nodes to retry
-                logging.info(f"Retrying batch request for {len(retry_body['requests']['nodes'])} nodes")
-                print(f"Retrying request to annotation service at {annotation_url} with payload {retry_body}")
                 retry_response = requests.post(annotation_url, json=retry_body, params=params, headers=headers)
                 retry_response.raise_for_status()
                 retry_annotations = retry_response.json()
@@ -300,7 +295,6 @@ def get_node_annotations(nodes: List[Dict], token: str):
             if node["id"] not in node_properties:
                 node_properties[node["id"]] = {}
 
-        print(f"Final node properties: {node_properties}")
         return node_properties
 
     except Exception as e:
