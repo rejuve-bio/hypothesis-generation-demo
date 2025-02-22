@@ -138,6 +138,13 @@ class Database:
             return {'message': 'Hypothesis deleted'}, 200
         return {'message': 'Hypothesis not found or not authorized'}, 404
     
+    def delelte_all_hypothesis(self):
+        result = self.hypothesis_collection.delete_many({})
+        if result.deleted_count > 0:
+            return {'message': 'All hypotheses deleted'}, 200
+        return {'message': 'No hypotheses found'}, 404
+    
+    
     def delete_enrich(self, user_id, enrich_id):
         result = self.enrich_collection.delete_one({'id': enrich_id, 'user_id': user_id})
         if result.deleted_count > 0:
