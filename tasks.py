@@ -11,12 +11,6 @@ from utils import emit_task_update
 def check_enrich(db, current_user_id, phenotype, variant, hypothesis_id):
     try:
 
-        # db.add_task_update(
-        #     hypothesis_id=hypothesis_id,
-        #     task_name="Verify existance of enrichment data",
-        #     state=TaskState.STARTED,
-        #     details={"phenotype": phenotype, "variant": variant}
-        # )
         
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -213,7 +207,7 @@ def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal
         print("Creating enrich data in the database")
         enrich_data = {
             "id": str(uuid4()),
-            "created_on": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+            "created_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
             "variant": variant,
             "phenotype": phenotype,
             "causal_gene": causal_gene,
@@ -470,12 +464,13 @@ def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, 
         hypothesis_data = {
                 "enrich_id": enrich_id,
                 "go_id": go_id,
-                "variant_id": variant_id,
+                "variant": variant_id,
                 "phenotype": phenotype,
                 "causal_gene": causal_gene,
                 "graph": causal_graph,
                 "summary": summary,
                 "biological_context": "",
+                "status": "completed",
                 "task_history": hypothesis_history,
             }
         db.update_hypothesis(hypothesis_id, hypothesis_data)

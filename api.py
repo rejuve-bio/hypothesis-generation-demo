@@ -70,8 +70,9 @@ class EnrichAPI(Resource):
         hypothesis_data = {
             "id": hypothesis_id,
             "phenotype": phenotype,
-            "variant_id": variant,
+            "variant": variant,
             "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
             "task_history": [],
         }
 
@@ -129,26 +130,48 @@ class HypothesisAPI(Resource):
             is_complete = all(field in hypothesis for field in required_fields)
             # Get task history
             task_history = status_tracker.get_history(hypothesis_id)
+            for task in task_history:
+                task.pop('details', None)  # Remove 'details' if it exists
+
+            # Get only pending tasks from task history
+            pending_tasks = [task for task in task_history if task.get('state') == TaskState.STARTED.value]
+            last_pending_task = [pending_tasks[-1]] if pending_tasks else [] 
+            print(f"last_pending_task: {last_pending_task}")
 
             if is_complete:
+                enrich_id = hypothesis.get('enrich_id')
+                enrich_data = self.db.get_enrich(current_user_id, enrich_id)
+                # Remove 'causal_graph' field from enrich_data if it exists
+                if isinstance(enrich_data, dict):
+                    enrich_data.pop('causal_graph', None)
                 return {
                     'id': hypothesis_id,
-                    'variant': hypothesis['variant_id'],
+                    'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
+                    'enrich_id': enrich_id,
                     'phenotype': hypothesis['phenotype'],
                     "status": "completed",
-                    "result": hypothesis,
-                    "task_history": task_history
+                    "created_at": hypothesis.get('created_at'),
+                    "result": enrich_data
                 }, 200
 
             latest_state = status_tracker.get_latest_state(hypothesis_id)
-
+            
             status_data = {
                 'id': hypothesis_id,
-                'variant': hypothesis['variant_id'],
+                'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
                 'phenotype': hypothesis['phenotype'],
-                'status': 'in_progress',
-                'task_history': task_history,
+                'status': 'pending',
+                "created_at": hypothesis.get('created_at'),
+                'task_history': last_pending_task,
             }
+            if 'enrich_id' in hypothesis and hypothesis.get('enrich_id') is not None:
+                enrich_id = hypothesis.get('enrich_id')
+                status_data['enrich_id'] = enrich_id
+                enrich_data = self.db.get_enrich(current_user_id, enrich_id)
+                if isinstance(enrich_data, dict):
+                    enrich_data.pop('causal_graph', None)
+                status_data['result'] = enrich_data
+                
 
             # Check for failed state
             if latest_state and latest_state.get('state') == 'failed':
@@ -159,7 +182,33 @@ class HypothesisAPI(Resource):
 
         # Fetch all hypotheses for the current user
         hypotheses = self.db.get_hypotheses(user_id=current_user_id)
-        return hypotheses, 200
+        
+        # Filter and format the response for all hypotheses
+        formatted_hypotheses = []
+        for hypothesis in hypotheses:
+            # Get only pending tasks from task history
+            pending_tasks = [
+                task for task in status_tracker.get_history(hypothesis['id']) 
+                if task.get('state') == TaskState.STARTED.value
+            ]
+            last_pending_task = [pending_tasks[-1]] if pending_tasks else []
+            
+            formatted_hypothesis = {
+                'id': hypothesis['id'],
+                'phenotype': hypothesis['phenotype'],
+                'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
+                'causal_gene': hypothesis.get('causal_gene'),
+                'biological_context': hypothesis.get('biological_context'),
+                'created_at': hypothesis.get('created_at'),
+                'status': hypothesis.get('status'),
+                'task_history': last_pending_task
+            }
+            if 'enrich_id' in hypothesis and hypothesis.get('enrich_id') is not None:
+                 formatted_hypothesis['enrich_id'] = hypothesis.get('enrich_id')
+            formatted_hypotheses.append(formatted_hypothesis)
+            
+        return formatted_hypotheses, 200
+        # return hypotheses, 200
 
     @token_required
     def post(self, current_user_id):
@@ -184,7 +233,10 @@ class HypothesisAPI(Resource):
         hypothesis_id = request.args.get('hypothesis_id')
         if hypothesis_id:
             return self.db.delete_hypothesis(current_user_id, hypothesis_id)
-        return {"message": "hypothesis id is required!"}
+        return {"message": "Hypothesis ID is required"}, 400
+        # else:
+        #     return self.db.delelte_all_hypothesis()
+        
     
 class HypothesisResultAPI(Resource):
     def __init__(self, db):
@@ -205,12 +257,13 @@ class HypothesisResultAPI(Resource):
         is_complete = all(field in hypothesis for field in required_fields)
         # Get task history
         task_history = status_tracker.get_history(hypothesis_id)
+        # task_history = hypothesis.get('task_history', [])
 
 
         if is_complete:
             return {
                 'id': hypothesis_id,
-                'variant': hypothesis['variant_id'],
+                'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
                 'phenotype': hypothesis['phenotype'],
                 "status": "completed",
                 "result": hypothesis,
@@ -221,14 +274,14 @@ class HypothesisResultAPI(Resource):
 
         status_data = {
             'id': hypothesis_id,
-            'variant': hypothesis['variant_id'],
+            'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
             'phenotype': hypothesis['phenotype'],
-            'status': 'in_progress',
+            'status': 'pending',
             'task_history': task_history,
         }
 
         # Check for failed state
-        if latest_state and latest_state.get('state') == 'failed':
+        if latest_state and latest_state.get('state') == TaskState.FAILED.value:
             status_data['status'] = 'failed'
             status_data['error'] = latest_state.get('error')
 
