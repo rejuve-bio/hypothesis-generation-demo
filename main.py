@@ -57,7 +57,7 @@ def setup_api(args):
 
     # Initialize JWTManager
     jwt = JWTManager(app)
-    CORS(app, resources={r"/*": {"origins": "*"}}) 
+    CORS(app, resources={r"/*": {"origins": ["*", "http://localhost:5173"]}}, supports_credentials=True, allow_headers=["Content-Type", "Authorization"]) 
     api = Api(app)
 
     # Initialize SocketIO with the app
