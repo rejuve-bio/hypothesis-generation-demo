@@ -60,7 +60,9 @@ def get_candidate_genes(prolog_query, variant, hypothesis_id):
         )
 
         print("Executing: get candidate genes")
-        result = prolog_query.get_candidate_genes(variant)
+        # result = prolog_query.get_candidate_genes(variant)
+        # mock
+        result = ['MMP2', 'RPGRIP1L', 'FTO', 'IRX6', 'IRX5', 'IRX3']
 
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -118,8 +120,9 @@ def get_relevant_gene_proof(prolog_query, variant, causal_gene, hypothesis_id):
         )
 
         print("Executing: get relevant gene proof")
-        result = prolog_query.get_relevant_gene_proof(variant, causal_gene)
-
+        # result = prolog_query.get_relevant_gene_proof(variant, causal_gene)
+        # mock
+        result = (None, 'user:relevant_gene(A,B):-eqtl_association(B,A),in_tad_with(B,A),in_regulatory_region(B,C),associated_with(C,D),alters_tfbs(B,E,A),regulates(E,A),binds_to(E,F),overlaps_with(F,C),hideme([!])')
         emit_task_update(
             hypothesis_id=hypothesis_id,
             task_name="Getting relevant gene proof",
@@ -177,7 +180,10 @@ def retry_get_relevant_gene_proof(prolog_query, variant, causal_gene, hypothesis
         )
 
         print("Retrying get relevant gene proof")
-        result = prolog_query.get_relevant_gene_proof(variant, causal_gene)
+        # result = prolog_query.get_relevant_gene_proof(variant, causal_gene)
+        # mock
+        result = (None, 'user:relevant_gene(A,B):-eqtl_association(B,A),in_tad_with(B,A),in_regulatory_region(B,C),associated_with(C,D),alters_tfbs(B,E,A),regulates(E,A),binds_to(E,F),overlaps_with(F,C),hideme([!])')
+
        
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -308,7 +314,8 @@ def get_enrich(db, current_user_id, enrich_id, hypothesis_id):
         raise
 
 @task(retries=2)
-def get_gene_ids(prolog_query, gene_names, hypothesis_id):
+# def get_gene_ids(prolog_query, gene_names, hypothesis_id):
+def get_gene_ids(name, hypothesis_id):
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -316,9 +323,14 @@ def get_gene_ids(prolog_query, gene_names, hypothesis_id):
             state=TaskState.STARTED,
             next_task="Querying gene data"
         )
-
         print("Fetching gene IDs...")
-        result = prolog_query.get_gene_ids(gene_names)
+        if name == 1:
+            result = ['ensg00000140718']
+        elif name == 2:
+            result = ['ensg00000143799', 'ensg00000176485', 'ensg00000132170']
+
+        
+        # result = prolog_query.get_gene_ids(gene_names)
 
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -347,7 +359,9 @@ def execute_gene_query(prolog_query, query, hypothesis_id):
         )
 
         print("Executing Prolog query to retrieve gene names...")
-        result = prolog_query.execute_query(query)
+        # result = prolog_query.execute_query(query)
+        # mock
+        result = ['irx3', 'irx3', 'fto', 'foxa2', 'foxa2', 'irx3', 'foxa2']
 
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -375,7 +389,9 @@ def execute_variant_query(prolog_query, query, hypothesis_id):
             next_task="Querying phenotype data"
         )
         print("Executing Prolog query to retrieve variant ids...")
-        result = prolog_query.execute_query(query)
+        # result = prolog_query.execute_query(query)
+        # mock
+        result = ["chr16:53767042-53767042-'T'>'C'", "chr16:53767042-53767042-'T'>'C'", "chr16:53767042-53767042-'T'>'C'", "chr16:53767042-53767042-'T'>'C'"]
 
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -403,7 +419,9 @@ def execute_phenotype_query(prolog_query, phenotype, hypothesis_id):
             next_task="Generating graph summary"
         )
         print("Executing Prolog query to retrieve phenotype id...")
-        result = prolog_query.execute_query(f"term_name(efo(X), {phenotype})")
+        # result = prolog_query.execute_query(f"term_name(efo(X), {phenotype})")
+        # mock
+        result = 'go_1902418'
 
         emit_task_update(
             hypothesis_id=hypothesis_id,
