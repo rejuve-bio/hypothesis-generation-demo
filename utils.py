@@ -12,6 +12,11 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
     """
     task_history = status_tracker.get_history(hypothesis_id)
 
+    # Filter to only include 'started' state entries and keep the latest 5
+    filtered_history = [entry for entry in task_history if entry["state"] == "completed"]
+    # latest_5_started_tasks = sorted(filtered_history, key=lambda x: x["timestamp"], reverse=True)[:5]
+    latest_5_started_tasks = filtered_history[-5:]
+
     if progress == 0:
         progress = status_tracker.calculate_progress(task_history)
 
@@ -25,12 +30,12 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         "task": task_name,
         "state": state.value,
         "progress": progress,
-        "task_history": task_history
+        "task_history": latest_5_started_tasks
     }
 
     # Add optional fields if they exist
-    if details:
-        update["details"] = details
+    # if details:
+    #     update["details"] = details
     if next_task:
         update["next_task"] = next_task
     if error:
@@ -39,9 +44,9 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
     
     # Handle completion states
     if state == TaskState.COMPLETED:
-        if task_name == "Creating enrich data" or task_name == "Enrichment process":
+        if task_name == "Creating enrich data": #or task_name == "Enrichment process":
             update["status"] = "Enrichment_completed"
-            update["progress"] = 50  # enrichment completion is 50%
+            update["progress"] = 80  # enrichment completion is 50%
         elif task_name == "Generating hypothesis":
             update["status"] = "Hypothesis_completed"
             update["progress"] = 100  # hypothesis completion is 100%

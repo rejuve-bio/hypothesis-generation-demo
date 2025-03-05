@@ -26,7 +26,7 @@ def check_enrich(db, current_user_id, phenotype, variant, hypothesis_id):
                 hypothesis_id=hypothesis_id,
                 task_name="Verify existence of enrichment data",
                 state=TaskState.COMPLETED,
-                progress=50,
+                progress=80,
                 details={"found": True, "enrich": enrich}
             )
             return enrich
