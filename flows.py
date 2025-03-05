@@ -131,14 +131,6 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
 async def run_enrichment_task(enrichr, llm, prolog_query, db, current_user_id, phenotype, variant, hypothesis_id):
     """Async task to run the enrichment flow"""
     try:
-        # Emit initial task update
-        # emit_task_update(
-        #     hypothesis_id=hypothesis_id,
-        #     task_name="Enrichment process",
-        #     state=TaskState.IN_PROGRESS,
-        #     progress=0,
-        #     next_task="Verify existence of enrichment data"
-        # )
 
         # Run the enrichment flow
         flow_result = await enrichment_flow(
@@ -157,14 +149,6 @@ async def run_enrichment_task(enrichr, llm, prolog_query, db, current_user_id, p
             "enrich_id": flow_result[0].get('id')
         })
 
-        # Final task update
-        # emit_task_update(
-        #     hypothesis_id=hypothesis_id,
-        #     task_name="Enrichment process",
-        #     state=TaskState.COMPLETED,
-        #     progress=50,
-        #     details={"enrich_id": flow_result[0].get('id')}
-        # )
 
         logger.info(f"Enrichment flow completed: {flow_result}")
         print(f"Enrichment flow completed: {flow_result}")

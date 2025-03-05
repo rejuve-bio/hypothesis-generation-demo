@@ -33,9 +33,6 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         "task_history": latest_5_started_tasks
     }
 
-    # Add optional fields if they exist
-    # if details:
-    #     update["details"] = details
     if next_task:
         update["next_task"] = next_task
     if error:
