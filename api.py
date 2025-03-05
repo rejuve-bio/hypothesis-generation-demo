@@ -184,14 +184,16 @@ class HypothesisAPI(Resource):
                 'id': hypothesis['id'],
                 'phenotype': hypothesis['phenotype'],
                 'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
-                'causal_gene': hypothesis.get('causal_gene'),
-                'biological_context': hypothesis.get('biological_context'),
                 'created_at': hypothesis.get('created_at'),
                 'status': hypothesis.get('status'),
                 'task_history': last_pending_task
             }
             if 'enrich_id' in hypothesis and hypothesis.get('enrich_id') is not None:
                  formatted_hypothesis['enrich_id'] = hypothesis.get('enrich_id')
+            if 'biological_context' in hypothesis and hypothesis.get('biological_context') is not None:
+                formatted_hypothesis['biological_context'] = hypothesis.get('biological_context')
+            if 'causal_gene' in hypothesis and hypothesis.get('causal_gene') is not None:
+                formatted_hypothesis['causal_gene'] = hypothesis.get('causal_gene')
             formatted_hypotheses.append(formatted_hypothesis)
             
         return formatted_hypotheses, 200
