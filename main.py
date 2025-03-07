@@ -57,7 +57,7 @@ def setup_api(args):
 
     # Initialize JWTManager
     jwt = JWTManager(app)
-    CORS(app, resources={r"/*": {"origins": ["*", "http://localhost:5173"]}}, supports_credentials=True, allow_headers=["Content-Type", "Authorization"]) 
+    CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True, allow_headers=["Content-Type", "Authorization"])
     api = Api(app)
 
     # Initialize SocketIO with the app
@@ -71,11 +71,6 @@ def setup_api(args):
     db = Database(mongodb_uri, db_name)
     status_tracker = StatusTracker()
     status_tracker.initialize(db)
-
-    # Register socket namespace
-    # socketio.on_namespace(SocketNamespace('/', db))
-    # socket_namespace = SocketNamespace('/', db)
-    # socketio.on_namespace(socket_namespace)
 
     enrichr = Enrich(args.ensembl_hgnc_map, args.hgnc_ensembl_map, args.go_map)
     try:
