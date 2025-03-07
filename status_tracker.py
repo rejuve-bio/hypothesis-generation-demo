@@ -1,10 +1,8 @@
-# status_tracker.py
 from datetime import datetime, timezone
 from enum import Enum
 
 class TaskState(Enum):
     STARTED = "started"
-    IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
     RETRYING = "retrying"
@@ -88,7 +86,6 @@ class StatusTracker:
             return []
         
         # Create a dictionary with timestamp as key to remove duplicates
-        # If there are duplicates, keep the latest one based on the order in the list
         deduplicated = {}
         for update in combined_history:
             key = (update['task'], update['timestamp'])
@@ -102,24 +99,7 @@ class StatusTracker:
     def get_latest_state(self, hypothesis_id):
         history = self.task_history.get(hypothesis_id, [])
         return history[-1] if history else None
-    
-    def is_complete(self, hypothesis_id):
-        """Check if the hypothesis generation is complete"""
-        latest_state = self.get_latest_state(hypothesis_id)
-        if not latest_state:
-            return False
-            
-        # Check if it's the final task and it's completed
-        return (latest_state.get('task') == 'Generating hypothesis' and 
-                latest_state.get('state') == TaskState.COMPLETED.value)
-    
-    def get_complete_result(self, hypothesis_id):
-        """Get the complete result if available"""
-        if self.is_complete(hypothesis_id):
-            latest_state = self.get_latest_state(hypothesis_id)
-            return latest_state.get('details', {}).get('result')
-        return None
-    
+     
     def calculate_progress(self, task_history):
         """
         Calculate the progress of a task based on its history.
@@ -135,7 +115,7 @@ class StatusTracker:
         
         # Define task weights and their process group
         enrichment_tasks = {
-            "Verify existence of enrichment data": 10,
+            "Verifying existence of enrichment data": 10,
             "Getting candidate genes": 10,
             "Predicting causal gene": 10,
             "Getting relevant gene proof": 10,
@@ -143,21 +123,15 @@ class StatusTracker:
         }
 
         hypothesis_tasks = {
-            "Veryfing existence of hypothesis data": 5,  # Added weight
-            "Getting enrichement data": 5,
-            "Getting gene data": 5,
-            "Querying gene data": 7,
-            "Querying variant data": 7,
-            "Querying phenotype data": 7,
-            "Generating graph summary": 7,
-            "Generating hypothesis": 7
+            "Verifying existence of hypothesis data": 2,  
+            "Getting enrichement data": 2,
+            "Getting gene data": 2,
+            "Querying gene data": 3,
+            "Querying variant data": 3,
+            "Querying phenotype data": 3,
+            "Generating graph summary": 3,
+            "Generating hypothesis": 2
         }
-
-        # Filter out retry tasks
-        # filtered_history = [
-        #     task for task in task_history 
-        #     if not task['task'].startswith('Retrying') and task['state'] == TaskState.STARTED.value
-        # ]
 
         # Filter only completed tasks
         filtered_history = [
@@ -176,12 +150,12 @@ class StatusTracker:
                 hypothesis_progress += hypothesis_tasks[task_name]
 
         # Calculate total progress
-        total_enrichment_weight = sum(enrichment_tasks.values())  # 50
-        total_hypothesis_weight = sum(hypothesis_tasks.values())  # 50
+        total_enrichment_weight = sum(enrichment_tasks.values())  # 80
+        total_hypothesis_weight = sum(hypothesis_tasks.values())  # 20
 
         # Normalize to percentages
-        enrichment_percentage = (enrichment_progress / total_enrichment_weight) * 50
-        hypothesis_percentage = (hypothesis_progress / total_hypothesis_weight) * 50
+        enrichment_percentage = (enrichment_progress / total_enrichment_weight) * 80
+        hypothesis_percentage = (hypothesis_progress / total_hypothesis_weight) * 20
 
         return round(min(enrichment_percentage + hypothesis_percentage, 100), 2)
 
