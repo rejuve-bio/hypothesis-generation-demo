@@ -138,12 +138,6 @@ class Database:
             return {'message': 'Hypothesis deleted'}, 200
         return {'message': 'Hypothesis not found or not authorized'}, 404
     
-    def delelte_all_hypothesis(self):
-        result = self.hypothesis_collection.delete_many({})
-        if result.deleted_count > 0:
-            return {'message': 'All hypotheses deleted'}, 200
-        return {'message': 'No hypotheses found'}, 404
-    
     
     def delete_enrich(self, user_id, enrich_id):
         result = self.enrich_collection.delete_one({'id': enrich_id, 'user_id': user_id})
@@ -151,18 +145,6 @@ class Database:
             return {'message': 'Enrich deleted'}, 200
         return {'message': 'Enrich not found or not authorized'}, 404
     
-    # def add_task_update(self, hypothesis_id, task_name, state, details=None, error=None):
-    #     task_update = {
-    #         "hypothesis_id": hypothesis_id,
-    #         "task_name": task_name,
-    #         "state": state.value,
-    #         "timestamp": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
-    #         "details": details if details else {},
-    #         "error": error if error else None,
-    #         "progress": progress if progress is not None else 0
-    #     }
-      
-    #     self.task_updates_collection.insert_one(task_update)
 
     def get_task_history(self, hypothesis_id):
         task_history = list(self.task_updates_collection.find({"hypothesis_id": hypothesis_id}))
@@ -178,16 +160,6 @@ class Database:
         return None
 
     def update_hypothesis(self, hypothesis_id, data):
-        """
-        Updates an existing hypothesis document with new data.
-        
-        Args:
-            hypothesis_id (str): The ID of the hypothesis to update
-            data (dict): The new data to update the hypothesis with
-        
-        Returns:
-            tuple: (dict with message, status code)
-        """
         # Remove _id if present in data to avoid modification errors
         if '_id' in data:
             del data['_id']
