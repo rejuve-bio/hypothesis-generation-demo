@@ -78,18 +78,6 @@ class EnrichAPI(Resource):
 
         self.db.create_hypothesis(current_user_id, hypothesis_data)
 
-        # # Run in a separate thread
-        # def run_async_flow():
-        #     asyncio.run(async_enrichment_process(
-        #         enrichr=self.enrichr, 
-        #         llm=self.llm, 
-        #         prolog_query=self.prolog_query, 
-        #         db=self.db, 
-        #         current_user_id=current_user_id, 
-        #         phenotype=phenotype, 
-        #         variant=variant, 
-        #         hypothesis_id=hypothesis_id
-        #     ))
 
         # Start the thread
         Thread(target=run_async_flow).start()
@@ -293,7 +281,6 @@ def init_socket_handlers(db_instance):
                 'hypothesis_id': hypothesis_id,
                 'timestamp': datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
             }
-                   
             # Join a room specific to this hypothesis
             room = f"hypothesis_{hypothesis_id}"    
             join_room(room)
