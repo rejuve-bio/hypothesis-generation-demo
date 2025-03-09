@@ -143,14 +143,14 @@ class StatusTracker:
         }
 
         hypothesis_tasks = {
-            "Veryfing existence of hypothesis data": 5,  # Added weight
-            "Getting enrichement data": 5,
-            "Getting gene data": 5,
-            "Querying gene data": 7,
-            "Querying variant data": 7,
-            "Querying phenotype data": 7,
-            "Generating graph summary": 7,
-            "Generating hypothesis": 7
+            "Veryfing existence of hypothesis data": 2,  # Added weight
+            "Getting enrichement data": 2,
+            "Getting gene data": 2,
+            "Querying gene data": 3,
+            "Querying variant data": 3,
+            "Querying phenotype data": 3,
+            "Generating graph summary": 3,
+            "Generating hypothesis": 2
         }
 
         # Filter out retry tasks
@@ -180,8 +180,8 @@ class StatusTracker:
         total_hypothesis_weight = sum(hypothesis_tasks.values())  # 50
 
         # Normalize to percentages
-        enrichment_percentage = (enrichment_progress / total_enrichment_weight) * 50
-        hypothesis_percentage = (hypothesis_progress / total_hypothesis_weight) * 50
+        enrichment_percentage = (enrichment_progress / total_enrichment_weight) * 80
+        hypothesis_percentage = (hypothesis_progress / total_hypothesis_weight) * 20
 
         return round(min(enrichment_percentage + hypothesis_percentage, 100), 2)
 

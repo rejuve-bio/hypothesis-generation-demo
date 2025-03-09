@@ -222,6 +222,13 @@ def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal
         }
         db.create_enrich(current_user_id, enrich_data)
 
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Creating enrich data",
+            state=TaskState.COMPLETED,
+            details={"enrichment_id": enrich_data["id"]}
+        )
+        
         hypothesis_history = status_tracker.get_history(hypothesis_id)
         print("Updating hypothesis in the database...")
         hypothesis_data = {
@@ -229,12 +236,6 @@ def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal
             }
         db.update_hypothesis(hypothesis_id, hypothesis_data)
 
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Creating enrich data",
-            state=TaskState.COMPLETED,
-            details={"enrichment_id": enrich_data["id"]}
-        )
         return enrich_data["id"]
     except Exception as e:
         emit_task_update(
