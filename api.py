@@ -227,54 +227,30 @@ class HypothesisAPI(Resource):
         #     return self.db.delelte_all_hypothesis()
         
     
-class HypothesisResultAPI(Resource):
+class BulkHypothesisDeleteAPI(Resource):
     def __init__(self, db):
         self.db = db
-
-    @token_required
-    def get(self, hypothesis_id, current_user_id):
-
-        if not hypothesis_id:
-            return {"message": "Hypothesis ID is required"}, 400
         
-        hypothesis = self.db.get_hypotheses(current_user_id, hypothesis_id)
-        if not hypothesis:
-            return {"message": "Hypothesis not found or access denied."}, 404
+    @token_required
+    def post(self, current_user_id):
+        data = request.get_json()
+        
+        if not data or 'hypothesis_ids' not in data:
+            return {"message": "hypothesis_ids is required in request body"}, 400
+            
+        hypothesis_ids = data.get('hypothesis_ids')
+        
+        # Validate the list of IDs
+        if not isinstance(hypothesis_ids, list):
+            return {"message": "hypothesis_ids must be a list"}, 400
+            
+        if not hypothesis_ids:
+            return {"message": "hypothesis_ids list cannot be empty"}, 400
+            
+        # Call the bulk delete method
+        result, status_code = self.db.bulk_delete_hypotheses(current_user_id, hypothesis_ids)
 
-        # Check if enrichment is complete
-        required_fields = ['enrich_id', 'go_id', 'summary', 'graph']
-        is_complete = all(field in hypothesis for field in required_fields)
-        # Get task history
-        task_history = status_tracker.get_history(hypothesis_id)
-        # task_history = hypothesis.get('task_history', [])
-
-
-        if is_complete:
-            return {
-                'id': hypothesis_id,
-                'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
-                'phenotype': hypothesis['phenotype'],
-                "status": "completed",
-                "result": hypothesis,
-                "task_history": task_history
-            }, 200
-
-        latest_state = status_tracker.get_latest_state(hypothesis_id)
-
-        status_data = {
-            'id': hypothesis_id,
-            'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
-            'phenotype': hypothesis['phenotype'],
-            'status': 'pending',
-            'task_history': task_history,
-        }
-
-        # Check for failed state
-        if latest_state and latest_state.get('state') == TaskState.FAILED.value:
-            status_data['status'] = 'failed'
-            status_data['error'] = latest_state.get('error')
-
-        return status_data, 200
+        return result, status_code
 
 class ChatAPI(Resource):
     def __init__(self, llm):

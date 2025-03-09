@@ -16,7 +16,7 @@ from api import (
     EnrichAPI, 
     HypothesisAPI, 
     ChatAPI, 
-    HypothesisResultAPI,
+    BulkHypothesisDeleteAPI,
     init_socket_handlers
 )
 from dotenv import load_dotenv
@@ -88,7 +88,7 @@ def setup_api(args):
     api.add_resource(EnrichAPI, "/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query, "db": db})
     api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
     api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm})
-    api.add_resource(HypothesisResultAPI, "/hypothesis/<string:hypothesis_id>/results", resource_class_kwargs={"db": db})
+    api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete", resource_class_kwargs={"db": db})
 
     # Initialize socket handlers AFTER socketio.init_app
     socket_namespace = init_socket_handlers(db)
