@@ -117,9 +117,9 @@ class StatusTracker:
         enrichment_tasks = {
             "Verifying existence of enrichment data": 10,
             "Getting candidate genes": 10,
-            "Predicting causal gene": 10,
-            "Getting relevant gene proof": 10,
-            "Creating enrich data": 10
+            "Predicting causal gene": 20,
+            "Getting relevant gene proof": 20,
+            "Creating enrich data": 20
         }
 
         hypothesis_tasks = {
