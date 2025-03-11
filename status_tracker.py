@@ -49,7 +49,7 @@ class StatusTracker:
 
         # Persist to DB on completion or failure
         if state in [TaskState.COMPLETED, TaskState.FAILED]:
-            if task_name in ["Enrichment process", "Generating hypothesis"]:
+            if task_name in ["Creating enrich data", "Generating hypothesis"] or task_name.startswith("Verifying existence") and progress == 80:
                 self._persist_and_clear(hypothesis_id)
     
     def _persist_and_clear(self, hypothesis_id):
@@ -135,7 +135,7 @@ class StatusTracker:
         
         # Define task weights and their process group
         enrichment_tasks = {
-            "Verify existence of enrichment data": 10,
+            "Verifying existence of enrichment data": 10,
             "Getting candidate genes": 10,
             "Predicting causal gene": 20,
             "Getting relevant gene proof": 20,
@@ -143,7 +143,7 @@ class StatusTracker:
         }
 
         hypothesis_tasks = {
-            "Veryfing existence of hypothesis data": 2,  # Added weight
+            "Verifying existence of hypothesis data": 2,  # Added weight
             "Getting enrichement data": 2,
             "Getting gene data": 2,
             "Querying gene data": 3,

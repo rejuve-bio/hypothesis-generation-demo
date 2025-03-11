@@ -39,12 +39,12 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         update["error"] = error
         update["status"] = "failed"
     
-    # Handle completion states
+    # Handle completion status
     if state == TaskState.COMPLETED:
-        if task_name == "Creating enrich data": #or task_name == "Enrichment process":
+        if task_name == "Creating enrich data" or (task_name =="Verifying existence of enrichment data" and progress == 80):
             update["status"] = "Enrichment_completed"
-            update["progress"] = 80  # enrichment completion is 50%
-        elif task_name == "Generating hypothesis":
+            update["progress"] = 80  # enrichment completion is 80%
+        elif task_name == "Generating hypothesis" or (task_name == "Verifying existence of hypothesis data" and progress == 100):
             update["status"] = "Hypothesis_completed"
             update["progress"] = 100  # hypothesis completion is 100%
     elif state == TaskState.FAILED:

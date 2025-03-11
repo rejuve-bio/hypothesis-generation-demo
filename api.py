@@ -223,8 +223,6 @@ class HypothesisAPI(Resource):
         if hypothesis_id:
             return self.db.delete_hypothesis(current_user_id, hypothesis_id)
         return {"message": "Hypothesis ID is required"}, 400
-        # else:
-        #     return self.db.delelte_all_hypothesis()
         
     
 class BulkHypothesisDeleteAPI(Resource):

@@ -14,7 +14,7 @@ def check_enrich(db, current_user_id, phenotype, variant, hypothesis_id):
         
         emit_task_update(
             hypothesis_id=hypothesis_id,
-            task_name="Verify existence of enrichment data",
+            task_name="Verifying existence of enrichment data",
             state=TaskState.STARTED,
             progress=0  
         )
@@ -24,7 +24,7 @@ def check_enrich(db, current_user_id, phenotype, variant, hypothesis_id):
             
             emit_task_update(
                 hypothesis_id=hypothesis_id,
-                task_name="Verify existence of enrichment data",
+                task_name="Verifying existence of enrichment data",
                 state=TaskState.COMPLETED,
                 progress=80,
                 details={"found": True, "enrich": enrich}
@@ -33,7 +33,7 @@ def check_enrich(db, current_user_id, phenotype, variant, hypothesis_id):
             
         emit_task_update(
             hypothesis_id=hypothesis_id,
-            task_name="Verify existence of enrichment data",
+            task_name="Verifying existence of enrichment data",
             state=TaskState.COMPLETED,
             details={"found": False},
             next_task="Getting candidate genes"
@@ -43,7 +43,7 @@ def check_enrich(db, current_user_id, phenotype, variant, hypothesis_id):
     except Exception as e:
         emit_task_update(
             hypothesis_id=hypothesis_id,
-            task_name="Verify existence of enrichment data",
+            task_name="Verifying existence of enrichment data",
             state=TaskState.FAILED,
             error=str(e)
         )
@@ -252,7 +252,7 @@ def check_hypothesis(db, current_user_id, enrich_id, go_id, hypothesis_id):
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
-            task_name="Veryfing existence of hypothesis data",
+            task_name="Verifying existence of hypothesis data",
             state=TaskState.STARTED,
             next_task="Getting enrichement data"
         )
@@ -262,15 +262,16 @@ def check_hypothesis(db, current_user_id, enrich_id, go_id, hypothesis_id):
             hypothesis = db.get_hypothesis_by_enrich_and_go(enrich_id, go_id, current_user_id)
             emit_task_update(
                 hypothesis_id=hypothesis_id,
-                task_name="Veryfing existence of hypothesis data",
+                task_name="Verifying existence of hypothesis data",
                 state=TaskState.COMPLETED,
+                progress=100,
                 details={"found": True, "hypothesis": hypothesis}
             )
             return hypothesis
         
         emit_task_update(
             hypothesis_id=hypothesis_id,
-            task_name="Veryfing existance of hypothesis data",
+            task_name="Verifying existence of hypothesis data",
             state=TaskState.COMPLETED,
             details={"found": False}
         )
@@ -278,7 +279,7 @@ def check_hypothesis(db, current_user_id, enrich_id, go_id, hypothesis_id):
     except Exception as e:
         emit_task_update(
             hypothesis_id=hypothesis_id,
-            task_name="Veryfing existance of hypothesis data",
+            task_name="Verifying existance of hypothesis data",
             state=TaskState.FAILED,
             error=str(e)          
         )
@@ -503,6 +504,13 @@ def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, 
                 "result": hypothesis_data  # Include the complete result
             }
         )
+        hypothesis_history = status_tracker.get_history(hypothesis_id)
+        print("Updating hypothesis in the database...")
+        hypothesis_data = {
+                "task_history": hypothesis_history,
+            }
+        db.update_hypothesis(hypothesis_id, hypothesis_data)
+        
         return hypothesis_id
     except Exception as e:
         emit_task_update(
