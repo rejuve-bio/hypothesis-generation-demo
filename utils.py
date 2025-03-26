@@ -1,9 +1,6 @@
 from datetime import datetime, timezone
-
-import eventlet
 from socketio_instance import socketio
 from status_tracker import status_tracker, TaskState
-from prefect.context import get_run_context
 
 
 def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, next_task=None, error=None):

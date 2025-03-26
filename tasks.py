@@ -2,7 +2,6 @@ from prefect import task
 from datetime import datetime, timezone
 from uuid import uuid4
 from socketio_instance import socketio
-from enum import Enum
 from status_tracker import status_tracker, TaskState
 from utils import emit_task_update
 

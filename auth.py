@@ -1,7 +1,6 @@
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from functools import wraps
 from flask import jsonify
-from flask import Flask, request, jsonify
+from flask import request, jsonify
 from flask_socketio import disconnect
 import jwt
 from functools import wraps

@@ -1,10 +1,6 @@
-# import eventlet
-# eventlet.monkey_patch(select=True, socket=True)
-import asyncio
 import argparse
-from flask import Flask, json
-from flask_restful import Resource, Api
-from flask_socketio import SocketIO
+from flask import Flask
+from flask_restful import Api
 from loguru import logger
 
 from enrich import Enrich
@@ -83,7 +79,7 @@ def setup_api(args):
     api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
     api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm})
 
-    # Initialize socket handlers AFTER socketio.init_app
+    # Initialize socket handlers 
     socket_namespace = init_socket_handlers(db)
     logger.info(f"Socket namespace initialized: {socket_namespace}")
     print(f"Socket namespace initialized: {socket_namespace}")
