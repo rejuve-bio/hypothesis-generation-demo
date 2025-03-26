@@ -1,3 +1,4 @@
+import os
 import traceback
 from prefect import task
 from datetime import datetime, timedelta
@@ -200,7 +201,7 @@ def get_node_annotations(nodes: List[Dict], token: str):
     """Query the annotation service to get additional properties for nodes"""
 
     # Configuration for annotation service URL and headers
-    annotation_url = "http://100.67.47.42:5004/query"
+    annotation_url = os.getenv("ANNOTATION_URL")
     params = {"source": "hypothesis"}
     headers = {"Authorization": f"Bearer {token}"}
     
