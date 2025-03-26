@@ -51,14 +51,6 @@ export_proof(Out, t(or, C, SubProofs)) :- !,
     ; (GProofs = [P], 
       export_proof(Out, P))).
 
-% export_proof(Out, t(or, C, SubProofs)) :- !,
-%   ((length(SubProofs, L), L > 1)
-%   -> (dot_node(Out, C, [label(or)]), 
-%      maplist(export_subproof(Out, C), SubProofs))
-%   ; (
-%     SubProofs = [P],
-%     export_proof(Out, P)
-%   )).
 
 export_proof(Out, Proof) :-
   Proof = t(Rule,Concl,SubProofs),
@@ -143,16 +135,6 @@ hideme([Goal|Goals]) :- !,
   call(Goal),
   hideme(Goals).
 
-% hideme((A, B)) :- !, 
-%     A, hideme(B).
-
-% hideme((A;B)) :- !,
-%     A ; hideme(B).
-
-% hideme(A) :- !,
-%     A  \= (_,_),
-%     A  \= (_;_),
-%     call(A).
 
 execute_hidden_goal((A;B)) :- !,
     (execute_hidden_goal(A) ; execute_hidden_goal(B)).
@@ -226,14 +208,6 @@ extract_terms(t(and, _, SubProof), Terms) :- !,
     maplist(extract_terms, SubProof, SubTerms),
     flatten(SubTerms, Terms).
 
-% extract_terms(t(or_left, _, SubProof), Terms) :- !,
-%     maplist(extract_terms, SubProof, SubTerms),
-%     flatten(SubTerms, Terms).
-
-% extract_terms(t(or_right, _, SubProof), Terms) :- !,
-%     maplist(extract_terms, SubProof, SubTerms),
-%     flatten(SubTerms, Terms).
-
 extract_terms(t(or, _, SubProof), Terms) :- !,
     maplist(extract_terms, SubProof, SubTerms),
     flatten(SubTerms, Terms).
@@ -275,19 +249,6 @@ flatten(L, [L]).
 
 % Predicate to extract nodes and edges
 extract_nodes_edges([], [], []).
-% extract_nodes_edges([Term|Terms], Nodes, Edges) :-
-%     % Term =.. [Relation, Subject, Object],
-%     functor(Term, Relation, Arity), 
-%     Arity >= 2, 
-%     arg(1, Term, Subject),
-%     arg(2, Term, Object),
-%     extract_nodes_edges(Terms, NodesTail, EdgesTail),
-%     flatten([Subject, Object, NodesTail], Nodes_),
-%     % sort([Subject, Object | NodesTail], Nodes), % Remove duplicates
-%     sort(Nodes_, Nodes),
-%     Edges = [[label(Relation), source(Subject), target(Object)] | EdgesTail].
-
-
 extract_nodes_edges([Term|TermsTail], [Subject, Object|NodesTail], [Edge|Edges]) :-
     % Term =.. [Relation, Subject, Object],
     functor(Term, Relation, Arity), 
@@ -314,10 +275,6 @@ edge_to_json([[label(Relation), source(Subject), target(Object)]|Edges],
       arg(1, Object, Target),
       edge_to_json(Edges, EdgesJSON).
 
-% edge_to_json([label(Relation), source(Subject), target(Object)], json([source=Source, target=Target, 
-%                                 label=Relation])) :-
-%   Subject =.. [_, Source],
-%   Object =.. [_, Target].
 
 % Predicate to create JSON graph
 create_json_graph([_|Terms], JSONGraph) :-
@@ -329,13 +286,6 @@ create_json_graph([_|Terms], JSONGraph) :-
 prooftree(A, PT):-
   mi(A, PT),
   numbervars(PT).
-
-% json_proof_tree(A, PT) :-
-%   prooftree(A, Proof),
-%   tmp_file_stream(text, File, Out),
-%   gv_export(File, {Proof}/[Out0]>>export_proof(Out0, Proof), [format(json), directed(true)]),
-%   close(Out),
-%   read_file_to_string(File, PT, []).
 
 json_proof_tree(A, Graph) :-
   prooftree(A, Proof),

@@ -4,7 +4,11 @@ services:
   mongo:
     image: mongo:latest
     ports:
+<<<<<<< HEAD
       - "27018:27017"
+=======
+      - "27019:27017"
+>>>>>>> main
     volumes:
       - mongo-data:/data/db
     networks:
