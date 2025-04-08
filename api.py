@@ -16,6 +16,7 @@ from prefect import flow
 from prefect.task_runners import ConcurrentTaskRunner
 from utils import emit_task_update
 from loguru import logger
+from summary import process_summary
 
 class EnrichAPI(Resource):
     def __init__(self, enrichr, llm, prolog_query, db):
@@ -270,6 +271,45 @@ class ChatAPI(Resource):
         response = self.llm.chat(query, graph)
         response = {"response": response}
         return response
+    
+class SummaryAPI(Resource):
+    def __init__(self, db):
+        self.db = db
+
+
+    @token_required
+    def get(self, current_user_id):
+        summary_id = request.args.get("id")
+
+        if not summary_id:
+            return {"message": "summary_id is required"}, 400
+
+        summary = self.db.get_summary(current_user_id, summary_id)
+
+        if not summary:
+            return {"message": "Summary not found or access denied."}, 404
+
+        return summary, 200
+
+
+    # @token_required
+    # def post(self, current_user_id):
+    #     variant = request.args.get("variant")
+    #     hypothesis_id = request.args.get("hypothesis_id")
+
+    #     if not variant:
+    #         return {"message": "Variant parameter is required."}, 400
+    #     if not hypothesis_id:
+    #         return {"message": "Hypothesis ID parameter is required."}, 400
+
+    #     hypothesis = self.db.get_hypotheses(current_user_id, hypothesis_id)
+    #     if not hypothesis:
+    #         return {"message": "Invalid hypothesis ID."}, 404
+
+    #     # already installed annotators
+    #     annotators = request.form.get("annotators", ["clinvar", "cosmic", "biogrid", "clingen"])
+
+    #     return process_summary(variant, annotators, self.db, current_user_id, hypothesis_id)
 
 def init_socket_handlers(db_instance):
     logger.info("Initializing socket handlers...")

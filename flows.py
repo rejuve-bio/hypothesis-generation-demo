@@ -2,6 +2,7 @@ import asyncio
 import time
 from loguru import logger
 from prefect import flow, task
+from prefect.deployments import run_deployment
 from status_tracker import TaskState
 from tasks import check_enrich, get_candidate_genes, predict_causal_gene, get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof, create_enrich_data 
 from tasks import check_hypothesis, get_enrich, get_gene_ids, execute_gene_query, execute_variant_query,summarize_graph, create_hypothesis, execute_phenotype_query
@@ -10,6 +11,19 @@ from datetime import datetime, timezone
 from prefect.task_runners import ConcurrentTaskRunner
 
 from utils import emit_task_update
+
+def invoke(db, variant, current_user_id, hypothesis_id):
+# Trigger the deployed annotation flow asynchronously
+    run_deployment(
+        name="annotate-variant-flow/annotate-variant-deployment",
+        parameters={
+            "db": db,
+            "variant": variant,
+            "current_user_id": current_user_id,
+            "hypothesis_id": hypothesis_id
+        },
+        timeout=0  # Don't wait for completion
+    )
 
 ### Enrichment Flow
 @flow(log_prints=True, name="enrichment_flow")
@@ -63,6 +77,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
     go_name = go_term[0]["name"]
     causal_gene = enrich_data['causal_gene']
     variant_id = enrich_data['variant']
+    variant = enrich_data['variant']
     phenotype = enrich_data['phenotype']
     coexpressed_gene_names = go_term[0]["genes"]
     causal_graph = enrich_data['causal_graph']
@@ -124,6 +139,8 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
 
     
     hypothesis_id = create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id, hypothesis_id)
+
+    invoke(db, variant, current_user_id, hypothesis_id)
     
     return {"summary": summary, "graph": causal_graph}, 201
 
