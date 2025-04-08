@@ -5,6 +5,7 @@ from socketio_instance import socketio
 from enum import Enum
 from status_tracker import status_tracker, TaskState
 from utils import emit_task_update
+from summary import process_summary
 
 ### Enrich Tasks
 @task(retries=2, cache_policy=None)
@@ -520,3 +521,8 @@ def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, 
             error=str(e)          
         )
         raise
+
+@task(cache_policy=None, persist_result=False)
+def annotate_variant(db, variant, user_id, hypothesis_id):
+    annotators = ["clinvar", "cosmic"]
+    process_summary(variant, annotators, db, user_id, hypothesis_id, "hg38")
