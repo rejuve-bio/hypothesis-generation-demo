@@ -29,6 +29,7 @@ services:
       - "5007:5000"
     environment:
       - FLASK_ENV=development
+      - PREFECT_API_URL=http://prefect-service:4200/api
     volumes:
       - .:/app
     depends_on:
@@ -50,10 +51,14 @@ services:
     ports:
       - "4202:4200"
     volumes:
+      - .:/app
       - prefect-data:/root/.prefect 
     environment:
       - PREFECT_SERVER_PORT=4200
-    command: prefect server start
+      - PREFECT_API_URL=http://prefect-service:4200/api
+    env_file:
+      - .env
+    command: prefect server start --host 0.0.0.0
     networks:
       - app_network
 

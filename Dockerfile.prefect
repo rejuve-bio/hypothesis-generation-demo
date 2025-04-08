@@ -11,10 +11,14 @@ RUN apt-get update && apt-get install -y \
 
 # Install Prefect and other dependencies
 RUN pip install --upgrade pip \
-    && pip install -U prefect
+    && pip install -U prefect \
+    && pip install loguru flask-socketio pymongo open-cravat
+
+    RUN No | oc module install-base \
+    && oc module install clinvar cosmic --yes
 
 # Expose port 4200
 EXPOSE 4200
 
 # Define the entry point for your application
-CMD ["prefect", "server", "start"]
+CMD ["prefect", "server", "start","--host", "0.0.0.0"]
