@@ -1,4 +1,6 @@
+import os
 from threading import Thread, Timer
+import uuid
 from prefect.utilities.asyncutils import sync_compatible
 from prefect.context import get_run_context
 import asyncio
@@ -10,13 +12,15 @@ from socketio_instance import socketio
 from auth import socket_token_required, token_required
 from datetime import datetime, timezone
 from uuid import uuid4
-from flows import async_enrichment_process, enrichment_flow, hypothesis_flow
+from flows import async_enrichment_process, enrichment_flow, finemapping_analysis_flow, hypothesis_flow,  preprocessing_flow
+# finemapping_flow
 from status_tracker import status_tracker, TaskState
 from prefect import flow
 from prefect.task_runners import ConcurrentTaskRunner
-from utils import emit_task_update
+from utils import allowed_file, emit_task_update, get_user_file_path
 from loguru import logger
 from summary import process_summary
+from werkzeug.utils import secure_filename
 
 class EnrichAPI(Resource):
     def __init__(self, enrichr, llm, prolog_query, db):
@@ -271,46 +275,123 @@ class ChatAPI(Resource):
         response = self.llm.chat(query, graph)
         response = {"response": response}
         return response
+
+# class AnalysisAPI(Resource):
+#     def __init__(self, db):
+#         self.db = db
+
+#     @token_required
+#     def post(self, current_user_id):
+#         pass
+
+#     @token_required
+#     def get(self, current_user_id):
+
+#         suisie_result = finemapping_flow(current_user_id)
+
+#         return {
+#             "suisie_result": suisie_result
+#         }, 200
     
-class SummaryAPI(Resource):
+class AnalysisAPI(Resource):
+    def __init__(self, db):
+        self.db = db
+    
+    @token_required
+    def post(self, current_user_id):
+        # Parse input parameters
+        data = request.get_json()
+        population = data.get('population', 'EUR')  # Default to EUR if not provided
+        gwas_file_id = data.get('gwas_file_id')
+        
+        if not gwas_file_id:
+            return {"error": "Missing required parameter: gwas_file_id"}, 400
+            
+        try:
+            # Get the file path from the file ID
+            gwas_file_path = get_user_file_path(gwas_file_id, current_user_id)
+            # gwas_file_path = None
+            
+            # Run the first part of the flow
+            gene_types = preprocessing_flow(current_user_id, population, gwas_file_path)
+            
+            return {"gene_types": gene_types}, 200
+        except FileNotFoundError as e:
+            return {"error": str(e)}, 404
+        except Exception as e:
+            return {"error": f"Analysis failed: {str(e)}"}, 500
+    
+    @token_required
+    def get(self, current_user_id):
+        # Get the selected gene type from query parameters
+        selected_gene = request.args.get('gene_type')
+        
+        if not selected_gene:
+            return {"error": "Missing required parameter: gene_type"}, 400
+        
+        try:
+            # Run the second part of the flow with the selected gene
+            susie_result = finemapping_analysis_flow(current_user_id, selected_gene)
+            
+            return {"susie_result": susie_result}, 200
+        except Exception as e:
+            return {"error": f"Analysis failed: {str(e)}"}, 500
+
+class FileUploadAPI(Resource):
     def __init__(self, db):
         self.db = db
 
-
     @token_required
-    def get(self, current_user_id):
-        summary_id = request.args.get("id")
-
-        if not summary_id:
-            return {"message": "summary_id is required"}, 400
-
-        summary = self.db.get_summary(current_user_id, summary_id)
-
-        if not summary:
-            return {"message": "Summary not found or access denied."}, 404
-
-        return summary, 200
-
-
-    # @token_required
-    # def post(self, current_user_id):
-    #     variant = request.args.get("variant")
-    #     hypothesis_id = request.args.get("hypothesis_id")
-
-    #     if not variant:
-    #         return {"message": "Variant parameter is required."}, 400
-    #     if not hypothesis_id:
-    #         return {"message": "Hypothesis ID parameter is required."}, 400
-
-    #     hypothesis = self.db.get_hypotheses(current_user_id, hypothesis_id)
-    #     if not hypothesis:
-    #         return {"message": "Invalid hypothesis ID."}, 404
-
-    #     # already installed annotators
-    #     annotators = request.form.get("annotators", ["clinvar", "cosmic", "biogrid", "clingen"])
-
-    #     return process_summary(variant, annotators, self.db, current_user_id, hypothesis_id)
-
+    def post(self, current_user_id):
+        """Handle GWAS file uploads without database"""
+        if 'file' not in request.files:
+            return {"error": "No file part"}, 400
+            
+        file = request.files['file']
+        
+        if file.filename == '':
+            return {"error": "No selected file"}, 400
+            
+        if file and allowed_file(file.filename):
+            # Generate a secure filename with UUID
+            filename = secure_filename(file.filename)
+            file_id = str(uuid.uuid4())
+            
+            # Create user upload directory
+            user_upload_dir = os.path.join('data', 'uploads', current_user_id)
+            os.makedirs(user_upload_dir, exist_ok=True)
+            
+            # Save the file
+            file_path = os.path.join(user_upload_dir, f"{file_id}_{filename}")
+            file.save(file_path)
+            
+            # Store file metadata in a JSON file
+            metadata = {
+                'file_id': file_id,
+                'user_id': current_user_id,
+                'filename': filename,
+                'original_filename': file.filename,
+                'file_path': file_path,
+                'file_type': 'gwas',
+                'upload_date': str(datetime.now()),
+                'file_size': os.path.getsize(file_path)
+            }
+            
+            # Save metadata to a JSON file
+            metadata_dir = os.path.join('data', 'metadata', current_user_id)
+            os.makedirs(metadata_dir, exist_ok=True)
+            
+            with open(os.path.join(metadata_dir, f"{file_id}.json"), 'w') as f:
+                json.dump(metadata, f)
+            
+            return {
+                'file_id': file_id,
+                'filename': filename,
+                'message': 'File successfully uploaded'
+            }, 200
+        
+        return {"error": "File type not allowed"}, 400
+    
 def init_socket_handlers(db_instance):
     logger.info("Initializing socket handlers...")
     # @socketio.on('connect')

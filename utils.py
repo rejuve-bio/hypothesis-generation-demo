@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
+import os
 
 import eventlet
+from flask import json
 from socketio_instance import socketio
 from status_tracker import status_tracker, TaskState
 from prefect.context import get_run_context
@@ -59,3 +61,46 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         print(f"Error emitting task update: {e}")
         
     socketio.sleep(0)
+
+
+def save_analysis_state(user_id, state):
+    """Save the analysis state for the second flow"""
+    state_dir = os.path.join('data', 'states', user_id)
+    os.makedirs(state_dir, exist_ok=True)
+    
+    with open(os.path.join(state_dir, 'analysis_state.json'), 'w') as f:
+        json.dump(state, f, default=str)  # Use default=str to handle non-serializable objects
+
+def get_analysis_state(user_id):
+    """Retrieve the analysis state for the second flow"""
+    state_path = os.path.join('data', 'states', user_id, 'analysis_state.json')
+    
+    if not os.path.exists(state_path):
+        raise FileNotFoundError(f"Analysis state not found for user {user_id}")
+    
+    with open(state_path, 'r') as f:
+        return json.load(f)
+
+def allowed_file(filename):
+    """Check if the file extension is allowed"""
+    ALLOWED_EXTENSIONS = {'tsv', 'csv', 'txt', 'bgz', 'gz'}
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def get_user_file_path(file_id, user_id):
+    """Get the file path for the uploaded GWAS file without database"""
+    # Check if metadata file exists
+    metadata_path = os.path.join('data', 'metadata', user_id, f"{file_id}.json")
+    
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"File with ID {file_id} not found for user {user_id}")
+    
+    # Load metadata
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f)
+    
+    # Verify the file exists on disk
+    file_path = metadata['file_path']
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File {file_path} does not exist on disk")
+    
+    return file_path

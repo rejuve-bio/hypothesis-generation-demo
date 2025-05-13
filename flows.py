@@ -1,29 +1,21 @@
 import asyncio
+import os
 import time
+from flask import json, jsonify
 from loguru import logger
+import numpy as np
 from prefect import flow, task
 from prefect.deployments import run_deployment
 from status_tracker import TaskState
-from tasks import check_enrich, get_candidate_genes, predict_causal_gene, get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof, create_enrich_data 
+from tasks import calculate_ld_for_regions, check_enrich, check_ld_dimensions, check_ld_semidefiniteness, download_and_prepare_vcfs, expand_snp_regions, extract_gene_types, formattating_credible_sets, generate_binary_from_vcf, generate_snplist_file, get_candidate_genes, get_credible_sets, get_gene_region_files, grouping_cojo, mapping_cojo, merge_plink_binaries, predict_causal_gene, get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof, create_enrich_data, run_cojo_analysis
 from tasks import check_hypothesis, get_enrich, get_gene_ids, execute_gene_query, execute_variant_query,summarize_graph, create_hypothesis, execute_phenotype_query
+from tasks import load_gwas_data, preprocess_gwas_data, filter_significant_snps, prepare_cojo_file, extract_region_snps, run_susie_analysis
+import pandas as pd
 from uuid import uuid4
 from datetime import datetime, timezone
 from prefect.task_runners import ConcurrentTaskRunner
 
-from utils import emit_task_update
-
-def invoke(db, variant, current_user_id, hypothesis_id):
-# Trigger the deployed annotation flow asynchronously
-    run_deployment(
-        name="annotate-variant-flow/annotate-variant-deployment",
-        parameters={
-            "db": db,
-            "variant": variant,
-            "current_user_id": current_user_id,
-            "hypothesis_id": hypothesis_id
-        },
-        timeout=0  # Don't wait for completion
-    )
+from utils import emit_task_update, get_analysis_state, get_user_file_path, save_analysis_state
 
 ### Enrichment Flow
 @flow(log_prints=True, name="enrichment_flow")
@@ -140,7 +132,6 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
     
     hypothesis_id = create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id, hypothesis_id)
 
-    invoke(db, variant, current_user_id, hypothesis_id)
     
     return {"summary": summary, "graph": causal_graph}, 201
 
@@ -198,3 +189,294 @@ async def async_enrichment_process(enrichr, llm, prolog_query, db, current_user_
         enrichr, llm, prolog_query, db, 
         current_user_id, phenotype, variant, hypothesis_id
     )
+
+@flow(log_prints=True)
+def preprocessing_flow(current_user_id, population, gwas_file_path):
+    """Flow to handle fine mapping"""
+
+    POPULATION = population
+    SAMPLE_PANEL_URL = "ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/integrated_call_samples_v3.20130502.ALL.panel"
+    OUTPUT_DIR = f"./data/susie/{current_user_id}"
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Step 0: Load and preprocess GWAS data
+    if gwas_file_path:
+        file_path = gwas_file_path
+    else:
+        file_path = "./data/susie/gwas/21001_raw.gwas.imputed_v3.both_sexes.tsv.bgz"  # Default file
+    
+    print("Loading GWAS data")
+    gwas_data_df = load_gwas_data(file_path)
+    print("Preprocessing GWAS data")
+    gwas_data_df = preprocess_gwas_data(gwas_data_df)
+
+    
+    # Filter significant SNPs
+    print("Filtering significant SNPs")
+    significant_snp_df = filter_significant_snps(gwas_data_df, output_dir=OUTPUT_DIR)
+
+
+    # Step 1: Download and prepare VCF files
+    print("Downloading and preparing VCF files")
+    vcf_files = download_and_prepare_vcfs(
+        output_dir=OUTPUT_DIR,
+        population=POPULATION,
+        sample_panel_url=SAMPLE_PANEL_URL,
+    )
+
+    # Step 2: Generate snplist file
+    print("Generating snplist file")
+    gwas_snplist_file = generate_snplist_file(
+        gwas_snps=significant_snp_df,
+        output_dir=OUTPUT_DIR
+    )
+    print("GWAS snplist file: ", gwas_snplist_file)
+    
+    # Step 3: Generate binary files from VCFs
+    print("Generating binary files from VCFs")
+    binary_files = generate_binary_from_vcf(
+        vcf_files=vcf_files,
+        gwas_snplist_file=gwas_snplist_file,
+        output_dir=OUTPUT_DIR,
+        population=POPULATION
+    )
+    print("Binary files: ", binary_files)
+    
+    # Step 4: Merge binary files
+    print("Merging binary files")
+    merged_binary = merge_plink_binaries(
+        binary_files=binary_files,
+        output_dir=OUTPUT_DIR,
+        population=POPULATION
+    )
+    print("Merged binary file: ", merged_binary)
+
+
+    # Step 5: Prepare COJO file
+    print("Preparing COJO file")
+    cojo_file_path = prepare_cojo_file(
+        significant_snp_df=significant_snp_df, 
+        output_dir=OUTPUT_DIR
+    )
+    
+    print("merged binary file: ", merged_binary)
+    print("cojo file path: ", cojo_file_path)
+
+    # Step 6: Run COJO analysis
+    print("Running COJO analysis")
+    cojo_results_path = run_cojo_analysis(
+        merged_binary_path=merged_binary,
+        cojo_file_path=cojo_file_path,
+        output_dir=OUTPUT_DIR,
+        maf_threshold=0.05
+    )
+    print("COJO results path: ", cojo_results_path)
+    # cojo_results_path = "./data/susie/cojo/all_chr/all_chr_cojo.jma.cojo"
+
+    # Step 7: Expanding region of each independet snp identified by cojo
+    print("Expanding SNP regions")
+    expanded_regions = expand_snp_regions(
+        cojo_results_path=cojo_results_path,
+        significant_snp_df=significant_snp_df,
+        output_dir=OUTPUT_DIR,
+        window_size=500000
+    )
+
+
+    # Step 7.1: Map COJO results with gene type
+    print("Mapping COJO results with gene type")
+    mapped_cojo_results = mapping_cojo(cojo_results_path, output_dir=OUTPUT_DIR)
+    print("Mapped COJO results: ", mapped_cojo_results)
+
+    # # Step 7.2: Group mapped COJO results by gene type
+    print("Grouping mapped COJO results by gene type")
+    grouped_cojo_results = grouping_cojo(
+        mapped_cojo_snps=mapped_cojo_results, 
+        expanded_region_files=expanded_regions, 
+        output_dir=OUTPUT_DIR
+        )
+    print("Grouped COJO results: ", grouped_cojo_results)
+
+    # Save the state for the second flow
+    analysis_state = {
+        "merged_binary": merged_binary,
+        "grouped_cojo_results": grouped_cojo_results,
+        "population": population,
+        "output_dir": OUTPUT_DIR
+    }
+    
+    # Save the state to a JSON file
+    state_dir = os.path.join('data', 'states', current_user_id)
+    os.makedirs(state_dir, exist_ok=True)
+    
+    with open(os.path.join(state_dir, 'analysis_state.json'), 'w') as f:
+        json.dump(analysis_state, f, default=str) 
+    
+    return extract_gene_types(grouped_cojo_results)
+
+@flow(log_prints=True)
+def finemapping_analysis_flow(current_user_id, selected_gene):
+    """Second flow: Analyze the selected gene"""
+
+    # Retrieve saved state from the first flow
+    state = get_analysis_state(current_user_id)
+    merged_binary = state["merged_binary"]
+    grouped_cojo_results = state["grouped_cojo_results"]
+    OUTPUT_DIR = state["output_dir"]
+
+    # Get the specific region files for the selected gene
+    gene_region_files = get_gene_region_files(grouped_cojo_results, selected_gene)
+    print("Gene region files: ", gene_region_files)
+
+
+
+    # Step 8: Generate LD matrices for each expanded region
+    print("Generating LD matrices")
+    ld_dir = calculate_ld_for_regions(
+        region_files=gene_region_files, 
+        plink_bfile=merged_binary,
+        output_dir=OUTPUT_DIR
+    )
+    print("LD matrices directory: ", ld_dir)
+
+    region_file = gene_region_files[0]
+    print("Region file: ", region_file)
+    region_name = os.path.basename(region_file).split('_snps')[0]
+    print("Region name: ", region_name)
+    
+    ld_file = f"{ld_dir}/{region_name}_snps_ld.ld"
+    ld_r = pd.read_csv(ld_file, sep="\t", header=None)
+    R_df = ld_r.values
+    
+    # Load the expanded region file
+    expanded_region_snps = pd.read_csv(region_file, sep="\t")
+    
+    bim_file_path = f"{OUTPUT_DIR}/plink_binary/merged_{state['population'].lower()}.bim"
+    
+    # Step 9: Check dimensionality of LD matrices
+    print("Checking LD dimensions")
+    filtered_snp = check_ld_dimensions(R_df, expanded_region_snps, bim_file_path)
+    
+    # Step 10: Check if LD matrix is positive semi-definite
+    print("Checking if LD matrix is positive semi-definite") 
+    R_df = check_ld_semidefiniteness(R_df)
+    
+    # Step 11: Run SuSiE analysis
+    print("Running SuSiE analysis")
+    fit = run_susie_analysis(
+        filtered_snp, 
+        R_df,
+        n=503,  
+        L=10    
+    )
+    
+    # Step 12: Format credible sets
+    print("Formatting credible sets")
+    credible_sets = formattating_credible_sets(filtered_snp, fit, R_df)
+
+    return credible_sets.to_dict(orient="records")
+
+    # # For testing purpose using the the ld matrices for the most signigicat snp (chr16_pos53802494_snps_ld.ld)
+    # ld_r = pd.read_csv("./data/susie/ld/chr16_pos53802494_snps_ld.ld", sep="\t", header=None)
+    # R_df = ld_r.values
+
+    # # and the expanded region file (chr16_pos53802494_snps.txt)
+    # chr16_pos53802494_snps = pd.read_csv("./data/susie/expanded_regionss/chr16_pos53802494_snps.txt", sep="\t")
+    # print("Expanded region file: ", chr16_pos53802494_snps)
+
+    # bim_file_path= "./data/susie/plink_binary/merged_eur.bim"
+
+    # # Step 9: Check dimensionality of LD matrices
+    # print("Checking LD dimensions")
+    # filtered_snp = check_ld_dimensions(R_df, chr16_pos53802494_snps, bim_file_path)
+
+
+    # # Step 10: Check if LD matrix is positive semi-definite
+    # print("Checking if LD matrix is positive semi-definite") 
+    # R_df = check_ld_semidefiniteness(R_df)
+
+    # # Step 11: Run SuSiE analysis
+    # print("Running SuSiE analysis")
+    # # Run SuSiE analysis
+    # fit = run_susie_analysis(
+    #     filtered_snp, 
+    #     R_df,
+    #     n=503,
+    #     L=10
+    # )
+
+    # # Step 12: Format credible sets
+    # print("Formatting credible sets")
+    # credible_sets = formattating_credible_sets(filtered_snp, fit, R_df)
+    # print("Credible sets: ", credible_sets)
+
+    
+    # filtered_chr16_pos53828066_snps = pd.read_csv("/app/data/external_data/susie/locus_zoom/chr16_pos53828066_with_cs.csv")
+    # print("Filtered chr16 pos 53828066 snps: ", filtered_chr16_pos53828066_snps)
+    
+    # return filtered_chr16_pos53828066_snps.to_dict(orient="records")
+
+
+
+
+
+    # # mock merged data
+    # merged_data_df = pd.read_csv("/app/data/external_data/susie/processed_raw_data/chr16_merged_data.csv")
+    # binary_data= "/app/data/external_data/susie/plink_binary/merged_data"
+
+     
+
+    # cojo_results_df = pd.read_csv(cojo_results_path, delim_whitespace=True)
+    # # .jma.cojo
+    
+
+    # most_significant_snp = cojo_results_df.sort_values(by='p').head(1)
+    # print(most_significant_snp)
+
+
+    
+
+
+
+    # #most significant with expanded region
+    # # chr16_pos53828066_snps_ld_test=pd.read_csv("../data/susie/expanded_regions/chr16_pos53828066_snps.txt",sep="\t")
+    # chr16_pos53828066=pd.read_csv("/app/data/external_data/susie/susie/expanded_regions/chr16_pos53828066_snps.txt",sep="\t")
+
+    # filtered_chr16_pos53828066_snps = pd.read_csv("/app/data/external_data/susie/susie/snplist/filtered_chr16_pos53828066.csv")
+
+    # # mock cojo data
+    # cojo_data_df = pd.read_csv("/app/data/external_data/susie/susie/cojo/cojo_data.csv")
+
+    # # After running COJO analysis (external command)
+    # cojo_results_df = pd.read_csv("/app/data/external_data/susie/susie/cojo/all_chr/all_chr_cojo.jma.cojo", delim_whitespace=True)
+    
+    # # Example analysis for the most signigicant variant
+    # # variant_position = 53828066
+    # # region_snp_df = extract_region_snps(significant_snp_df, variant_position)
+    # # region_snp_df.to_csv("chr16_all_region_snps.csv") 
+    
+    # # Load LD matrices (after running PLINK commands)
+    # ld_r = pd.read_csv("/app/data/external_data/susie/susie/ALL_chr/ld/test_sig_locus_mt.ld", sep="\t", header=None)
+    # ld_r2 = pd.read_csv("/app/data/external_data/susie/susie/ALL_chr/ld/test_sig_locus_mt_r2.ld", sep="\t", header=None)
+    
+    # bfile = "/app/data/external_data/susie/susie/plink_binary/merged_data"
+    # cojo_result = "/app/data/external_data/susie/susie/ALL_chr/region_snplist/chr16_pos53828066_snps.txt"
+    # # output_dir = "../data/ld_matrices/chr16_ld"
+    # os.makedirs("../data/susie/ALL_chr/ld", exist_ok=True)
+    # output_dir = "../data/susie/ALL_chr/ld"
+
+
+    # # ld_matrices = run_plink_commands(bfile, cojo_result,output_dir)
+    # # ld_r =ld_matrices[0]
+    # # ld_r2 =ld_matrices[1]
+
+    
+
+    
+
+    
+
+    # credits_sets = get_credible_sets(fit, R_df)
+
+    
+    

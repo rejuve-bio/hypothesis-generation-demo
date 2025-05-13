@@ -23,3 +23,7 @@ Flask-JWT-Extended==4.6.0
 python-dotenv
 loguru
 requests
+gwaslab
+rpy2
+cyvcf2
+polars

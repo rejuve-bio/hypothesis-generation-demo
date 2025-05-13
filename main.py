@@ -13,12 +13,13 @@ from llm import LLM
 from db import Database
 from query_swipl import PrologQuery
 from api import (
-    EnrichAPI, 
+    AnalysisAPI,
+    EnrichAPI,
+    FileUploadAPI, 
     HypothesisAPI, 
     ChatAPI, 
     BulkHypothesisDeleteAPI,
     init_socket_handlers,
-    SummaryAPI
 )
 from dotenv import load_dotenv
 import os
@@ -89,8 +90,9 @@ def setup_api(args):
     api.add_resource(EnrichAPI, "/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query, "db": db})
     api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
     api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm, "db": db})
-    api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete", resource_class_kwargs={"db": db})
-    api.add_resource(SummaryAPI, "/summary", resource_class_kwargs={"db": db}) 
+    api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete", resource_class_kwargs={"db": db}) 
+    api.add_resource(AnalysisAPI, "/analysis", resource_class_kwargs={"db": db})
+    api.add_resource(FileUploadAPI,'/api/upload',resource_class_kwargs={'db': db})
 
     # Initialize socket handlers AFTER socketio.init_app
     socket_namespace = init_socket_handlers(db)
