@@ -6,6 +6,7 @@ from flask import Flask, json
 from flask_restful import Resource, Api
 from flask_socketio import SocketIO
 from loguru import logger
+import werkzeug
 
 from enrich import Enrich
 # from semantic_search import SemanticSearch
@@ -57,6 +58,18 @@ def setup_api(args):
     app.config['JWT_TOKEN_LOCATION'] = ['headers']
     app.config['JWT_HEADER_NAME'] = 'Authorization'
     app.config['JWT_HEADER_TYPE'] = 'Bearer'
+
+    # Add these configurations for handling large file uploads
+    app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1GB max upload size
+    app.config['UPLOAD_TIMEOUT'] = 600  # 10 minutes timeout
+    app.config['PREFERRED_URL_SCHEME'] = 'http'  # Force HTTP scheme to avoid issues
+    
+    # Optional: Increase default stream buffer size
+    app.config['STREAM_BUFFER_SIZE'] = 4 * 1024 * 1024  # 4MB stream buffer
+    
+    # Configure werkzeug for handling larger files
+    from werkzeug.formparser import FormDataParser
+    FormDataParser.max_form_memory_size = 1024 * 1024 * 1024  # 1GB
 
     # Initialize JWTManager
     jwt = JWTManager(app)

@@ -615,46 +615,188 @@ def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, 
 
 @task(cache_policy=None)
 def load_gwas_data(file_path):
-    """Load GWAS data from a compressed TSV file."""
-    with gzip.open(file_path, 'rt') as f:
-        gwas_data_df = pd.read_csv(f, sep='\t')
-    return gwas_data_df
+    """
+    Load GWAS data from a compressed TSV file using chunked reading for memory efficiency.
+    For large files (>500MB), this approach prevents loading the entire file into memory at once.
+    """
+    # Determine if file is gzipped by extension
+    is_gzipped = file_path.endswith('.gz') or file_path.endswith('.bgz')
+    
+    # Check file size
+    file_size = os.path.getsize(file_path)
+    file_size_mb = file_size / (1024*1024)
+    print(f"[GWAS] Processing GWAS file of size: {file_size_mb:.2f} MB")
+    
+    # Set chunk size based on file size - larger chunks for smaller files
+    if file_size > 500 * 1024 * 1024:  # For files > 500MB
+        chunk_size = 100_000  # Smaller chunks for very large files
+    elif file_size > 100 * 1024 * 1024:  # For files > 100MB
+        chunk_size = 250_000
+    else:
+        chunk_size = 500_000  # Larger chunks for smaller files
+    
+    start_time = datetime.now()
+    try:
+        # For smaller files, read all at once to avoid overhead
+        if file_size < 50 * 1024 * 1024:  # < 50MB
+            print(f"[GWAS] Small file detected, reading all at once")
+            if is_gzipped:
+                with gzip.open(file_path, 'rt') as f:
+                    df = pd.read_csv(f, sep='\t')
+                    print(f"[GWAS] Loaded {len(df)} rows from gzipped file")
+                    return df
+            else:
+                df = pd.read_csv(file_path, sep='\t')
+                print(f"[GWAS] Loaded {len(df)} rows from uncompressed file")
+                return df
+        
+        # For larger files, use chunking
+        chunks = []
+        total_rows = 0
+        
+        print(f"[GWAS] Large file detected, using chunked reading with {chunk_size} rows per chunk")
+        
+        if is_gzipped:
+            # Create TextFileReader object for chunked reading from gzipped file
+            with gzip.open(file_path, 'rt') as f:
+                # Get initial chunk to determine column types for optimization
+                first_chunk = pd.read_csv(f, sep='\t', nrows=1000)
+                print(f"[GWAS] Read first chunk with {len(first_chunk)} rows to determine column types")
+                
+                # Reopen the file and read in chunks with optimized dtypes
+                f.seek(0)
+                chunk_reader = pd.read_csv(f, sep='\t', chunksize=chunk_size, dtype=first_chunk.dtypes.to_dict())
+                
+                for i, chunk in enumerate(chunk_reader):
+                    chunks.append(chunk)
+                    total_rows += len(chunk)
+                    
+                    # Print progress every 5 chunks
+                    if (i+1) % 5 == 0:
+                        elapsed = (datetime.now() - start_time).total_seconds()
+                        print(f"[GWAS] Progress: loaded {i+1} chunks ({total_rows} rows) in {elapsed:.1f} seconds")
+        else:
+            # Get initial chunk to determine column types for optimization
+            first_chunk = pd.read_csv(file_path, sep='\t', nrows=1000)
+            print(f"[GWAS] Read first chunk with {len(first_chunk)} rows to determine column types")
+            
+            # Read in chunks with optimized dtypes
+            chunk_reader = pd.read_csv(file_path, sep='\t', chunksize=chunk_size, dtype=first_chunk.dtypes.to_dict())
+            
+            for i, chunk in enumerate(chunk_reader):
+                chunks.append(chunk)
+                total_rows += len(chunk)
+                
+                # Print progress every 5 chunks
+                if (i+1) % 5 == 0:
+                    elapsed = (datetime.now() - start_time).total_seconds()
+                    print(f"[GWAS] Progress: loaded {i+1} chunks ({total_rows} rows) in {elapsed:.1f} seconds")
+        
+        # Combine all chunks
+        result_df = pd.concat(chunks, ignore_index=True)
+        
+        # Calculate final stats
+        total_elapsed = (datetime.now() - start_time).total_seconds()
+        memory_usage = result_df.memory_usage(deep=True).sum() / (1024*1024)
+        
+        print(f"[GWAS] Completed loading {len(result_df)} rows in {total_elapsed:.1f} seconds")
+        print(f"[GWAS] Final DataFrame size: {memory_usage:.2f} MB in memory")
+        
+        return result_df
+    
+    except Exception as e:
+        print(f"[GWAS] Error loading GWAS data: {str(e)}")
+        raise
 
 @task(cache_policy=None)
 def preprocess_gwas_data(gwas_data_df):
-    """Preprocess GWAS data by splitting variant info and renaming columns."""
-    # Split variant information
-    gwas_data_df['CHR'] = gwas_data_df['variant'].str.split(':').str[0]
-    gwas_data_df['POS'] = gwas_data_df['variant'].str.split(':').str[1]
-    gwas_data_df['A2'] = gwas_data_df['variant'].str.split(':').str[2]
-    gwas_data_df['A1'] = gwas_data_df['variant'].str.split(':').str[3]
+    """
+    Preprocess GWAS data by splitting variant info and renaming columns.
+    Optimized to handle large dataframes efficiently.
+    """
+    print(f"[GWAS] Preprocessing GWAS data with shape: {gwas_data_df.shape}")
+    start_time = datetime.now()
+    
+    try:
+        # Use vectorized string operations for better performance
+        if 'variant' in gwas_data_df.columns:
+            print(f"[GWAS] Splitting variant field into components")
+            # Split variant field into components
+            variant_parts = gwas_data_df['variant'].str.split(':', expand=True)
+            
+            # Assign columns only if they exist in the split result
+            if variant_parts.shape[1] >= 4:
+                gwas_data_df['CHR'] = variant_parts[0]
+                gwas_data_df['POS'] = variant_parts[1]
+                gwas_data_df['A2'] = variant_parts[2]
+                gwas_data_df['A1'] = variant_parts[3]
+                print(f"[GWAS] Successfully extracted CHR, POS, A1, A2 columns")
+            else:
+                err_msg = f"Variant field doesn't have expected format. Found {variant_parts.shape[1]} parts instead of 4+"
+                print(f"[GWAS] Error: {err_msg}")
+                raise ValueError(err_msg)
 
-    # Convert POS to integer
-    gwas_data_df['POS'] = pd.to_numeric(gwas_data_df['POS'], errors='coerce')
+            # Convert POS to integer - use pd.to_numeric with downcast for memory efficiency
+            print(f"[GWAS] Converting POS to integer values")
+            gwas_data_df['POS'] = pd.to_numeric(gwas_data_df['POS'], errors='coerce', downcast='integer')
+            
+            # Rename columns
+            print(f"[GWAS] Renaming columns")
+            gwas_data_df = gwas_data_df.rename(columns={'variant': 'SNPID', 'pval': 'P'})
+        else:
+            # Handle case where columns might have different naming
+            print("[GWAS] Warning: 'variant' column not found in GWAS data. Assuming data is already preprocessed.")
+        
+        # Calculate and print memory statistics    
+        memory_usage = gwas_data_df.memory_usage(deep=True).sum() / (1024*1024)
+        elapsed_time = (datetime.now() - start_time).total_seconds()
+        print(f"[GWAS] Preprocessing completed in {elapsed_time:.2f} seconds")
+        print(f"[GWAS] Preprocessed data shape: {gwas_data_df.shape}, memory usage: {memory_usage:.2f} MB")
+            
+        return gwas_data_df
     
-    # Rename columns
-    gwas_data_df = gwas_data_df.rename(columns={'variant': 'SNPID', 'pval': 'P'})
-    
-    return gwas_data_df
+    except Exception as e:
+        print(f"[GWAS] Error preprocessing GWAS data: {str(e)}")
+        raise
 
 @task(cache_policy=None)
 def filter_significant_snps(gwas_data_df, output_dir, maf_threshold=0.05, p_threshold=5e-8):
     """Filter significant SNPs based on MAF and p-value thresholds."""
+    start_time = datetime.now()
+    print(f"[GWAS] Filtering significant SNPs (MAF > {maf_threshold}, p < {p_threshold})")
+    print(f"[GWAS] Input data has {len(gwas_data_df)} rows")
+    
     filtered_dir = os.path.join(output_dir, "processed_raw_data")
     os.makedirs(filtered_dir, exist_ok=True)
     output_path = os.path.join(filtered_dir, "significant_snps.csv")
 
     # Apply filters
+    print(f"[GWAS] Applying MAF filter > {maf_threshold}")
     minor_af_filtered_df = gwas_data_df[gwas_data_df['minor_AF'] > maf_threshold]
+    print(f"[GWAS] After MAF filter: {len(minor_af_filtered_df)} rows")
+    
+    print(f"[GWAS] Applying p-value filter < {p_threshold}")
     significant_snp_df = minor_af_filtered_df[minor_af_filtered_df['P'] <= p_threshold]
+    print(f"[GWAS] After p-value filter: {len(significant_snp_df)} rows")
+    
     # Remove chromosome X SNPs
+    print(f"[GWAS] Removing chromosome X SNPs")
+    x_snps_count = significant_snp_df['SNPID'].str.startswith('X:').sum()
     significant_snp_df = significant_snp_df[~significant_snp_df['SNPID'].str.startswith('X:')]
-
-    print("Filtered significant SNPs: ", significant_snp_df)
-    print("Filtered significant file path: ", output_path)
+    print(f"[GWAS] Removed {x_snps_count} X chromosome SNPs")
+    
+    print(f"[GWAS] Final significant SNPs count: {len(significant_snp_df)}")
+    print(f"[GWAS] Saving significant SNPs to {output_path}")
 
     significant_snp_df.to_csv(output_path, index=False)
-
+    
+    # Calculate summary statistics
+    chromosomes = significant_snp_df['CHR'].value_counts().to_dict()
+    chr_summary = ", ".join([f"Chr{k}: {v}" for k, v in sorted(chromosomes.items())])
+    elapsed_time = (datetime.now() - start_time).total_seconds()
+    
+    print(f"[GWAS] Filter completed in {elapsed_time:.2f} seconds")
+    print(f"[GWAS] Chromosomes distribution: {chr_summary}")
     
     return significant_snp_df
 

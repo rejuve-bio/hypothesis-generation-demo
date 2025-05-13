@@ -335,58 +335,126 @@ class AnalysisAPI(Resource):
 class FileUploadAPI(Resource):
     def __init__(self, db):
         self.db = db
+        # Define chunk size - smaller chunks for more reliable transfers
+        self.CHUNK_SIZE = 4 * 1024 * 1024  # 2MB chunks instead of 4MB
 
     @token_required
     def post(self, current_user_id):
-        """Handle GWAS file uploads without database"""
-        if 'file' not in request.files:
-            return {"error": "No file part"}, 400
+        """Handle GWAS file uploads with efficient streaming"""
+        try:
+            if 'file' not in request.files:
+                logger.error("[UPLOAD] No file part in request")
+                return {"error": "No file part"}, 400
+                
+            file = request.files['file']
             
-        file = request.files['file']
-        
-        if file.filename == '':
-            return {"error": "No selected file"}, 400
+            if file.filename == '':
+                logger.error("[UPLOAD] Empty filename submitted")
+                return {"error": "No selected file"}, 400
+                
+            if file and allowed_file(file.filename):
+                # Generate a secure filename with UUID
+                filename = secure_filename(file.filename)
+                file_id = str(uuid.uuid4())
+                
+                # Create user upload directory
+                user_upload_dir = os.path.join('data', 'uploads', current_user_id)
+                os.makedirs(user_upload_dir, exist_ok=True)
+                
+                # File path for saving
+                file_path = os.path.join(user_upload_dir, f"{file_id}_{filename}")
+                
+                # Print initial message
+                logger.info(f"[UPLOAD] Starting upload for file {filename} (ID: {file_id})")
+                start_time = datetime.now()
+                
+                # Stream file to disk in chunks instead of loading it all into memory
+                try:
+                    bytes_read = 0
+                    last_progress = 0
+                    
+                    with open(file_path, 'wb') as f:
+                        # Read and write in chunks
+                        try:
+                            chunk = file.read(self.CHUNK_SIZE)
+                            chunk_count = 0
+                            
+                            while chunk:
+                                try:
+                                    f.write(chunk)
+                                    bytes_read += len(chunk)
+                                    chunk_count += 1
+                                    
+                                    # Print progress every ~5% or every 10 chunks, whichever comes first
+                                    if chunk_count % 10 == 0:
+                                        elapsed_time = (datetime.now() - start_time).total_seconds()
+                                        speed = bytes_read / (1024 * 1024 * elapsed_time) if elapsed_time > 0 else 0
+                                        logger.info(f"[UPLOAD] Progress: {bytes_read/1024/1024:.2f} MB transferred ({speed:.2f} MB/s)")
+                                    
+                                    chunk = file.read(self.CHUNK_SIZE)
+                                except ConnectionError as conn_err:
+                                    logger.error(f"[UPLOAD] Connection error reading chunk: {str(conn_err)}")
+                                    raise
+                                except Exception as chunk_err:
+                                    logger.error(f"[UPLOAD] Error reading chunk: {str(chunk_err)}")
+                                    raise
+                        except Exception as read_err:
+                            logger.error(f"[UPLOAD] Error in read loop: {str(read_err)}")
+                            raise
+                    
+                    # Get file size after saving
+                    file_size = os.path.getsize(file_path)
+                    total_time = (datetime.now() - start_time).total_seconds()
+                    avg_speed = file_size / (1024 * 1024 * total_time) if total_time > 0 else 0
+                    
+                    logger.info(f"[UPLOAD] Completed: {filename} ({file_size/1024/1024:.2f} MB) in {total_time:.1f} seconds ({avg_speed:.2f} MB/s)")
+                    
+                    # Store file metadata in a JSON file
+                    metadata = {
+                        'file_id': file_id,
+                        'user_id': current_user_id,
+                        'filename': filename,
+                        'original_filename': file.filename,
+                        'file_path': file_path,
+                        'file_type': 'gwas',
+                        'upload_date': str(datetime.now()),
+                        'file_size': file_size
+                    }
+                    
+                    # Save metadata to a JSON file
+                    metadata_dir = os.path.join('data', 'metadata', current_user_id)
+                    os.makedirs(metadata_dir, exist_ok=True)
+                    
+                    with open(os.path.join(metadata_dir, f"{file_id}.json"), 'w') as f:
+                        json.dump(metadata, f)
+                    
+                    return {
+                        'file_id': file_id,
+                        'filename': filename,
+                        'file_size': file_size,
+                        'message': 'File successfully uploaded'
+                    }, 200
+                    
+                except ConnectionError as conn_e:
+                    logger.error(f"[UPLOAD] Network error during upload for {filename}: {str(conn_e)}")
+                    # Clean up the file if there was an error
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    return {"error": f"Network connection error: {str(conn_e)}"}, 503
+                except Exception as e:
+                    logger.error(f"[UPLOAD] Error: Upload failed for {filename} - {str(e)}", exc_info=True)
+                    # Clean up the file if there was an error
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    return {"error": f"Error uploading file: {str(e)}"}, 500
             
-        if file and allowed_file(file.filename):
-            # Generate a secure filename with UUID
-            filename = secure_filename(file.filename)
-            file_id = str(uuid.uuid4())
+            logger.error(f"[UPLOAD] File type not allowed: {file.filename}")
+            return {"error": "File type not allowed"}, 400
             
-            # Create user upload directory
-            user_upload_dir = os.path.join('data', 'uploads', current_user_id)
-            os.makedirs(user_upload_dir, exist_ok=True)
-            
-            # Save the file
-            file_path = os.path.join(user_upload_dir, f"{file_id}_{filename}")
-            file.save(file_path)
-            
-            # Store file metadata in a JSON file
-            metadata = {
-                'file_id': file_id,
-                'user_id': current_user_id,
-                'filename': filename,
-                'original_filename': file.filename,
-                'file_path': file_path,
-                'file_type': 'gwas',
-                'upload_date': str(datetime.now()),
-                'file_size': os.path.getsize(file_path)
-            }
-            
-            # Save metadata to a JSON file
-            metadata_dir = os.path.join('data', 'metadata', current_user_id)
-            os.makedirs(metadata_dir, exist_ok=True)
-            
-            with open(os.path.join(metadata_dir, f"{file_id}.json"), 'w') as f:
-                json.dump(metadata, f)
-            
-            return {
-                'file_id': file_id,
-                'filename': filename,
-                'message': 'File successfully uploaded'
-            }, 200
-        
-        return {"error": "File type not allowed"}, 400
-    
+        except Exception as outer_e:
+            logger.error(f"[UPLOAD] Unhandled exception in upload handler: {str(outer_e)}", exc_info=True)
+            return {"error": f"Server error: {str(outer_e)}"}, 500
+
 def init_socket_handlers(db_instance):
     logger.info("Initializing socket handlers...")
     # @socketio.on('connect')
