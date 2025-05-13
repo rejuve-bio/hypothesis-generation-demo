@@ -169,6 +169,173 @@ def plot_ld_matrices(ld_r, ld_r2, snp_names=None):
     ax[1].set_title("LD r2 matrix")
     plt.show()
 
+@flow(log_prints=True)
+def finemapping_flow(current_user_id):
+    """Flow to handle fine mapping"""
+
+    POPULATION = "EUR"
+    SAMPLE_PANEL_URL = "ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/integrated_call_samples_v3.20130502.ALL.panel"
+    OUTPUT_DIR = "./data/susie"
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Step 0: Load and preprocess GWAS data
+    file_path = "./data/susie/gwas/21001_raw.gwas.imputed_v3.both_sexes.tsv.bgz"
+    print("loading gwas data")
+    gwas_data_df = load_gwas_data(file_path)
+    print("preprocessing gwas data")
+    gwas_data_df = preprocess_gwas_data(gwas_data_df)
+
+    
+    # Filter significant SNPs
+    print("Filtering significant SNPs")
+    significant_snp_df = filter_significant_snps(gwas_data_df, output_dir=OUTPUT_DIR)
+
+
+    # Step 1: Download and prepare VCF files
+    print("Downloading and preparing VCF files")
+    vcf_files = download_and_prepare_vcfs(
+        output_dir=OUTPUT_DIR,
+        population=POPULATION,
+        sample_panel_url=SAMPLE_PANEL_URL,
+    )
+
+    # Step 2: Generate snplist file
+    print("Generating snplist file")
+    gwas_snplist_file = generate_snplist_file(
+        gwas_snps=significant_snp_df,
+        output_dir=OUTPUT_DIR
+    )
+    print("GWAS snplist file: ", gwas_snplist_file)
+    
+    # Step 3: Generate binary files from VCFs
+    print("Generating binary files from VCFs")
+    binary_files = generate_binary_from_vcf(
+        vcf_files=vcf_files,
+        gwas_snplist_file=gwas_snplist_file,
+        output_dir=OUTPUT_DIR,
+        population=POPULATION
+    )
+    print("Binary files: ", binary_files)
+    
+    # Step 4: Merge binary files
+    print("Merging binary files")
+    merged_binary = merge_plink_binaries(
+        binary_files=binary_files,
+        output_dir=OUTPUT_DIR,
+        population=POPULATION
+    )
+    print("Merged binary file: ", merged_binary)
+
+
+    # Step 5: Prepare COJO file
+    print("Preparing COJO file")
+    cojo_file_path = prepare_cojo_file(
+        significant_snp_df=significant_snp_df, 
+        output_dir=OUTPUT_DIR
+    )
+    
+    print("merged binary file: ", merged_binary)
+    print("cojo file path: ", cojo_file_path)
+
+    # Step 6: Run COJO analysis
+    print("Running COJO analysis")
+    # cojo_results_path = run_cojo_analysis(
+    #     merged_binary_path=merged_binary,
+    #     cojo_file_path=cojo_file_path,
+    #     output_dir=OUTPUT_DIR,
+    #     maf_threshold=0.05
+    # )
+    # print("COJO results path: ", cojo_results_path)
+    cojo_results_path = "./data/susie/cojo/all_chr/all_chr_cojo.jma.cojo"
+
+    # most_significant_snp = cojo_results_df.sort_values(by='p').head(1)
+    # print("Most significant SNP: ", most_significant_snp)
+    # 16  16:53802494:C:T  53802494  ...  0.012651  2.627990e-205  0.123927
+
+    # Step 7: Expanding region of each independet snp identified by cojo
+    print("Expanding SNP regions")
+    expanded_regions = expand_snp_regions(
+        cojo_results_path=cojo_results_path,
+        significant_snp_df=significant_snp_df,
+        output_dir=OUTPUT_DIR,
+        window_size=500000
+    )
+
+
+    # Step 7.1: Map COJO results with gene type
+    print("Mapping COJO results with gene type")
+    mapped_cojo_results = mapping_cojo(cojo_results_path, output_dir=OUTPUT_DIR)
+    print("Mapped COJO results: ", mapped_cojo_results)
+
+    # # Step 7.2: Group mapped COJO results by gene type
+    print("Grouping mapped COJO results by gene type")
+    grouped_cojo_results = grouping_cojo(
+        mapped_cojo_snps=mapped_cojo_results, 
+        expanded_region_files=expanded_regions, 
+        output_dir=OUTPUT_DIR
+        )
+    print("Grouped COJO results: ", grouped_cojo_results)
+
+     # Extract and return the gene types for user selection
+    gene_types = extract_gene_types(grouped_cojo_results)
+    print("Gene types: ", gene_types)
+
+    selected_gene = "GP2"
+
+    # Get the specific region files for the selected gene
+    gene_region_files = get_gene_region_files(grouped_cojo_results, selected_gene)
+    print("Gene region files: ", gene_region_files)
+
+
+
+    # Step 8: Generate LD matrices for each expanded region
+    print("Generating LD matrices")
+    ld_dir = calculate_ld_for_regions(
+        # region_files=expanded_regions,
+        region_files=gene_region_files, # instead of the whole expanded region it will be the chosen gene grouped expendad regions
+        plink_bfile=merged_binary,
+        output_dir=OUTPUT_DIR
+    )
+    print("LD matrices directory: ", ld_dir)
+
+    # For demonstration, process one region
+    region_file = gene_region_files[0]
+    print("Region file: ", region_file)
+    region_name = os.path.basename(region_file).split('_snps')[0]
+    print("Region name: ", region_name)
+    
+    ld_file = f"{ld_dir}/{region_name}_snps_ld.ld"
+    ld_r = pd.read_csv(ld_file, sep="\t", header=None)
+    R_df = ld_r.values
+    
+    # Load the expanded region file
+    expanded_region_snps = pd.read_csv(region_file, sep="\t")
+    
+    bim_file_path = f"{OUTPUT_DIR}/plink_binary/merged_{POPULATION.lower()}.bim"
+    
+    # Step 9: Check dimensionality of LD matrices
+    print("Checking LD dimensions")
+    filtered_snp = check_ld_dimensions(R_df, expanded_region_snps, bim_file_path)
+    
+    # Step 10: Check if LD matrix is positive semi-definite
+    print("Checking if LD matrix is positive semi-definite") 
+    R_df = check_ld_semidefiniteness(R_df)
+    
+    # Step 11: Run SuSiE analysis
+    print("Running SuSiE analysis")
+    fit = run_susie_analysis(
+        filtered_snp, 
+        R_df,
+        n=503,  # Sample size
+        L=10    # Number of causal variants
+    )
+    
+    # Step 12: Format credible sets
+    print("Formatting credible sets")
+    credible_sets = formattating_credible_sets(filtered_snp, fit, R_df)
+
+    return credible_sets.to_dict(orient="records")
+
 def main():
     # Load and preprocess GWAS data
     file_path = "../data/susie/gwas/21001_raw.gwas.imputed_v3.both_sexes.tsv.bgz"

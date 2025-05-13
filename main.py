@@ -14,6 +14,7 @@ from db import Database
 from query_swipl import PrologQuery
 from api import (
     AnalysisAPI,
+    AnalysisFinemappingAPI,
     EnrichAPI,
     FileUploadAPI, 
     HypothesisAPI, 
@@ -92,6 +93,7 @@ def setup_api(args):
     api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm, "db": db})
     api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete", resource_class_kwargs={"db": db}) 
     api.add_resource(AnalysisAPI, "/analysis", resource_class_kwargs={"db": db})
+    api.add_resource(AnalysisFinemappingAPI, "/analysis/finemapping", resource_class_kwargs={"db": db})
     api.add_resource(FileUploadAPI,'/api/upload',resource_class_kwargs={'db': db})
 
     # Initialize socket handlers AFTER socketio.init_app

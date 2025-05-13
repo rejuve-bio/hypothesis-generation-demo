@@ -315,168 +315,85 @@ def preprocessing_flow(current_user_id, population, gwas_file_path):
     return extract_gene_types(grouped_cojo_results)
 
 @flow(log_prints=True)
-def finemapping_analysis_flow(current_user_id, selected_gene):
-    """Second flow: Analyze the selected gene"""
-
+def finemapping_analysis_flow(current_user_id, selected_genes):
+    """Second flow: Analyze the selected gene(s)
+    
+    Args:
+        current_user_id: The ID of the current user
+        selected_genes: A list of gene types to analyze
+        
+    Returns:
+        A dictionary of credible sets for each gene type
+    """
     # Retrieve saved state from the first flow
     state = get_analysis_state(current_user_id)
     merged_binary = state["merged_binary"]
     grouped_cojo_results = state["grouped_cojo_results"]
     OUTPUT_DIR = state["output_dir"]
-
-    # Get the specific region files for the selected gene
-    gene_region_files = get_gene_region_files(grouped_cojo_results, selected_gene)
-    print("Gene region files: ", gene_region_files)
-
-
-
-    # Step 8: Generate LD matrices for each expanded region
-    print("Generating LD matrices")
-    ld_dir = calculate_ld_for_regions(
-        region_files=gene_region_files, 
-        plink_bfile=merged_binary,
-        output_dir=OUTPUT_DIR
-    )
-    print("LD matrices directory: ", ld_dir)
-
-    region_file = gene_region_files[0]
-    print("Region file: ", region_file)
-    region_name = os.path.basename(region_file).split('_snps')[0]
-    print("Region name: ", region_name)
     
-    ld_file = f"{ld_dir}/{region_name}_snps_ld.ld"
-    ld_r = pd.read_csv(ld_file, sep="\t", header=None)
-    R_df = ld_r.values
+    # Dictionary to store results for each gene type
+    all_results = {}
     
-    # Load the expanded region file
-    expanded_region_snps = pd.read_csv(region_file, sep="\t")
+    # Process each gene type
+    for selected_gene in selected_genes:
+        print(f"Processing gene type: {selected_gene}")
+        
+        # Get the specific region files for the selected gene
+        gene_region_files = get_gene_region_files(grouped_cojo_results, selected_gene)
+        print(f"Gene region files for {selected_gene}: {gene_region_files}")
+        
+        if not gene_region_files:
+            print(f"No region files found for gene type: {selected_gene}")
+            all_results[selected_gene] = []
+            continue
+
+        # Step 8: Generate LD matrices for each expanded region
+        print("Generating LD matrices")
+        ld_dir = calculate_ld_for_regions(
+            region_files=gene_region_files, 
+            plink_bfile=merged_binary,
+            output_dir=OUTPUT_DIR
+        )
+        print("LD matrices directory: ", ld_dir)
+
+        region_file = gene_region_files[0]
+        print("Region file: ", region_file)
+        region_name = os.path.basename(region_file).split('_snps')[0]
+        print("Region name: ", region_name)
+        
+        ld_file = f"{ld_dir}/{region_name}_snps_ld.ld"
+        ld_r = pd.read_csv(ld_file, sep="\t", header=None)
+        R_df = ld_r.values
+        
+        # Load the expanded region file
+        expanded_region_snps = pd.read_csv(region_file, sep="\t")
+        
+        bim_file_path = f"{OUTPUT_DIR}/plink_binary/merged_{state['population'].lower()}.bim"
+        
+        # Step 9: Check dimensionality of LD matrices
+        print("Checking LD dimensions")
+        filtered_snp = check_ld_dimensions(R_df, expanded_region_snps, bim_file_path)
+        
+        # Step 10: Check if LD matrix is positive semi-definite
+        print("Checking if LD matrix is positive semi-definite") 
+        R_df = check_ld_semidefiniteness(R_df)
+        
+        # Step 11: Run SuSiE analysis
+        print("Running SuSiE analysis")
+        fit = run_susie_analysis(
+            filtered_snp, 
+            R_df,
+            n=503,  
+            L=10    
+        )
+        
+        # Step 12: Format credible sets
+        print("Formatting credible sets")
+        credible_sets = formattating_credible_sets(filtered_snp, fit, R_df)
+        
+        # Store results for this gene type
+        all_results[selected_gene] = credible_sets.to_dict(orient="records")
     
-    bim_file_path = f"{OUTPUT_DIR}/plink_binary/merged_{state['population'].lower()}.bim"
-    
-    # Step 9: Check dimensionality of LD matrices
-    print("Checking LD dimensions")
-    filtered_snp = check_ld_dimensions(R_df, expanded_region_snps, bim_file_path)
-    
-    # Step 10: Check if LD matrix is positive semi-definite
-    print("Checking if LD matrix is positive semi-definite") 
-    R_df = check_ld_semidefiniteness(R_df)
-    
-    # Step 11: Run SuSiE analysis
-    print("Running SuSiE analysis")
-    fit = run_susie_analysis(
-        filtered_snp, 
-        R_df,
-        n=503,  
-        L=10    
-    )
-    
-    # Step 12: Format credible sets
-    print("Formatting credible sets")
-    credible_sets = formattating_credible_sets(filtered_snp, fit, R_df)
+    return all_results
 
-    return credible_sets.to_dict(orient="records")
-
-    # # For testing purpose using the the ld matrices for the most signigicat snp (chr16_pos53802494_snps_ld.ld)
-    # ld_r = pd.read_csv("./data/susie/ld/chr16_pos53802494_snps_ld.ld", sep="\t", header=None)
-    # R_df = ld_r.values
-
-    # # and the expanded region file (chr16_pos53802494_snps.txt)
-    # chr16_pos53802494_snps = pd.read_csv("./data/susie/expanded_regionss/chr16_pos53802494_snps.txt", sep="\t")
-    # print("Expanded region file: ", chr16_pos53802494_snps)
-
-    # bim_file_path= "./data/susie/plink_binary/merged_eur.bim"
-
-    # # Step 9: Check dimensionality of LD matrices
-    # print("Checking LD dimensions")
-    # filtered_snp = check_ld_dimensions(R_df, chr16_pos53802494_snps, bim_file_path)
-
-
-    # # Step 10: Check if LD matrix is positive semi-definite
-    # print("Checking if LD matrix is positive semi-definite") 
-    # R_df = check_ld_semidefiniteness(R_df)
-
-    # # Step 11: Run SuSiE analysis
-    # print("Running SuSiE analysis")
-    # # Run SuSiE analysis
-    # fit = run_susie_analysis(
-    #     filtered_snp, 
-    #     R_df,
-    #     n=503,
-    #     L=10
-    # )
-
-    # # Step 12: Format credible sets
-    # print("Formatting credible sets")
-    # credible_sets = formattating_credible_sets(filtered_snp, fit, R_df)
-    # print("Credible sets: ", credible_sets)
-
-    
-    # filtered_chr16_pos53828066_snps = pd.read_csv("/app/data/external_data/susie/locus_zoom/chr16_pos53828066_with_cs.csv")
-    # print("Filtered chr16 pos 53828066 snps: ", filtered_chr16_pos53828066_snps)
-    
-    # return filtered_chr16_pos53828066_snps.to_dict(orient="records")
-
-
-
-
-
-    # # mock merged data
-    # merged_data_df = pd.read_csv("/app/data/external_data/susie/processed_raw_data/chr16_merged_data.csv")
-    # binary_data= "/app/data/external_data/susie/plink_binary/merged_data"
-
-     
-
-    # cojo_results_df = pd.read_csv(cojo_results_path, delim_whitespace=True)
-    # # .jma.cojo
-    
-
-    # most_significant_snp = cojo_results_df.sort_values(by='p').head(1)
-    # print(most_significant_snp)
-
-
-    
-
-
-
-    # #most significant with expanded region
-    # # chr16_pos53828066_snps_ld_test=pd.read_csv("../data/susie/expanded_regions/chr16_pos53828066_snps.txt",sep="\t")
-    # chr16_pos53828066=pd.read_csv("/app/data/external_data/susie/susie/expanded_regions/chr16_pos53828066_snps.txt",sep="\t")
-
-    # filtered_chr16_pos53828066_snps = pd.read_csv("/app/data/external_data/susie/susie/snplist/filtered_chr16_pos53828066.csv")
-
-    # # mock cojo data
-    # cojo_data_df = pd.read_csv("/app/data/external_data/susie/susie/cojo/cojo_data.csv")
-
-    # # After running COJO analysis (external command)
-    # cojo_results_df = pd.read_csv("/app/data/external_data/susie/susie/cojo/all_chr/all_chr_cojo.jma.cojo", delim_whitespace=True)
-    
-    # # Example analysis for the most signigicant variant
-    # # variant_position = 53828066
-    # # region_snp_df = extract_region_snps(significant_snp_df, variant_position)
-    # # region_snp_df.to_csv("chr16_all_region_snps.csv") 
-    
-    # # Load LD matrices (after running PLINK commands)
-    # ld_r = pd.read_csv("/app/data/external_data/susie/susie/ALL_chr/ld/test_sig_locus_mt.ld", sep="\t", header=None)
-    # ld_r2 = pd.read_csv("/app/data/external_data/susie/susie/ALL_chr/ld/test_sig_locus_mt_r2.ld", sep="\t", header=None)
-    
-    # bfile = "/app/data/external_data/susie/susie/plink_binary/merged_data"
-    # cojo_result = "/app/data/external_data/susie/susie/ALL_chr/region_snplist/chr16_pos53828066_snps.txt"
-    # # output_dir = "../data/ld_matrices/chr16_ld"
-    # os.makedirs("../data/susie/ALL_chr/ld", exist_ok=True)
-    # output_dir = "../data/susie/ALL_chr/ld"
-
-
-    # # ld_matrices = run_plink_commands(bfile, cojo_result,output_dir)
-    # # ld_r =ld_matrices[0]
-    # # ld_r2 =ld_matrices[1]
-
-    
-
-    
-
-    
-
-    # credits_sets = get_credible_sets(fit, R_df)
-
-    
     

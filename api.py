@@ -294,6 +294,18 @@ class ChatAPI(Resource):
 #         }, 200
     
 class AnalysisAPI(Resource):
+    """
+    API endpoint for GWAS preprocessing analysis.
+    
+    Endpoint:
+        POST /analysis
+            Uploads a GWAS file and runs the preprocessing workflow to identify gene types.
+            Parameters:
+                - population: The population to use for analysis (default: 'EUR')
+                - gwas_file_id: ID of the uploaded GWAS file
+            Returns:
+                - gene_types: A list of gene types identified in the GWAS data
+    """
     def __init__(self, db):
         self.db = db
     
@@ -310,7 +322,6 @@ class AnalysisAPI(Resource):
         try:
             # Get the file path from the file ID
             gwas_file_path = get_user_file_path(gwas_file_id, current_user_id)
-            # gwas_file_path = None
             
             # Run the first part of the flow
             gene_types = preprocessing_flow(current_user_id, population, gwas_file_path)
@@ -318,22 +329,6 @@ class AnalysisAPI(Resource):
             return {"gene_types": gene_types}, 200
         except FileNotFoundError as e:
             return {"error": str(e)}, 404
-        except Exception as e:
-            return {"error": f"Analysis failed: {str(e)}"}, 500
-    
-    @token_required
-    def get(self, current_user_id):
-        # Get the selected gene type from query parameters
-        selected_gene = request.args.get('gene_type')
-        
-        if not selected_gene:
-            return {"error": "Missing required parameter: gene_type"}, 400
-        
-        try:
-            # Run the second part of the flow with the selected gene
-            susie_result = finemapping_analysis_flow(current_user_id, selected_gene)
-            
-            return {"susie_result": susie_result}, 200
         except Exception as e:
             return {"error": f"Analysis failed: {str(e)}"}, 500
 
@@ -497,3 +492,45 @@ def init_socket_handlers(db_instance):
         except Exception as e:
             logger.error(f"Error in handle_subscribe: {str(e)}")
             return {"error": str(e)}, 500
+
+class AnalysisFinemappingAPI(Resource):
+    """
+    API endpoint for running fine-mapping analysis on selected gene types.
+    
+    Endpoint:
+        POST /analysis/finemapping
+            Runs the fine-mapping analysis on selected gene types.
+            Expected JSON body:
+                {
+                    "gene_types": ["protein_coding", "lincRNA", ...]
+                }
+            Returns:
+                - susie_result: A dictionary where keys are gene types and values are 
+                  lists of credible sets for each gene type
+    """
+    def __init__(self, db):
+        self.db = db
+    
+    @token_required
+    def post(self, current_user_id):
+        data = request.get_json()
+        
+        if not data or 'gene_types' not in data:
+            return {"error": "Missing required parameter: gene_types in request body"}, 400
+        
+        selected_genes = data['gene_types']
+        
+        # Validate that gene_types is a list
+        if not isinstance(selected_genes, list):
+            return {"error": "gene_types must be an array/list of strings"}, 400
+        
+        if not selected_genes:
+            return {"error": "gene_types list cannot be empty"}, 400
+        
+        try:
+            # Run the second part of the flow with the selected gene(s)
+            susie_result = finemapping_analysis_flow(current_user_id, selected_genes)
+            
+            return {"susie_result": susie_result}, 200
+        except Exception as e:
+            return {"error": f"Analysis failed: {str(e)}"}, 500
