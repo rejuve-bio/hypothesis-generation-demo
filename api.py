@@ -12,15 +12,35 @@ from socketio_instance import socketio
 from auth import socket_token_required, token_required
 from datetime import datetime, timezone
 from uuid import uuid4
-from flows import async_enrichment_process, enrichment_flow, finemapping_analysis_flow, hypothesis_flow,  preprocessing_flow
+from flows import async_enrichment_process, enrichment_flow, finemapping_analysis_flow, hypothesis_flow,  preprocessing_flow, preprocessing_flow_v2, finemapping_analysis_flow_v2, enrichment_flow_v2, hypothesis_flow_v2
 # finemapping_flow
 from status_tracker import status_tracker, TaskState
 from prefect import flow
 from prefect.task_runners import ConcurrentTaskRunner
-from utils import allowed_file, emit_task_update, get_user_file_path
+from utils import allowed_file, emit_task_update, get_user_file_path, get_user_file_path_v2
 from loguru import logger
 from summary import process_summary
 from werkzeug.utils import secure_filename
+from tasks import create_project_from_upload
+
+def serialize_datetime_fields(data):
+    """Convert datetime objects to ISO format strings for JSON serialization"""
+    if isinstance(data, dict):
+        result = {}
+        for key, value in data.items():
+            if isinstance(value, datetime):
+                result[key] = value.isoformat()
+            elif isinstance(value, dict):
+                result[key] = serialize_datetime_fields(value)
+            elif isinstance(value, list):
+                result[key] = [serialize_datetime_fields(item) if isinstance(item, dict) else item for item in value]
+            else:
+                result[key] = value
+        return result
+    elif isinstance(data, list):
+        return [serialize_datetime_fields(item) for item in data]
+    else:
+        return data
 
 class EnrichAPI(Resource):
     def __init__(self, enrichr, llm, prolog_query, db):
@@ -38,10 +58,14 @@ class EnrichAPI(Resource):
             enrich = self.db.get_enrich(current_user_id, enrich_id)
             if not enrich:
                 return {"message": "Enrich not found or access denied."}, 404
+            # Serialize datetime objects before returning
+            enrich = serialize_datetime_fields(enrich)
             return enrich, 200
           
-        # Fetch all hypotheses for the current user
+        # Fetch all enrichments for the current user
         enrich = self.db.get_enrich(user_id=current_user_id)
+        # Serialize datetime objects before returning
+        enrich = serialize_datetime_fields(enrich)
         return enrich, 200
 
     @token_required
@@ -136,7 +160,7 @@ class HypothesisAPI(Resource):
                 # Remove 'causal_graph' field from enrich_data if it exists
                 if isinstance(enrich_data, dict):
                     enrich_data.pop('causal_graph', None)
-                return {
+                response_data = {
                     'id': hypothesis_id,
                     'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
                     'enrich_id': enrich_id,
@@ -144,7 +168,10 @@ class HypothesisAPI(Resource):
                     "status": "completed",
                     "created_at": hypothesis.get('created_at'),
                     "result": enrich_data
-                }, 200
+                }
+                # Serialize datetime objects before returning
+                response_data = serialize_datetime_fields(response_data)
+                return response_data, 200
 
             latest_state = status_tracker.get_latest_state(hypothesis_id)
             
@@ -170,6 +197,8 @@ class HypothesisAPI(Resource):
                 status_data['status'] = 'failed'
                 status_data['error'] = latest_state.get('error')
 
+            # Serialize datetime objects before returning
+            status_data = serialize_datetime_fields(status_data)
             return status_data, 200
 
         # Fetch all hypotheses for the current user
@@ -200,9 +229,10 @@ class HypothesisAPI(Resource):
             if 'causal_gene' in hypothesis and hypothesis.get('causal_gene') is not None:
                 formatted_hypothesis['causal_gene'] = hypothesis.get('causal_gene')
             formatted_hypotheses.append(formatted_hypothesis)
-            
+        
+        # Serialize datetime objects before returning
+        formatted_hypotheses = serialize_datetime_fields(formatted_hypotheses)
         return formatted_hypotheses, 200
-        # return hypotheses, 200
 
     @token_required
     def post(self, current_user_id):
@@ -602,3 +632,638 @@ class AnalysisFinemappingAPI(Resource):
             return {"susie_result": susie_result}, 200
         except Exception as e:
             return {"error": f"Analysis failed: {str(e)}"}, 500
+
+### NEW V2 API ENDPOINTS FOR TESTING ###
+
+class ProjectsAPI(Resource):
+    """
+    API endpoint for managing projects
+    """
+    def __init__(self, db):
+        self.db = db
+    
+    @token_required
+    def get(self, current_user_id):
+        """Get all projects for a user"""
+        project_id = request.args.get('id')
+        
+        if project_id:
+            project = self.db.get_projects(current_user_id, project_id)
+            if not project:
+                return {"error": "Project not found"}, 404
+            # Serialize datetime objects before returning
+            project = serialize_datetime_fields(project)
+            return project, 200
+        
+        projects = self.db.get_projects(current_user_id)
+        # Serialize datetime objects in all projects
+        projects = serialize_datetime_fields(projects)
+        return {"projects": projects}, 200
+    
+    @token_required
+    def post(self, current_user_id):
+        """Create a new project"""
+        data = request.get_json()
+        
+        if not data or 'name' not in data or 'gwas_file_id' not in data:
+            return {"error": "Missing required fields: name, gwas_file_id"}, 400
+        
+        try:
+            project_id = self.db.create_project(
+                current_user_id, 
+                data['name'], 
+                data['gwas_file_id']
+            )
+            
+            project = self.db.get_projects(current_user_id, project_id)
+            # Serialize datetime objects before returning
+            project = serialize_datetime_fields(project)
+            return {"project": project}, 201
+        except Exception as e:
+            return {"error": f"Failed to create project: {str(e)}"}, 500
+    
+    @token_required
+    def delete(self, current_user_id):
+        """Delete a project"""
+        project_id = request.args.get('id')
+        if not project_id:
+            return {"error": "Project ID is required"}, 400
+        
+        success = self.db.delete_project(current_user_id, project_id)
+        if success:
+            return {"message": "Project deleted successfully"}, 200
+        return {"error": "Project not found or access denied"}, 404
+
+class FileUploadAPIV2(Resource):
+    """
+    Enhanced file upload API that creates projects automatically
+    """
+    def __init__(self, db):
+        self.db = db
+        self.CHUNK_SIZE = 4 * 1024 * 1024  # 4MB chunks
+
+    @token_required
+    def post(self, current_user_id):
+        """Handle GWAS file uploads and create projects automatically"""
+        try:
+            if 'file' not in request.files:
+                return {"error": "No file part"}, 400
+                
+            file = request.files['file']
+            project_name = request.form.get('project_name', f"Analysis - {file.filename.split('.')[0]}")
+            
+            if file.filename == '':
+                return {"error": "No selected file"}, 400
+                
+            if file and allowed_file(file.filename):
+                # Generate secure filename and file ID
+                filename = secure_filename(file.filename)
+                file_id = str(uuid.uuid4())
+                
+                # Create user upload directory
+                user_upload_dir = os.path.join('data', 'uploads', current_user_id)
+                os.makedirs(user_upload_dir, exist_ok=True)
+                
+                # File path for saving
+                file_path = os.path.join(user_upload_dir, f"{file_id}_{filename}")
+                
+                logger.info(f"[UPLOAD V2] Starting upload for file {filename} (ID: {file_id})")
+                start_time = datetime.now()
+                
+                # Save file
+                file.save(file_path)
+                file_size = os.path.getsize(file_path)
+                
+                # Create file metadata in database
+                file_metadata_id = self.db.create_file_metadata(
+                    user_id=current_user_id,
+                    filename=filename,
+                    original_filename=file.filename,
+                    file_path=file_path,
+                    file_type='gwas',
+                    file_size=file_size
+                )
+                
+                # Create project automatically
+                project_id = self.db.create_project(
+                    user_id=current_user_id,
+                    name=project_name,
+                    gwas_file_id=file_metadata_id
+                )
+                
+                # Also save metadata to file system for backward compatibility
+                metadata_dir = os.path.join('data', 'metadata', current_user_id)
+                os.makedirs(metadata_dir, exist_ok=True)
+                
+                metadata = {
+                    'file_id': file_metadata_id,
+                    'user_id': current_user_id,
+                    'filename': filename,
+                    'original_filename': file.filename,
+                    'file_path': file_path,
+                    'file_type': 'gwas',
+                    'upload_date': str(datetime.now()),
+                    'file_size': file_size,
+                    'project_id': project_id
+                }
+                
+                with open(os.path.join(metadata_dir, f"{file_metadata_id}.json"), 'w') as f:
+                    json.dump(metadata, f)
+                
+                total_time = (datetime.now() - start_time).total_seconds()
+                logger.info(f"[UPLOAD V2] Completed: {filename} in {total_time:.1f} seconds")
+                
+                return {
+                    'file_id': file_metadata_id,
+                    'project_id': project_id,
+                    'filename': filename,
+                    'project_name': project_name,
+                    'file_size': file_size,
+                    'message': 'File uploaded and project created successfully'
+                }, 200
+                
+            return {"error": "File type not allowed"}, 400
+            
+        except Exception as e:
+            logger.error(f"[UPLOAD V2] Error: {str(e)}", exc_info=True)
+            return {"error": f"Server error: {str(e)}"}, 500
+
+class AnalysisAPIV2(Resource):
+    """
+    Project-based GWAS preprocessing analysis API
+    """
+    def __init__(self, db):
+        self.db = db
+    
+    @token_required
+    def post(self, current_user_id):
+        """Run preprocessing analysis for a project"""
+        data = request.get_json()
+        
+        if not data or 'project_id' not in data:
+            return {"error": "Missing required parameter: project_id"}, 400
+        
+        project_id = data['project_id']
+        population = data.get('population', 'EUR')
+        
+        # Verify project exists and belongs to user
+        project = self.db.get_projects(current_user_id, project_id)
+        if not project:
+            return {"error": "Project not found or access denied"}, 404
+        
+        try:
+            # Get file path from project
+            gwas_file_id = project['gwas_file_id']
+            gwas_file_path = get_user_file_path_v2(self.db, gwas_file_id, current_user_id)
+            
+            # Run preprocessing flow
+            gene_types = preprocessing_flow_v2(
+                db=self.db,
+                user_id=current_user_id,
+                project_id=project_id,
+                population=population,
+                gwas_file_path=gwas_file_path
+            )
+            
+            return {"gene_types": gene_types}, 200
+            
+        except FileNotFoundError as e:
+            return {"error": str(e)}, 404
+        except Exception as e:
+            logger.error(f"Preprocessing failed: {str(e)}")
+            return {"error": f"Analysis failed: {str(e)}"}, 500
+
+class AnalysisFinemappingAPIV2(Resource):
+    """
+    Project-based fine-mapping analysis with credible sets caching
+    """
+    def __init__(self, db):
+        self.db = db
+    
+    @token_required
+    def post(self, current_user_id):
+        """Run fine-mapping analysis with caching"""
+        data = request.get_json()
+        
+        if not data or 'project_id' not in data or 'gene_types' not in data:
+            return {"error": "Missing required parameters: project_id, gene_types"}, 400
+        
+        project_id = data['project_id']
+        selected_genes = data['gene_types']
+        
+        # Verify project exists
+        project = self.db.get_projects(current_user_id, project_id)
+        if not project:
+            return {"error": "Project not found or access denied"}, 404
+        
+        if not isinstance(selected_genes, list) or not selected_genes:
+            return {"error": "gene_types must be a non-empty array"}, 400
+        
+        try:
+            # Run fine-mapping analysis with caching
+            susie_result = finemapping_analysis_flow_v2(
+                db=self.db,
+                user_id=current_user_id,
+                project_id=project_id,
+                selected_genes=selected_genes
+            )
+            
+            return {"susie_result": susie_result}, 200
+            
+        except Exception as e:
+            logger.error(f"Fine-mapping analysis failed: {str(e)}")
+            return {"error": f"Analysis failed: {str(e)}"}, 500
+
+class EnrichAPIV2(Resource):
+    """
+    Project-based enrichment API that works with credible sets
+    """
+    def __init__(self, enrichr, llm, prolog_query, db):
+        self.enrichr = enrichr
+        self.llm = llm
+        self.prolog_query = prolog_query
+        self.db = db
+
+    @token_required
+    def get(self, current_user_id):
+        """Get enrichment data - similar to V1 but with project context"""
+        # Get the enrich_id from the query parameters
+        enrich_id = request.args.get('id')
+        project_id = request.args.get('project_id')
+        
+        if enrich_id:
+            # Fetch a specific enrich by enrich_id and user_id
+            enrich = self.db.get_enrich(current_user_id, enrich_id)
+            if not enrich:
+                return {"message": "Enrich not found or access denied."}, 404
+            # Serialize datetime objects before returning
+            enrich = serialize_datetime_fields(enrich)
+            return enrich, 200
+        
+        if project_id:
+            # Get all enrichments for a specific project
+            # This would require a new database method - for now, get all and filter by project_id
+            enrichments = self.db.get_enrich(user_id=current_user_id)
+            if isinstance(enrichments, list):
+                # Filter by project_id if it exists in the enrichment data
+                project_enrichments = [e for e in enrichments if e.get('project_id') == project_id]
+                project_enrichments = serialize_datetime_fields(project_enrichments)
+                return {"enrichments": project_enrichments}, 200
+            else:
+                # Handle case where get_enrich returns a single item
+                if enrichments and enrichments.get('project_id') == project_id:
+                    enrichments = serialize_datetime_fields(enrichments)
+                    return {"enrichments": [enrichments]}, 200
+                return {"enrichments": []}, 200
+          
+        # Fetch all enrichments for the current user (same as V1)
+        enrichments = self.db.get_enrich(user_id=current_user_id)
+        # Serialize datetime objects before returning
+        enrichments = serialize_datetime_fields(enrichments)
+        return enrichments, 200
+
+    @token_required
+    def post(self, current_user_id):
+        """Run enrichment analysis from credible set selection or traditional phenotype/variant"""
+        # Check if it's the new project-based workflow or traditional workflow
+        if request.content_type and 'application/json' in request.content_type:
+            # New project-based workflow with JSON data
+            data = request.get_json()
+            
+            required_fields = ['project_id', 'credible_set_id', 'variant', 'phenotype']
+            if not data or not all(field in data for field in required_fields):
+                return {"error": f"Missing required fields: {required_fields}"}, 400
+            
+            project_id = data['project_id']
+            credible_set_id = data['credible_set_id']
+            variant = data['variant']
+            phenotype = data['phenotype']
+            
+            # Verify project exists
+            project = self.db.get_projects(current_user_id, project_id)
+            if not project:
+                return {"error": "Project not found or access denied"}, 404
+            
+            # Verify credible set exists
+            credible_set = self.db.get_credible_sets(None, None, credible_set_id)
+            if not credible_set:
+                return {"error": "Credible set not found"}, 404
+            
+            try:
+                # Generate hypothesis_id
+                hypothesis_id = str(uuid4())
+                
+                # Create initial hypothesis WITH project_id
+                hypothesis_data = {
+                    "id": hypothesis_id,
+                    "project_id": project_id,  # Set project_id here
+                    "phenotype": phenotype,
+                    "variant": variant,
+                    "status": "pending",
+                    "created_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+                    "task_history": [],
+                }
+                self.db.create_hypothesis(current_user_id, hypothesis_data)
+                
+                # Run enrichment flow asynchronously
+                def run_async_flow():
+                    try:
+                        result = asyncio.run(enrichment_flow_v2(
+                            enrichr=self.enrichr,
+                            llm=self.llm,
+                            prolog_query=self.prolog_query,
+                            db=self.db,
+                            user_id=current_user_id,
+                            project_id=project_id,
+                            credible_set_id=credible_set_id,
+                            variant=variant,
+                            phenotype=phenotype,
+                            hypothesis_id=hypothesis_id
+                        ))
+                        
+                        # Update hypothesis with enrichment ID (MISSING IN ORIGINAL V2!)
+                        self.db.update_hypothesis(hypothesis_id, {
+                            "enrich_id": result[0].get('id')
+                        })
+                        
+                        logger.info(f"Enrichment flow V2 completed: {result}")
+                        
+                    except Exception as e:
+                        logger.error(f"Enrichment flow V2 failed: {str(e)}")
+                        
+                        # Update hypothesis with error state
+                        self.db.update_hypothesis(hypothesis_id, {
+                            "status": "failed",
+                            "error": str(e),
+                            "updated_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+                        })
+                        
+                        # Emit failure update
+                        emit_task_update(
+                            hypothesis_id=hypothesis_id,
+                            task_name="enrichment",
+                            state=TaskState.FAILED,
+                            error=str(e),
+                            progress=0
+                        )
+                
+                Thread(target=run_async_flow).start()
+                
+                return {"hypothesis_id": hypothesis_id}, 202
+                
+            except Exception as e:
+                logger.error(f"Enrichment failed: {str(e)}")
+                return {"error": f"Enrichment failed: {str(e)}"}, 500
+        
+        else:
+            # Traditional workflow with URL parameters (same as V1)
+            args = request.args
+            phenotype, variant = args.get('phenotype'), args.get('variant')
+            
+            if not phenotype or not variant:
+                return {"error": "Missing required parameters: phenotype, variant"}, 400
+
+            existing_hypothesis = self.db.get_hypothesis_by_phenotype_and_variant(current_user_id, phenotype, variant)
+
+            # Define async flow function (using V1 flow)
+            def run_async_flow():
+                asyncio.run(async_enrichment_process(
+                    enrichr=self.enrichr, 
+                    llm=self.llm, 
+                    prolog_query=self.prolog_query, 
+                    db=self.db, 
+                    current_user_id=current_user_id, 
+                    phenotype=phenotype, 
+                    variant=variant, 
+                    hypothesis_id=existing_hypothesis['id'] if existing_hypothesis else hypothesis_id
+                ))
+
+            if existing_hypothesis:
+                Thread(target=run_async_flow).start()
+                return {"hypothesis_id": existing_hypothesis['id']}, 202
+            
+            # Generate hypothesis_id immediately
+            hypothesis_id = str(uuid4())
+
+            # Store initial hypothesis state
+            hypothesis_data = {
+                "id": hypothesis_id,
+                "phenotype": phenotype,
+                "variant": variant,
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+                "task_history": [],
+            }
+
+            self.db.create_hypothesis(current_user_id, hypothesis_data)
+
+            # Start the thread
+            Thread(target=run_async_flow).start()
+
+            return {"hypothesis_id": hypothesis_id}, 201
+    
+    @token_required
+    def delete(self, current_user_id):
+        """Delete enrichment data - same as V1"""
+        enrich_id = request.args.get('id')
+        if enrich_id:
+            result = self.db.delete_enrich(current_user_id, enrich_id)
+            return result, 200
+        return {"message": "enrich id is required!"}, 400
+
+class HypothesisAPIV2(Resource):
+    """
+    Project-based hypothesis API
+    """
+    def __init__(self, enrichr, prolog_query, llm, db):
+        self.enrichr = enrichr
+        self.prolog_query = prolog_query
+        self.llm = llm
+        self.db = db
+
+    @token_required
+    def get(self, current_user_id):
+        """Get hypotheses - similar to V1 but with project context"""
+        project_id = request.args.get('project_id')
+        hypothesis_id = request.args.get('id')
+        
+        if hypothesis_id:
+            # Get specific hypothesis by hypothesis_id and user_id
+            hypothesis = self.db.get_hypotheses(current_user_id, hypothesis_id)
+            if not hypothesis:
+                return {"message": "Hypothesis not found or access denied."}, 404
+            
+            # Check if enrichment is complete (same logic as V1)
+            required_fields = ['enrich_id', 'go_id', 'summary', 'graph']
+            is_complete = all(field in hypothesis for field in required_fields)
+            
+            # Get task history
+            task_history = status_tracker.get_history(hypothesis_id)
+            for task in task_history:
+                task.pop('details', None)  # Remove 'details' if it exists
+
+            # Get only pending tasks from task history
+            pending_tasks = [task for task in task_history if task.get('state') == TaskState.STARTED.value]
+            last_pending_task = [pending_tasks[-1]] if pending_tasks else [] 
+
+            if is_complete:
+                enrich_id = hypothesis.get('enrich_id')
+                enrich_data = self.db.get_enrich(current_user_id, enrich_id)
+                # Remove 'causal_graph' field from enrich_data if it exists
+                if isinstance(enrich_data, dict):
+                    enrich_data.pop('causal_graph', None)
+                
+                response_data = {
+                    'id': hypothesis_id,
+                    'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
+                    'enrich_id': enrich_id,
+                    'phenotype': hypothesis['phenotype'],
+                    "status": "completed",
+                    "created_at": hypothesis.get('created_at'),
+                    "result": enrich_data
+                }
+                
+                # Add project_id if available
+                if hypothesis.get('project_id'):
+                    response_data['project_id'] = hypothesis['project_id']
+                
+                # Serialize datetime objects before returning
+                response_data = serialize_datetime_fields(response_data)
+                return response_data, 200
+
+            latest_state = status_tracker.get_latest_state(hypothesis_id)
+            
+            status_data = {
+                'id': hypothesis_id,
+                'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
+                'phenotype': hypothesis['phenotype'],
+                'status': 'pending',
+                "created_at": hypothesis.get('created_at'),
+                'task_history': last_pending_task,
+            }
+            
+            # Add project_id if available
+            if hypothesis.get('project_id'):
+                status_data['project_id'] = hypothesis['project_id']
+            
+            if 'enrich_id' in hypothesis and hypothesis.get('enrich_id') is not None:
+                enrich_id = hypothesis.get('enrich_id')
+                status_data['enrich_id'] = enrich_id
+                enrich_data = self.db.get_enrich(current_user_id, enrich_id)
+                if isinstance(enrich_data, dict):
+                    enrich_data.pop('causal_graph', None)
+                status_data['result'] = enrich_data
+
+            # Check for failed state
+            if latest_state and latest_state.get('state') == 'failed':
+                status_data['status'] = 'failed'
+                status_data['error'] = latest_state.get('error')
+
+            # Serialize datetime objects before returning
+            status_data = serialize_datetime_fields(status_data)
+            return status_data, 200
+        
+        if project_id:
+            # Get all hypotheses for project
+            hypotheses = self.db.get_hypotheses_by_project(current_user_id, project_id)
+            
+            # Format the response for all hypotheses (same as V1)
+            formatted_hypotheses = []
+            for hypothesis in hypotheses:
+                # Get only pending tasks from task history
+                pending_tasks = [
+                    task for task in status_tracker.get_history(hypothesis['id']) 
+                    if task.get('state') == TaskState.STARTED.value
+                ]
+                last_pending_task = [pending_tasks[-1]] if pending_tasks else []
+                
+                formatted_hypothesis = {
+                    'id': hypothesis['id'],
+                    'phenotype': hypothesis['phenotype'],
+                    'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
+                    'created_at': hypothesis.get('created_at'),
+                    'status': hypothesis.get('status'),
+                    'task_history': last_pending_task,
+                    'project_id': hypothesis.get('project_id')  # Include project_id
+                }
+                
+                if 'enrich_id' in hypothesis and hypothesis.get('enrich_id') is not None:
+                     formatted_hypothesis['enrich_id'] = hypothesis.get('enrich_id')
+                if 'biological_context' in hypothesis and hypothesis.get('biological_context') is not None:
+                    formatted_hypothesis['biological_context'] = hypothesis.get('biological_context')
+                if 'causal_gene' in hypothesis and hypothesis.get('causal_gene') is not None:
+                    formatted_hypothesis['causal_gene'] = hypothesis.get('causal_gene')
+                    
+                formatted_hypotheses.append(formatted_hypothesis)
+            
+            # Serialize datetime objects in all hypotheses
+            formatted_hypotheses = serialize_datetime_fields(formatted_hypotheses)
+            return {"hypotheses": formatted_hypotheses}, 200
+        
+        # If no project_id provided, get all hypotheses for user (same as V1)
+        hypotheses = self.db.get_hypotheses(user_id=current_user_id)
+        
+        # Filter and format the response for all hypotheses
+        formatted_hypotheses = []
+        for hypothesis in hypotheses:
+            # Get only pending tasks from task history
+            pending_tasks = [
+                task for task in status_tracker.get_history(hypothesis['id']) 
+                if task.get('state') == TaskState.STARTED.value
+            ]
+            last_pending_task = [pending_tasks[-1]] if pending_tasks else []
+            
+            formatted_hypothesis = {
+                'id': hypothesis['id'],
+                'phenotype': hypothesis['phenotype'],
+                'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
+                'created_at': hypothesis.get('created_at'),
+                'status': hypothesis.get('status'),
+                'task_history': last_pending_task
+            }
+            
+            # Add project_id if available
+            if hypothesis.get('project_id'):
+                formatted_hypothesis['project_id'] = hypothesis['project_id']
+            
+            if 'enrich_id' in hypothesis and hypothesis.get('enrich_id') is not None:
+                 formatted_hypothesis['enrich_id'] = hypothesis.get('enrich_id')
+            if 'biological_context' in hypothesis and hypothesis.get('biological_context') is not None:
+                formatted_hypothesis['biological_context'] = hypothesis.get('biological_context')
+            if 'causal_gene' in hypothesis and hypothesis.get('causal_gene') is not None:
+                formatted_hypothesis['causal_gene'] = hypothesis.get('causal_gene')
+                
+            formatted_hypotheses.append(formatted_hypothesis)
+        
+        # Serialize datetime objects in all hypotheses
+        formatted_hypotheses = serialize_datetime_fields(formatted_hypotheses)
+        return formatted_hypotheses, 200
+
+    @token_required
+    def post(self, current_user_id):
+        """Create hypothesis from enrichment and GO term - same as V1"""
+        enrich_id = request.args.get('id')
+        go_id = request.args.get('go')
+
+        # Get the hypothesis associated with this enrichment
+        hypothesis = self.db.get_hypothesis_by_enrich(current_user_id, enrich_id)
+        if not hypothesis:
+            return {"message": "No hypothesis found for this enrichment"}, 404
+        
+        hypothesis_id = hypothesis['id']
+        
+        # Run the V2 hypothesis flow (which gets project_id from existing hypothesis)
+        try:
+            flow_result = hypothesis_flow_v2(current_user_id, hypothesis_id, enrich_id, go_id, self.db, self.prolog_query, self.llm)
+            return flow_result[0], flow_result[1]
+        except Exception as e:
+            logger.error(f"Hypothesis creation failed: {str(e)}")
+            return {"error": f"Hypothesis creation failed: {str(e)}"}, 500
+    
+    @token_required
+    def delete(self, current_user_id):
+        """Delete hypothesis - same as V1"""
+        hypothesis_id = request.args.get('hypothesis_id')
+        if hypothesis_id:
+            return self.db.delete_hypothesis(current_user_id, hypothesis_id)
+        return {"message": "Hypothesis ID is required"}, 400

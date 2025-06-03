@@ -937,18 +937,20 @@ def download_and_prepare_vcfs(output_dir, population, sample_panel_url) -> Dict[
     """
     Download VCF files for all chromosomes and prepare updated VCF files with proper variant IDs.
     """
-
-    output_dir ="./data/susie"
-
-    vcf_dir = os.path.join(output_dir, "vcf")
-    updated_vcf_dir = os.path.join(output_dir, "updated_vcf")
+    output_dirt = "./data/susie"
+    # Use the passed output_dir instead of hardcoded path
+    vcf_dir = os.path.join(output_dirt, "vcf")
+    updated_vcf_dir = os.path.join(output_dirt, "updated_vcf")
+    gwas_dir = os.path.join(output_dir, "gwas")
     
+    # Create all necessary directories
     os.makedirs(vcf_dir, exist_ok=True)
     os.makedirs(updated_vcf_dir, exist_ok=True)
+    os.makedirs(gwas_dir, exist_ok=True)
 
     # Sample panel file
     sample_panel_filename = "integrated_call_samples_v3.20130502.ALL.panel"
-    sample_panel_path = os.path.join(f"{output_dir}/gwas", sample_panel_filename)
+    sample_panel_path = os.path.join(gwas_dir, sample_panel_filename)
 
     # Download panel if it doesn't exist
     if not os.path.exists(sample_panel_path):
@@ -966,9 +968,6 @@ def download_and_prepare_vcfs(output_dir, population, sample_panel_url) -> Dict[
         chrom_str = str(chrom)
         vcf_url = f"ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/ALL.chr{chrom_str}.phase3_shapeit2_mvncall_integrated_v5b.20130502.genotypes.vcf.gz"
         
-        vcf_file = os.path.join(vcf_dir, f"ALL.chr{chrom_str}.vcf.gz")
-        updated_vcf_file = os.path.join(updated_vcf_dir, f"ALL.chr{chrom_str}.updated.vcf.gz")
-
         vcf_file = os.path.join(vcf_dir, f"ALL.chr{chrom_str}.vcf.gz")
         updated_vcf_file = os.path.join(updated_vcf_dir, f"ALL.chr{chrom_str}.updated.vcf.gz")
         
@@ -1012,6 +1011,8 @@ def generate_binary_from_vcf(
     os.makedirs(plink_binary_dir, exist_ok=True)
 
     mounted_dir = "/app/data/external_data/susie"
+    # Use the samples file from the project's output directory
+    # samples_file = os.path.join(output_dir, f"{population.lower()}_samples.txt")
     
     binary_files = {}
     for chrom, files in vcf_files.items():
@@ -1521,3 +1522,251 @@ def formattating_credible_sets(filtered_snp, fit, R_df):
             credible_snps = filtered_snp.loc[filtered_snp["pip"] > 0.5, :]
             
         return credible_snps
+
+### Project-based Analysis Tasks
+@task(cache_policy=None)
+def create_project_from_upload(db, user_id, filename, file_id):
+    """Create a project automatically when a GWAS file is uploaded"""
+    try:
+        # Generate project name from filename
+        project_name = f"Analysis - {filename.split('.')[0]}"
+        
+        # Create project
+        project_id = db.create_project(user_id, project_name, file_id)
+        
+        print(f"Created project {project_id} for file {filename}")
+        return project_id
+    except Exception as e:
+        print(f"Error creating project: {str(e)}")
+        raise
+
+@task(cache_policy=None)
+def save_analysis_state_task(db, user_id, project_id, state_data):
+    """Save analysis state to file system"""
+    try:
+        db.save_analysis_state(user_id, project_id, state_data)
+        print(f"Saved analysis state for project {project_id}")
+        return True
+    except Exception as e:
+        print(f"Error saving analysis state: {str(e)}")
+        raise
+
+@task(cache_policy=None)
+def load_analysis_state_task(db, user_id, project_id):
+    """Load analysis state from file system"""
+    try:
+        state = db.load_analysis_state(user_id, project_id)
+        if state:
+            print(f"Loaded analysis state for project {project_id}")
+        else:
+            print(f"No analysis state found for project {project_id}")
+        return state
+    except Exception as e:
+        print(f"Error loading analysis state: {str(e)}")
+        raise
+
+@task(cache_policy=None)
+def create_analysis_result_task(db, project_id, population, gene_types_identified):
+    """Create analysis result entry in database"""
+    try:
+        analysis_id = db.create_analysis_result(project_id, population, gene_types_identified)
+        print(f"Created analysis result {analysis_id} for project {project_id}")
+        return analysis_id
+    except Exception as e:
+        print(f"Error creating analysis result: {str(e)}")
+        raise
+
+@task(cache_policy=None)
+def create_credible_sets_task(db, analysis_id, credible_sets_data):
+    """Create credible sets entries in database"""
+    try:
+        credible_set_ids = {}
+        for gene_type, data in credible_sets_data.items():
+            credible_set_id = db.create_credible_set(analysis_id, gene_type, data)
+            credible_set_ids[gene_type] = credible_set_id
+            print(f"Created credible set {credible_set_id} for gene type {gene_type}")
+        
+        return credible_set_ids
+    except Exception as e:
+        print(f"Error creating credible sets: {str(e)}")
+        raise
+
+@task(cache_policy=None)
+def check_existing_credible_sets(db, analysis_id, requested_gene_types):
+    """Check which credible sets already exist and which need to be computed"""
+    try:
+        existing_sets = {}
+        missing_gene_types = []
+        
+        for gene_type in requested_gene_types:
+            if db.check_credible_set_exists(analysis_id, gene_type):
+                credible_set = db.get_credible_sets(analysis_id, gene_type=gene_type)
+                if credible_set:
+                    existing_sets[gene_type] = credible_set[0]  # Get first result
+                    print(f"Found existing credible set for {gene_type}")
+            else:
+                missing_gene_types.append(gene_type)
+                print(f"Need to compute credible set for {gene_type}")
+        
+        return existing_sets, missing_gene_types
+    except Exception as e:
+        print(f"Error checking existing credible sets: {str(e)}")
+        raise
+
+@task(cache_policy=None)
+def get_project_analysis_path_task(db, user_id, project_id):
+    """Get the analysis path for a project"""
+    try:
+        analysis_path = db.get_project_analysis_path(user_id, project_id)
+        
+        # Create directory structure if it doesn't exist
+        os.makedirs(analysis_path, exist_ok=True)
+        os.makedirs(os.path.join(analysis_path, "preprocessed_data"), exist_ok=True)
+        os.makedirs(os.path.join(analysis_path, "plink_binary"), exist_ok=True)
+        os.makedirs(os.path.join(analysis_path, "cojo"), exist_ok=True)
+        os.makedirs(os.path.join(analysis_path, "expanded_regions"), exist_ok=True)
+        os.makedirs(os.path.join(analysis_path, "ld"), exist_ok=True)
+        
+        print(f"Project analysis path: {analysis_path}")
+        return analysis_path
+    except Exception as e:
+        print(f"Error getting project analysis path: {str(e)}")
+        raise
+
+@task(cache_policy=None)
+def check_enrich_v2(db, user_id, credible_set_id, variant, phenotype, hypothesis_id):
+    """Check if enrichment exists for credible set, variant, and phenotype"""
+    try:
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Verifying existence of enrichment data",
+            state=TaskState.STARTED,
+            progress=0  
+        )
+        
+        enrich = db.get_enrich_by_credible_set(user_id, credible_set_id, variant, phenotype)
+        
+        if enrich:
+            emit_task_update(
+                hypothesis_id=hypothesis_id,
+                task_name="Verifying existence of enrichment data",
+                state=TaskState.COMPLETED,
+                progress=80,
+                details={"found": True, "enrich": enrich}
+            )
+            return enrich
+            
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Verifying existence of enrichment data",
+            state=TaskState.COMPLETED,
+            details={"found": False},
+            next_task="Getting candidate genes"
+        )
+        return None
+        
+    except Exception as e:
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Verifying existence of enrichment data",
+            state=TaskState.FAILED,
+            error=str(e)
+        )
+        raise
+
+@task(cache_policy=None)
+def create_enrich_data_v2(db, user_id, project_id, credible_set_id, variant, phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id):
+    """Create enrichment data with project and credible set references"""
+    try:
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Creating enrich data",
+            state=TaskState.STARTED
+        )
+
+        print("Creating enrich data in the database with project context")
+        enrich_id = db.create_enrich_v2(
+            user_id, project_id, credible_set_id, variant, 
+            phenotype, causal_gene, relevant_gos, causal_graph
+        )
+
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Creating enrich data",
+            state=TaskState.COMPLETED,
+            details={"enrichment_id": enrich_id}
+        )
+        
+        hypothesis_history = status_tracker.get_history(hypothesis_id)
+        print("Updating hypothesis in the database...")
+        hypothesis_data = {
+                "task_history": hypothesis_history,
+            }
+        db.update_hypothesis(hypothesis_id, hypothesis_data)
+
+        return enrich_id
+    except Exception as e:
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Creating enrich data",
+            state=TaskState.FAILED,
+            error=str(e)          
+        )
+        raise
+
+@task(cache_policy=None, retries=2)
+def create_hypothesis_v2(db, user_id, project_id, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, hypothesis_id):
+    """Create hypothesis with project reference"""
+    try:
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Generating hypothesis",
+            state=TaskState.STARTED,
+            details={"go_id": go_id}
+        )
+        
+        hypothesis_history = status_tracker.get_history(hypothesis_id)
+        print("Creating hypothesis in the database with project context...")
+        
+        # Update the existing hypothesis with the new data
+        hypothesis_data = {
+                "project_id": project_id,
+                "enrich_id": enrich_id,
+                "go_id": go_id,
+                "variant": variant_id,
+                "phenotype": phenotype,
+                "causal_gene": causal_gene,
+                "graph": causal_graph,
+                "summary": summary,
+                "biological_context": "",
+                "status": "completed",
+                "task_history": hypothesis_history,
+            }
+        db.update_hypothesis(hypothesis_id, hypothesis_data)
+
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Generating hypothesis",
+            state=TaskState.COMPLETED,
+            details={
+                "status": "completed",
+                "result": hypothesis_data
+            }
+        )
+        
+        # Update task history one more time
+        hypothesis_history = status_tracker.get_history(hypothesis_id)
+        hypothesis_data = {
+                "task_history": hypothesis_history,
+            }
+        db.update_hypothesis(hypothesis_id, hypothesis_data)
+        
+        return hypothesis_id
+    except Exception as e:
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Generating hypothesis",
+            state=TaskState.FAILED,
+            error=str(e)          
+        )
+        raise

@@ -87,20 +87,30 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def get_user_file_path(file_id, user_id):
-    """Get the file path for the uploaded GWAS file without database"""
-    # Check if metadata file exists
-    metadata_path = os.path.join('data', 'metadata', user_id, f"{file_id}.json")
+    """Get file path from file ID using metadata system"""
+    import os
+    import json
     
-    if not os.path.exists(metadata_path):
+    # Check in metadata first
+    metadata_path = f"data/metadata/{user_id}/{file_id}.json"
+    if os.path.exists(metadata_path):
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        return metadata['file_path']
+    
+    # Fallback to direct file path (for backward compatibility)
+    user_upload_dir = f"data/uploads/{user_id}"
+    if os.path.exists(user_upload_dir):
+        for filename in os.listdir(user_upload_dir):
+            if filename.startswith(file_id):
+                return os.path.join(user_upload_dir, filename)
+    
+    raise FileNotFoundError(f"File with ID {file_id} not found for user {user_id}")
+
+def get_user_file_path_v2(db, file_id, user_id):
+    """Get file path from file ID using database metadata"""
+    file_metadata = db.get_file_metadata(user_id, file_id)
+    if not file_metadata:
         raise FileNotFoundError(f"File with ID {file_id} not found for user {user_id}")
     
-    # Load metadata
-    with open(metadata_path, 'r') as f:
-        metadata = json.load(f)
-    
-    # Verify the file exists on disk
-    file_path = metadata['file_path']
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File {file_path} does not exist on disk")
-    
-    return file_path
+    return file_metadata['file_path']

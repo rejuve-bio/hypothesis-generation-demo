@@ -22,6 +22,13 @@ from api import (
     ChatAPI, 
     BulkHypothesisDeleteAPI,
     init_socket_handlers,
+    # Import new v2 APIs
+    ProjectsAPI,
+    FileUploadAPIV2,
+    AnalysisAPIV2,
+    AnalysisFinemappingAPIV2,
+    EnrichAPIV2,
+    HypothesisAPIV2,
 )
 from dotenv import load_dotenv
 import os
@@ -108,6 +115,14 @@ def setup_api(args):
     api.add_resource(AnalysisAPI, "/analysis", resource_class_kwargs={"db": db})
     api.add_resource(AnalysisFinemappingAPI, "/analysis/finemapping", resource_class_kwargs={"db": db})
     api.add_resource(FileUploadAPI,'/api/upload',resource_class_kwargs={'db': db})
+
+    # V2 API Routes for testing project-based workflow
+    api.add_resource(ProjectsAPI, "/v2/projects", resource_class_kwargs={"db": db})
+    api.add_resource(FileUploadAPIV2, "/v2/upload", resource_class_kwargs={"db": db})
+    api.add_resource(AnalysisAPIV2, "/v2/analysis", resource_class_kwargs={"db": db})
+    api.add_resource(AnalysisFinemappingAPIV2, "/v2/analysis/finemapping", resource_class_kwargs={"db": db})
+    api.add_resource(HypothesisAPIV2, "/v2/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
+    api.add_resource(EnrichAPIV2, "/v2/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query, "db": db})
 
     # Initialize socket handlers AFTER socketio.init_app
     socket_namespace = init_socket_handlers(db)
