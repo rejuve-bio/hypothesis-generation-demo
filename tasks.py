@@ -1024,6 +1024,7 @@ def generate_binary_from_vcf(
             run_command(
                 f"plink --vcf {updated_vcf_file} "
                 f"--keep {mounted_dir}/{population.lower()}_samples.txt "
+                f"--keep-allele-order "
                 f"--make-bed --out {plink_prefix} "
             )
         
@@ -1033,6 +1034,7 @@ def generate_binary_from_vcf(
             run_command(
                 f"plink --bfile {plink_prefix} "
                 f"--extract {gwas_snplist_file} "
+                f"--keep-allele-order "
                 f"--make-bed --out {filtered_prefix}"
             )
         
@@ -1074,6 +1076,7 @@ def merge_plink_binaries(
         run_command(
             f"plink --bfile {base_file} "
             f"--merge-list {merge_list_file} "
+            f"--keep-allele-order "
             f"--make-bed --out {merged_prefix}"
         )
     
@@ -1356,7 +1359,7 @@ def check_ld_dimensions(ld_matrix, snp_df, bim_file_path):
         print(f"LD shape: {ld_matrix.shape}, SNP list length: {len(snp_df)}")
 
         # Load available SNP IDs from bim file (column 2 = SNP)
-        available_snps = pd.read_csv(bim_file_path, sep="\t", header=None, usecols=[1], names=["SNP"])
+        available_snps = pd.read_csv(bim_file_path, sep="\t", header=None, names=["CHR", "SNP", "CM", "POS", "A1", "A2"])
         available_snps_set = set(available_snps["SNP"])
 
         # Identify missing SNPs
