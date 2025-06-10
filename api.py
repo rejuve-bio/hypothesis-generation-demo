@@ -7,7 +7,8 @@ from socketio_instance import socketio
 from auth import socket_token_required, token_required
 from datetime import datetime, timezone
 from uuid import uuid4
-from flows import async_enrichment_process, hypothesis_flow
+from flows import hypothesis_flow
+from run_deployment import invoke_enrichment_deployment
 from status_tracker import status_tracker, TaskState
 from loguru import logger
 
@@ -40,22 +41,31 @@ class EnrichAPI(Resource):
 
         existing_hypothesis = self.db.get_hypothesis_by_phenotype_and_variant(current_user_id, phenotype, variant)
 
-        # Define async flow function
-        def run_async_flow():
-            asyncio.run(async_enrichment_process(
-                enrichr=self.enrichr, 
-                llm=self.llm, 
-                prolog_query=self.prolog_query, 
-                db=self.db, 
-                current_user_id=current_user_id, 
-                phenotype=phenotype, 
-                variant=variant, 
-                hypothesis_id=existing_hypothesis['id'] if existing_hypothesis else hypothesis_id
-            ))
-
         if existing_hypothesis:
-            Thread(target=run_async_flow).start()
+            invoke_enrichment_deployment(
+                    current_user_id=current_user_id, 
+                    phenotype=phenotype, 
+                    variant=variant, 
+                    hypothesis_id=existing_hypothesis['id'])
+
             return {"hypothesis_id": existing_hypothesis['id']}, 202
+
+        # # Define async flow function
+        # def run_async_flow():
+        #     asyncio.run(async_enrichment_process(
+        #         enrichr=self.enrichr, 
+        #         llm=self.llm, 
+        #         prolog_query=self.prolog_query, 
+        #         db=self.db, 
+        #         current_user_id=current_user_id, 
+        #         phenotype=phenotype, 
+        #         variant=variant, 
+        #         hypothesis_id=existing_hypothesis['id'] if existing_hypothesis else hypothesis_id
+        #     ))
+
+        # if existing_hypothesis:
+        #     Thread(target=run_async_flow).start()
+        #     return {"hypothesis_id": existing_hypothesis['id']}, 202
         
         # Generate hypothesis_id immediately
         hypothesis_id = str(uuid4())
@@ -72,9 +82,15 @@ class EnrichAPI(Resource):
 
         self.db.create_hypothesis(current_user_id, hypothesis_data)
 
+        invoke_enrichment_deployment(
+                    current_user_id=current_user_id, 
+                    phenotype=phenotype, 
+                    variant=variant, 
+                    hypothesis_id=hypothesis_id)
 
-        # Start the thread
-        Thread(target=run_async_flow).start()
+
+        # # Start the thread
+        # Thread(target=run_async_flow).start()
 
         
         return {"hypothesis_id": hypothesis_id}, 201
