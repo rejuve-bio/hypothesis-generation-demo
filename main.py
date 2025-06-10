@@ -3,11 +3,7 @@ from flask import Flask
 from flask_restful import Api
 from loguru import logger
 
-from enrich import Enrich
-# from semantic_search import SemanticSearch
-from llm import LLM
-from db import Database
-from query_swipl import PrologQuery
+from config import Config, create_dependencies
 from api import (
     EnrichAPI, 
     HypothesisAPI, 
@@ -21,26 +17,29 @@ from flask_jwt_extended import JWTManager
 from socketio_instance import socketio
 from status_tracker import StatusTracker
 
-def parse_arguments():
-    args = argparse.ArgumentParser()
-    args.add_argument("--port", type=int, default=5000)
-    args.add_argument("--host", type=str, default="0.0.0.0")
-    #LLM arguments
-    # args.add_argument("--llm", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct")
-    args.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
-    # args.add_argument("--temperature", type=float, default=1.0)
-    #Prolog arguments
-    args.add_argument("--swipl-host", type=str, default="localhost")
-    args.add_argument("--swipl-port", type=int, default=4242)
-    #Enrich arguments
-    args.add_argument("--ensembl-hgnc-map", type=str, required=True)
-    args.add_argument("--hgnc-ensembl-map", type=str, required=True)
-    args.add_argument("--go-map", type=str, required=True)
-    return args.parse_args()
+def parse_flask_arguments():
+    """Parse arguments specific to Flask application"""
+    parser = argparse.ArgumentParser(description="Flask Application Server")
+    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    
+    # Application configuration
+    parser.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
+    
+    # Prolog arguments
+    parser.add_argument("--swipl-host", type=str, default="localhost")
+    parser.add_argument("--swipl-port", type=int, default=4242)
+    
+    # Data file arguments
+    parser.add_argument("--ensembl-hgnc-map", type=str, required=True)
+    parser.add_argument("--hgnc-ensembl-map", type=str, required=True)
+    parser.add_argument("--go-map", type=str, required=True)
+    
+    return parser.parse_args()
 
-def setup_api(args):
+def setup_api(config):
+    """Setup Flask application with centralized configuration"""
     load_dotenv()
- 
     
     app = Flask(__name__)
 
@@ -58,29 +57,42 @@ def setup_api(args):
     # Initialize SocketIO with the app
     socketio.init_app(app)
 
-
-    # Use environment variables
-    mongodb_uri = os.getenv("MONGODB_URI")
-    db_name = os.getenv("DB_NAME")
-
-    db = Database(mongodb_uri, db_name)
+    # Create dependencies using centralized config
+    deps = create_dependencies(config)
+    
+    # Initialize status tracker
     status_tracker = StatusTracker()
-    status_tracker.initialize(db)
-
-    enrichr = Enrich(args.ensembl_hgnc_map, args.hgnc_ensembl_map, args.go_map)
+    status_tracker.initialize(deps['db'])
     try:
         hf_token = os.environ["HF_TOKEN"]
     except KeyError:
         hf_token = None
     # semantic_search = SemanticSearch(args.embedding_model, hf_token=hf_token)
-    prolog_query = PrologQuery(args.swipl_host, args.swipl_port)
-    llm = LLM()
-    api.add_resource(EnrichAPI, "/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query, "db": db})
-    api.add_resource(HypothesisAPI, "/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
-    api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": llm})
+
+
+    # Setup API endpoints with dependencies
+    api.add_resource(EnrichAPI, "/enrich", 
+        resource_class_kwargs={
+            "enrichr": deps['enrichr'], 
+            "llm": deps['llm'], 
+            "prolog_query": deps['prolog_query'], 
+            "db": deps['db']
+        }
+    )
+    api.add_resource(HypothesisAPI, "/hypothesis", 
+        resource_class_kwargs={
+            "enrichr": deps['enrichr'], 
+            "prolog_query": deps['prolog_query'], 
+            "llm": deps['llm'], 
+            "db": deps['db']
+        }
+    )
+    api.add_resource(ChatAPI, "/chat", 
+        resource_class_kwargs={"llm": deps['llm']}
+    )
 
     # Initialize socket handlers 
-    socket_namespace = init_socket_handlers(db)
+    socket_namespace = init_socket_handlers(deps['db'])
     logger.info(f"Socket namespace initialized: {socket_namespace}")
     print(f"Socket namespace initialized: {socket_namespace}")
     
@@ -88,14 +100,29 @@ def setup_api(args):
 
 
 def main():
-    args = parse_arguments()
-    app, socketio = setup_api(args)
+    """Main Flask application entry point"""
+    # Parse Flask-specific arguments
+    args = parse_flask_arguments()
+    
+    # Create configuration from arguments
+    config = Config.from_args(args)
+    
+    # Validate configuration
+    if not all([config.ensembl_hgnc_map, config.hgnc_ensembl_map, config.go_map]):
+        raise ValueError("Missing required configuration: ensembl_hgnc_map, hgnc_ensembl_map, go_map")
+    
+    print(f"🚀 Starting Flask application...")
+    print(f"   - Host: {config.host}:{config.port}")
 
+    
+    # Setup application with configuration
+    app, socketio = setup_api(config)
 
+    # Start the application
     socketio.run(
         app, 
-        host=args.host, 
-        port=args.port, 
+        host=config.host, 
+        port=config.port, 
         debug=True,
         use_reloader=False,
         allow_unsafe_werkzeug=True
