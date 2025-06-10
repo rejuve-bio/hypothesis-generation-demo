@@ -1,7 +1,7 @@
-FROM python:3.11-slim
+FROM base-image:latest
 
-# Create and set the working directory
-WORKDIR /app
+# # Create and set the working directory
+# WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -13,8 +13,17 @@ RUN apt-get update && apt-get install -y \
 RUN pip install --upgrade pip \
     && pip install -U prefect
 
-# Expose port 4200
+# Install OpenCravat
+RUN pip install open-cravat
+
+# Install the annotators
+RUN oc module install-base && oc module install clinvar cosmic --yes
+
+# Copy application code (needed for workers to execute flows)
+COPY . /app
+
+# Expose port 4200 for Prefect server
 EXPOSE 4200
 
-# Define the entry point for your application
-CMD ["prefect", "server", "start"]
+# Default to starting Prefect server, but can be overridden for workers
+CMD ["prefect", "server", "start", "--host", "0.0.0.0"]

@@ -1,6 +1,14 @@
 version: '3.8'
 
 services:
+
+  base-image:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    image: base-image:latest
+    command: /bin/true  
+
   mongo:
     image: mongo:latest
     ports:
@@ -18,20 +26,26 @@ services:
       - "4242:4242"
     volumes:
       - ./pl:/app/pl
-      - /mnt/hdd_2/abdu/prolog_out_v2:/mnt/prolog_out_v2
-      - /mnt/hdd_2/abdu/prolog_out_v3:/mnt/prolog_out_v3
+      - /mnt/hdd_1/abdu/prolog_out_v2:/mnt/prolog_out_v2
+      - /mnt/hdd_1/abdu/prolog_out_v3:/mnt/prolog_out_v3
     networks:
       - app_network
 
   flask-app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "5006:5000"
+      - "5009:5000"
     environment:
       - FLASK_ENV=development
+      - PREFECT_API_URL=http://prefect-service:4200/api
+    env_file:
+      - .env
     volumes:
       - .:/app
     depends_on:
+      - base-image
       - mongo
       - prolog-service
       - prefect-service
@@ -50,10 +64,46 @@ services:
     ports:
       - "4201:4200"
     volumes:
+      - .:/app
       - prefect-data:/root/.prefect 
     environment:
-      - PREFECT_SERVER_PORT=4200
-    command: prefect server start
+      - PREFECT_API_URL=http://localhost:4200/api
+    env_file:
+      - .env
+    depends_on:
+      base-image:
+        condition: service_started
+    command: > 
+      sh -c "prefect server start --host 0.0.0.0"
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4200/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  
+  prefect-deployment:
+    build:
+      context: .
+      dockerfile: Dockerfile.prefect
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    command: >
+      sh -c "
+      python deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl 
+      --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl 
+      --go-map /app/data/go_map.pkl 
+      --swipl-host prolog-service 
+      --swipl-port 4242
+      "
+    environment:
+    - PREFECT_API_URL=http://prefect-service:4200/api
+    depends_on:
+      prefect-service:
+        condition: service_healthy
     networks:
       - app_network
 
