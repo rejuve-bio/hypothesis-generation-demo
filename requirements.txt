@@ -20,6 +20,6 @@ prefect
 flask-socketio
 eventlet
 Flask-JWT-Extended==4.6.0
-python-dotenv
 loguru
 requests
+websocket-client

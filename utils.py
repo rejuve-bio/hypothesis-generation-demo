@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from socketio_instance import socketio
 from status_tracker import status_tracker, TaskState
+import socketio as sio
+import os
 
 
 def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, next_task=None, error=None):
@@ -48,9 +50,28 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         update["error"] = error
 
     try:
-        socketio.emit('task_update', update, room=room)
-        print(f"Emitted task update to room {room}")
+        # Check if we're in Flask context (socketio server available)
+        if socketio and hasattr(socketio, 'server') and socketio.server:
+            socketio.emit('task_update', update, room=room)
+            print(f"Emitted task update to room {room}")
+            socketio.sleep(0)
+        else:
+            # We're in Prefect context - use SocketIO client to connect to Flask server
+            flask_host = os.getenv('FLASK_HOST', 'flask-app')
+            flask_port = os.getenv('FLASK_PORT', '5000')
+            flask_url = f'http://{flask_host}:{flask_port}'
+            
+            # Create a client connection to Flask app
+            client = sio.SimpleClient()
+            try:
+                client.connect(flask_url, transports=['websocket', 'polling'])
+                client.emit('task_update', update, room=room)
+                print(f"Emitted task update to Flask server at {flask_url}")
+                client.disconnect()
+            except Exception as client_e:
+                print(f"Failed to connect to Flask SocketIO server: {client_e}")
+                # Fall back to just updating status without emission
+                print(f"Status update saved locally: {update['task']} - {update['state']}")
+                
     except Exception as e:
         print(f"Error emitting task update: {e}")
-        
-    socketio.sleep(0)
