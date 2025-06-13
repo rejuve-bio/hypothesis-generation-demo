@@ -1,9 +1,7 @@
 # Use an official Python runtime as a parent image
-# FROM python:3.10
-FROM base-image:latest
+FROM python:3.10
 
-
-# Install Rust
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
@@ -11,14 +9,19 @@ RUN apt-get update && apt-get install -y \
     unzip \
     libgsl-dev \  
     libblas-dev \ 
-    liblapack-dev 
+    liblapack-dev && \
+    apt-get clean
+
+# Install the outlines library
+RUN pip install --upgrade pip setuptools wheel
 
 # Install rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-
+# Set the working directory in the container
+WORKDIR /app
 
 # Install plink
 RUN mkdir -p /opt/plink && \
@@ -38,11 +41,15 @@ RUN Rscript -e "install.packages(c('BiocManager', 'dplyr', 'readr', 'data.table'
     Rscript -e "BiocManager::install('susieR', ask=FALSE, update=FALSE)" && \
     Rscript -e "devtools::install_github('oyhel/vautils')"
     
+# Install the Python dependencies
+COPY requirements.txt /app/requirements.txt
+RUN pip install -r requirements.txt
 
 # Make sure rpy2 is installed
 RUN pip install rpy2
 
 # Copy the current directory contents into the container
 COPY . /app
+
 # Expose port 5000 for Flask
 EXPOSE 5000

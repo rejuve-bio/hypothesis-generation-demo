@@ -3,7 +3,7 @@ outlines
 Flask
 flask-restful
 gseapy
-faiss-gpu==1.7.2
+faiss-gpu
 python-dotenv
 PyJWT==2.9.0
 pymongo
@@ -24,7 +24,6 @@ Flask-JWT-Extended==4.6.0
 loguru
 requests
 gwaslab
-rpy2
 cyvcf2
 polars
 websocket-client
