@@ -8,6 +8,7 @@ from logging_config import setup_logging
 from api import (
     EnrichAPI, 
     HypothesisAPI, 
+    BulkHypothesisDeleteAPI,
     ChatAPI, 
     init_socket_handlers
 )
@@ -90,6 +91,9 @@ def setup_api(config):
     )
     api.add_resource(ChatAPI, "/chat", 
         resource_class_kwargs={"llm": deps['llm']}
+    )
+    api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete",
+        resource_class_kwargs={"db": deps['db']}
     )
 
     # Initialize socket handlers 

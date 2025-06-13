@@ -1,6 +1,7 @@
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson.objectid import ObjectId
+from datetime import datetime, timezone
 
 class Database:
     def __init__(self, uri, db_name):
@@ -136,6 +137,40 @@ class Database:
         if result.deleted_count > 0:
             return {'message': 'Hypothesis deleted'}, 200
         return {'message': 'Hypothesis not found or not authorized'}, 404
+    
+    def bulk_delete_hypotheses(self, user_id, hypothesis_ids):
+        """
+        Delete multiple hypotheses by their IDs for a specific user.
+        """
+        if not hypothesis_ids or not isinstance(hypothesis_ids, list):
+            return {'message': 'Invalid hypothesis_ids format. Expected a non-empty list.'}, 400
+
+
+        # Bulk delete
+        bulk_result = self.hypothesis_collection.delete_many({
+            'id': {'$in': hypothesis_ids}, 
+            'user_id': user_id
+        })
+
+        # Check if all were deleted
+        if bulk_result.deleted_count == len(hypothesis_ids):
+            return {
+                'message': f'All {bulk_result.deleted_count} hypotheses deleted successfully',
+                'deleted_count': bulk_result.deleted_count,
+                'successful': hypothesis_ids,
+                'failed': []
+            }, 200
+
+        # Identify which ones failed
+        deleted_ids = set(hypothesis_ids[:bulk_result.deleted_count])  # Approximate success count
+        failed_ids = list(set(hypothesis_ids) - deleted_ids)
+
+        return {
+            'message': f"{bulk_result.deleted_count} hypotheses deleted successfully, {len(failed_ids)} failed",
+            'deleted_count': bulk_result.deleted_count,
+            'successful': list(deleted_ids),
+            'failed': [{'id': h_id, 'reason': 'Not found or not authorized'} for h_id in failed_ids]
+        }, 207 if deleted_ids else 404  # Use 207 for partial success
     
     
     def delete_enrich(self, user_id, enrich_id):

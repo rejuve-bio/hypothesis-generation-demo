@@ -215,6 +215,40 @@ class HypothesisAPI(Resource):
             return self.db.delete_hypothesis(current_user_id, hypothesis_id)
         return {"message": "Hypothesis ID is required"}, 400
 
+class BulkHypothesisDeleteAPI(Resource):
+    def __init__(self, db):
+        self.db = db
+
+    @token_required
+    def post(self, current_user_id):
+        try:
+            data = request.get_json()
+
+            if not data or 'hypothesis_ids' not in data:
+                logger.warning(f"Bulk delete request missing hypothesis_ids from user {current_user_id}")
+                return {"message": "hypothesis_ids is required in request body"}, 400
+
+            hypothesis_ids = data.get('hypothesis_ids')
+
+            # Validate the list of IDs
+            if not isinstance(hypothesis_ids, list):
+                logger.warning(f"Invalid hypothesis_ids format from user {current_user_id}: expected list, got {type(hypothesis_ids)}")
+                return {"message": "hypothesis_ids must be a list"}, 400
+
+            if not hypothesis_ids:
+                logger.warning(f"Empty hypothesis_ids list from user {current_user_id}")
+                return {"message": "hypothesis_ids list cannot be empty"}, 400
+
+        # Call the bulk delete method
+        result, status_code = self.db.bulk_delete_hypotheses(current_user_id, hypothesis_ids)
+
+            logger.info(f"Bulk delete completed for user {current_user_id}: {result.get('deleted_count', 0)} deleted")
+            return result, status_code
+
+        except Exception as e:
+            logger.error(f"Error in bulk delete for user {current_user_id}: {str(e)}")
+            return {"message": "Internal server error during bulk delete"}, 500
+
 class ChatAPI(Resource):
     def __init__(self, llm):
         self.llm = llm
