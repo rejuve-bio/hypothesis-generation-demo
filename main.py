@@ -7,22 +7,15 @@ import werkzeug
 from config import Config, create_dependencies
 from logging_config import setup_logging
 from api import (
-    AnalysisAPI,
-    AnalysisFinemappingAPI,
     EnrichAPI,
-    FileUploadAPI, 
     HypothesisAPI, 
     BulkHypothesisDeleteAPI,
     ChatAPI, 
-    BulkHypothesisDeleteAPI,
     init_socket_handlers,
-    # Import new v2 APIs
     ProjectsAPI,
-    FileUploadAPIV2,
-    AnalysisAPIV2,
-    AnalysisFinemappingAPIV2,
-    EnrichAPIV2,
-    HypothesisAPIV2,
+    FileUploadAPI,
+    AnalysisAPI,
+    AnalysisFinemappingAPI,
 )
 from dotenv import load_dotenv
 import os
@@ -113,28 +106,17 @@ def setup_api(config):
             "db": deps['db']
         }
     )
-    api.add_resource(ChatAPI, "/chat", 
-        resource_class_kwargs={"llm": deps['llm']}
-    )
-    api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete",
-        resource_class_kwargs={"db": deps['db']}
-    )
-    api.add_resource(AnalysisAPI, "/analysis", resource_class_kwargs={"db": db})
-    api.add_resource(AnalysisFinemappingAPI, "/analysis/finemapping", resource_class_kwargs={"db": db})
-    api.add_resource(FileUploadAPI,'/api/upload',resource_class_kwargs={'db': db})
-
-    # V2 API Routes for testing project-based workflow
-    api.add_resource(ProjectsAPI, "/v2/projects", resource_class_kwargs={"db": db})
-    api.add_resource(FileUploadAPIV2, "/v2/upload", resource_class_kwargs={"db": db})
-    api.add_resource(AnalysisAPIV2, "/v2/analysis", resource_class_kwargs={"db": db})
-    api.add_resource(AnalysisFinemappingAPIV2, "/v2/analysis/finemapping", resource_class_kwargs={"db": db})
-    api.add_resource(HypothesisAPIV2, "/v2/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
-    api.add_resource(EnrichAPIV2, "/v2/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query, "db": db})
+    api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": deps['llm']})
+    api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete",resource_class_kwargs={"db": deps['db']})
+    # project-based workflow
+    api.add_resource(ProjectsAPI, "/projects", resource_class_kwargs={"db": deps['db']})
+    api.add_resource(FileUploadAPI, "/upload", resource_class_kwargs={"db": deps['db']})
+    api.add_resource(AnalysisAPI, "/analysis", resource_class_kwargs={"db": deps['db']})
+    api.add_resource(AnalysisFinemappingAPI, "/analysis/finemapping", resource_class_kwargs={"db": deps['db']})
 
     # Initialize socket handlers 
     socket_namespace = init_socket_handlers(deps['db'])
     logger.info(f"Socket namespace initialized: {socket_namespace}")
-    print(f"Socket namespace initialized: {socket_namespace}")
     
     return app, socketio
 
