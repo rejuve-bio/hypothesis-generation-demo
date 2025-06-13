@@ -100,7 +100,8 @@ except ImportError as e:
 
 ### Enrich Tasks
 @task(retries=2, cache_policy=None)
-def check_enrich(db, current_user_id, phenotype, variant, hypothesis_id):
+def check_enrich(db, current_user_id, credible_set_id, variant, phenotype, hypothesis_id):
+    """Check if enrichment exists for credible set, variant, and phenotype"""
     try: 
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -284,9 +285,10 @@ def retry_get_relevant_gene_proof(prolog_query, variant, causal_gene, hypothesis
             error=str(e)          
         )
         raise
-
+        
 @task(cache_policy=None)
-def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal_graph, current_user_id, hypothesis_id):
+def create_enrich_data(db, user_id, project_id, credible_set_id, variant, phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id):
+    """Create enrichment data with project and credible set references"""
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -294,23 +296,17 @@ def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal
             state=TaskState.STARTED
         )
 
-        logger.info("Creating enrich data in the database")
-        enrich_data = {
-            "id": str(uuid4()),
-            "created_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
-            "variant": variant,
-            "phenotype": phenotype,
-            "causal_gene": causal_gene,
-            "GO_terms": relevant_gos,
-            "causal_graph": causal_graph
-        }
-        db.create_enrich(current_user_id, enrich_data)
+        logger.info("Creating enrich data in the database with project context")
+        enrich_id = db.create_enrich(
+            user_id, project_id, credible_set_id, variant, 
+            phenotype, causal_gene, relevant_gos, causal_graph
+        )
 
         emit_task_update(
             hypothesis_id=hypothesis_id,
             task_name="Creating enrich data",
             state=TaskState.COMPLETED,
-            details={"enrichment_id": enrich_data["id"]}
+            details={"enrichment_id": enrich_id}
         )
         
         hypothesis_history = status_tracker.get_history(hypothesis_id)
@@ -320,7 +316,7 @@ def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal
             }
         db.update_hypothesis(hypothesis_id, hypothesis_data)
 
-        return enrich_data["id"]
+        return enrich_id
     except Exception as e:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -400,8 +396,7 @@ def get_enrich(db, current_user_id, enrich_id, hypothesis_id):
         raise
 
 @task(retries=2)
-# def get_gene_ids(prolog_query, gene_names, hypothesis_id):
-def get_gene_ids(name, hypothesis_id):
+def get_gene_ids(prolog_query, gene_names, hypothesis_id):
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -574,11 +569,11 @@ def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, 
             state=TaskState.COMPLETED,
             details={
                 "status": "completed",
-                "result": hypothesis_data  # Include the complete result
+                "result": hypothesis_data
             }
         )
         hypothesis_history = status_tracker.get_history(hypothesis_id)
-        print("Updating hypothesis in the database...")
+        logger.info("Updating hypothesis in the database...")
         hypothesis_data = {
                 "task_history": hypothesis_history,
             }
@@ -606,43 +601,43 @@ def load_gwas_data(file_path):
     # Check file size
     file_size = os.path.getsize(file_path)
     file_size_mb = file_size / (1024*1024)
-    print(f"[GWAS] Processing GWAS file of size: {file_size_mb:.2f} MB")
+    logger.info(f"[GWAS] Processing GWAS file of size: {file_size_mb:.2f} MB")
     
     # Set chunk size based on file size - larger chunks for smaller files
-    if file_size > 500 * 1024 * 1024:  # For files > 500MB
-        chunk_size = 100_000  # Smaller chunks for very large files
-    elif file_size > 100 * 1024 * 1024:  # For files > 100MB
+    if file_size > 500 * 1024 * 1024: 
+        chunk_size = 100_000 
+    elif file_size > 100 * 1024 * 1024:
         chunk_size = 250_000
     else:
-        chunk_size = 500_000  # Larger chunks for smaller files
+        chunk_size = 500_000  
     
     start_time = datetime.now()
     try:
         # For smaller files, read all at once to avoid overhead
         if file_size < 50 * 1024 * 1024:  # < 50MB
-            print(f"[GWAS] Small file detected, reading all at once")
+            logger.info(f"[GWAS] Small file detected, reading all at once")
             if is_gzipped:
                 with gzip.open(file_path, 'rt') as f:
                     df = pd.read_csv(f, sep='\t')
-                    print(f"[GWAS] Loaded {len(df)} rows from gzipped file")
+                    logger.info(f"[GWAS] Loaded {len(df)} rows from gzipped file")
                     return df
             else:
                 df = pd.read_csv(file_path, sep='\t')
-                print(f"[GWAS] Loaded {len(df)} rows from uncompressed file")
+                logger.info(f"[GWAS] Loaded {len(df)} rows from uncompressed file")
                 return df
         
         # For larger files, use chunking
         chunks = []
         total_rows = 0
         
-        print(f"[GWAS] Large file detected, using chunked reading with {chunk_size} rows per chunk")
+        logger.info(f"[GWAS] Large file detected, using chunked reading with {chunk_size} rows per chunk")
         
         if is_gzipped:
             # Create TextFileReader object for chunked reading from gzipped file
             with gzip.open(file_path, 'rt') as f:
                 # Get initial chunk to determine column types for optimization
                 first_chunk = pd.read_csv(f, sep='\t', nrows=1000)
-                print(f"[GWAS] Read first chunk with {len(first_chunk)} rows to determine column types")
+                logger.info(f"[GWAS] Read first chunk with {len(first_chunk)} rows to determine column types")
                 
                 # Reopen the file and read in chunks with optimized dtypes
                 f.seek(0)
@@ -655,11 +650,11 @@ def load_gwas_data(file_path):
                     # Print progress every 5 chunks
                     if (i+1) % 5 == 0:
                         elapsed = (datetime.now() - start_time).total_seconds()
-                        print(f"[GWAS] Progress: loaded {i+1} chunks ({total_rows} rows) in {elapsed:.1f} seconds")
+                        logger.info(f"[GWAS] Progress: loaded {i+1} chunks ({total_rows} rows) in {elapsed:.1f} seconds")
         else:
             # Get initial chunk to determine column types for optimization
             first_chunk = pd.read_csv(file_path, sep='\t', nrows=1000)
-            print(f"[GWAS] Read first chunk with {len(first_chunk)} rows to determine column types")
+            logger.info(f"[GWAS] Read first chunk with {len(first_chunk)} rows to determine column types")
             
             # Read in chunks with optimized dtypes
             chunk_reader = pd.read_csv(file_path, sep='\t', chunksize=chunk_size, dtype=first_chunk.dtypes.to_dict())
@@ -671,7 +666,7 @@ def load_gwas_data(file_path):
                 # Print progress every 5 chunks
                 if (i+1) % 5 == 0:
                     elapsed = (datetime.now() - start_time).total_seconds()
-                    print(f"[GWAS] Progress: loaded {i+1} chunks ({total_rows} rows) in {elapsed:.1f} seconds")
+                    logger.info(f"[GWAS] Progress: loaded {i+1} chunks ({total_rows} rows) in {elapsed:.1f} seconds")
         
         # Combine all chunks
         result_df = pd.concat(chunks, ignore_index=True)
@@ -680,13 +675,13 @@ def load_gwas_data(file_path):
         total_elapsed = (datetime.now() - start_time).total_seconds()
         memory_usage = result_df.memory_usage(deep=True).sum() / (1024*1024)
         
-        print(f"[GWAS] Completed loading {len(result_df)} rows in {total_elapsed:.1f} seconds")
-        print(f"[GWAS] Final DataFrame size: {memory_usage:.2f} MB in memory")
+        logger.info(f"[GWAS] Completed loading {len(result_df)} rows in {total_elapsed:.1f} seconds")
+        logger.info(f"[GWAS] Final DataFrame size: {memory_usage:.2f} MB in memory")
         
         return result_df
     
     except Exception as e:
-        print(f"[GWAS] Error loading GWAS data: {str(e)}")
+        logger.info(f"[GWAS] Error loading GWAS data: {str(e)}")
         raise
 
 @task(cache_policy=None)
@@ -695,13 +690,13 @@ def preprocess_gwas_data(gwas_data_df):
     Preprocess GWAS data by splitting variant info and renaming columns.
     Optimized to handle large dataframes efficiently.
     """
-    print(f"[GWAS] Preprocessing GWAS data with shape: {gwas_data_df.shape}")
+    logger.info(f"[GWAS] Preprocessing GWAS data with shape: {gwas_data_df.shape}")
     start_time = datetime.now()
     
     try:
         # Use vectorized string operations for better performance
         if 'variant' in gwas_data_df.columns:
-            print(f"[GWAS] Splitting variant field into components")
+            logger.info(f"[GWAS] Splitting variant field into components")
             # Split variant field into components
             variant_parts = gwas_data_df['variant'].str.split(':', expand=True)
             
@@ -711,63 +706,63 @@ def preprocess_gwas_data(gwas_data_df):
                 gwas_data_df['POS'] = variant_parts[1]
                 gwas_data_df['A2'] = variant_parts[2]
                 gwas_data_df['A1'] = variant_parts[3]
-                print(f"[GWAS] Successfully extracted CHR, POS, A1, A2 columns")
+                logger.info(f"[GWAS] Successfully extracted CHR, POS, A1, A2 columns")
             else:
                 err_msg = f"Variant field doesn't have expected format. Found {variant_parts.shape[1]} parts instead of 4+"
-                print(f"[GWAS] Error: {err_msg}")
+                logger.info(f"[GWAS] Error: {err_msg}")
                 raise ValueError(err_msg)
 
             # Convert POS to integer - use pd.to_numeric with downcast for memory efficiency
-            print(f"[GWAS] Converting POS to integer values")
+            logger.info(f"[GWAS] Converting POS to integer values")
             gwas_data_df['POS'] = pd.to_numeric(gwas_data_df['POS'], errors='coerce', downcast='integer')
             
             # Rename columns
-            print(f"[GWAS] Renaming columns")
+            logger.info(f"[GWAS] Renaming columns")
             gwas_data_df = gwas_data_df.rename(columns={'variant': 'SNPID', 'pval': 'P'})
         else:
             # Handle case where columns might have different naming
-            print("[GWAS] Warning: 'variant' column not found in GWAS data. Assuming data is already preprocessed.")
+            logger.info("[GWAS] Warning: 'variant' column not found in GWAS data. Assuming data is already preprocessed.")
         
         # Calculate and print memory statistics    
         memory_usage = gwas_data_df.memory_usage(deep=True).sum() / (1024*1024)
         elapsed_time = (datetime.now() - start_time).total_seconds()
-        print(f"[GWAS] Preprocessing completed in {elapsed_time:.2f} seconds")
-        print(f"[GWAS] Preprocessed data shape: {gwas_data_df.shape}, memory usage: {memory_usage:.2f} MB")
+        logger.info(f"[GWAS] Preprocessing completed in {elapsed_time:.2f} seconds")
+        logger.info(f"[GWAS] Preprocessed data shape: {gwas_data_df.shape}, memory usage: {memory_usage:.2f} MB")
             
         return gwas_data_df
     
     except Exception as e:
-        print(f"[GWAS] Error preprocessing GWAS data: {str(e)}")
+        logger.info(f"[GWAS] Error preprocessing GWAS data: {str(e)}")
         raise
 
 @task(cache_policy=None)
 def filter_significant_snps(gwas_data_df, output_dir, maf_threshold=0.05, p_threshold=5e-8):
     """Filter significant SNPs based on MAF and p-value thresholds."""
     start_time = datetime.now()
-    print(f"[GWAS] Filtering significant SNPs (MAF > {maf_threshold}, p < {p_threshold})")
-    print(f"[GWAS] Input data has {len(gwas_data_df)} rows")
+    logger.info(f"[GWAS] Filtering significant SNPs (MAF > {maf_threshold}, p < {p_threshold})")
+    logger.info(f"[GWAS] Input data has {len(gwas_data_df)} rows")
     
     filtered_dir = os.path.join(output_dir, "processed_raw_data")
     os.makedirs(filtered_dir, exist_ok=True)
     output_path = os.path.join(filtered_dir, "significant_snps.csv")
 
     # Apply filters
-    print(f"[GWAS] Applying MAF filter > {maf_threshold}")
+    logger.info(f"[GWAS] Applying MAF filter > {maf_threshold}")
     minor_af_filtered_df = gwas_data_df[gwas_data_df['minor_AF'] > maf_threshold]
-    print(f"[GWAS] After MAF filter: {len(minor_af_filtered_df)} rows")
+    logger.info(f"[GWAS] After MAF filter: {len(minor_af_filtered_df)} rows")
     
-    print(f"[GWAS] Applying p-value filter < {p_threshold}")
+    logger.info(f"[GWAS] Applying p-value filter < {p_threshold}")
     significant_snp_df = minor_af_filtered_df[minor_af_filtered_df['P'] <= p_threshold]
-    print(f"[GWAS] After p-value filter: {len(significant_snp_df)} rows")
+    logger.info(f"[GWAS] After p-value filter: {len(significant_snp_df)} rows")
     
     # Remove chromosome X SNPs
-    print(f"[GWAS] Removing chromosome X SNPs")
+    logger.info(f"[GWAS] Removing chromosome X SNPs")
     x_snps_count = significant_snp_df['SNPID'].str.startswith('X:').sum()
     significant_snp_df = significant_snp_df[~significant_snp_df['SNPID'].str.startswith('X:')]
-    print(f"[GWAS] Removed {x_snps_count} X chromosome SNPs")
+    logger.info(f"[GWAS] Removed {x_snps_count} X chromosome SNPs")
     
-    print(f"[GWAS] Final significant SNPs count: {len(significant_snp_df)}")
-    print(f"[GWAS] Saving significant SNPs to {output_path}")
+    logger.info(f"[GWAS] Final significant SNPs count: {len(significant_snp_df)}")
+    logger.info(f"[GWAS] Saving significant SNPs to {output_path}")
 
     significant_snp_df.to_csv(output_path, index=False)
     
@@ -776,8 +771,8 @@ def filter_significant_snps(gwas_data_df, output_dir, maf_threshold=0.05, p_thre
     chr_summary = ", ".join([f"Chr{k}: {v}" for k, v in sorted(chromosomes.items())])
     elapsed_time = (datetime.now() - start_time).total_seconds()
     
-    print(f"[GWAS] Filter completed in {elapsed_time:.2f} seconds")
-    print(f"[GWAS] Chromosomes distribution: {chr_summary}")
+    logger.info(f"[GWAS] Filter completed in {elapsed_time:.2f} seconds")
+    logger.info(f"[GWAS] Chromosomes distribution: {chr_summary}")
     
     return significant_snp_df
 
@@ -809,35 +804,9 @@ def prepare_cojo_file(significant_snp_df, output_dir):
     # Save to file with space separator
     cojo_ready_df.to_csv(cojo_file_path, sep=" ", index=False)
 
-    print("COJO ready file: ", cojo_ready_df)
+    logger.info("COJO ready file: ", cojo_ready_df)
     
     return cojo_file_path
-
-@task(cache_policy=None)
-def extract_region_snps(significant_snp_df, variant_position, window_size=500000, chromosome: Optional[str] = "16"):
-    """Extract SNPs within a window around a variant position."""
-    # Calculate window boundaries
-    start_pos = variant_position - window_size
-    end_pos = variant_position + window_size
-
-    # Filter SNPs in the region
-    if chromosome is not None:
-        region_snp_df = significant_snp_df[
-            (significant_snp_df['CHR'] == chromosome) & 
-            (significant_snp_df['POS'] >= start_pos) & 
-            (significant_snp_df['POS'] <= end_pos)
-        ]
-    else:
-        region_snp_df = significant_snp_df[
-            (significant_snp_df['POS'] >= start_pos) & 
-            (significant_snp_df['POS'] <= end_pos)
-        ]
-    
-    # Add log-transformed p-value column
-    region_snp_df = region_snp_df.copy()
-    region_snp_df["log_pvalue"] = -np.log10(region_snp_df["P"])
-    
-    return region_snp_df
 
 @task
 def generate_snplist_file(gwas_snps, output_dir):
@@ -860,56 +829,12 @@ def generate_snplist_file(gwas_snps, output_dir):
     return output_path
 
 @task
-def run_plink_commands(
-    plink_binary_path: str,
-    snplist_path: str,
-    output_prefix: str
-) -> Dict[str, str]:
-    """
-    Run PLINK commands to generate LD matrices.
-    Returns:
-        Dictionary with paths to output files
-    """
-    # Create output directory if it doesn't exist
-    os.makedirs(os.path.dirname(output_prefix), exist_ok=True)
-    
-    # Build PLINK command for r matrix
-    r_command = (
-        f"plink --bfile {plink_binary_path} "
-        f"--keep-allele-order --r square "
-        f"--extract {snplist_path} "
-        f"--out {output_prefix}/test_sig_locus_mt_r"
-    )
-    
-    # Build PLINK command for r² matrix
-    r2_command = (
-        f"plink --bfile {plink_binary_path} "
-        f"--keep-allele-order --r2 square "
-        f"--extract {snplist_path} "
-        f"--out {output_prefix}/test_sig_locus_mt_r2"
-    )
-    
-    # Execute commands
-    r_result = os.system(r_command)
-    r2_result = os.system(r2_command)
-    
-    # Check for errors
-    if r_result != 0 or r2_result != 0:
-        raise RuntimeError(f"PLINK commands failed: r_result={r_result}, r2_result={r2_result}")
-    
-    # Return paths to output files
-    return {
-        "r_ld": f"{output_prefix}_r.ld",
-        "r2_ld": f"{output_prefix}_r2.ld"
-    }
-
-@task
 def run_command(cmd: str) -> subprocess.CompletedProcess:
     """Execute a shell command and handle errors."""
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"Error running command: {cmd}")
-        print(result.stderr)
+        logger.error(f"Error running command: {cmd}")
+        logger.error(result.stderr)
         raise Exception(f"Command failed with exit code {result.returncode}")
     return result
 
@@ -919,7 +844,8 @@ def download_and_prepare_vcfs(output_dir, population, sample_panel_url) -> Dict[
     Download VCF files for all chromosomes and prepare updated VCF files with proper variant IDs.
     """
     output_dirt = "./data/susie"
-    # Use the passed output_dir instead of hardcoded path
+    os.makedirs(output_dirt, exist_ok=True)
+
     vcf_dir = os.path.join(output_dirt, "vcf")
     updated_vcf_dir = os.path.join(output_dirt, "updated_vcf")
     gwas_dir = os.path.join(output_dir, "gwas")
@@ -952,7 +878,7 @@ def download_and_prepare_vcfs(output_dir, population, sample_panel_url) -> Dict[
         vcf_file = os.path.join(vcf_dir, f"ALL.chr{chrom_str}.vcf.gz")
         updated_vcf_file = os.path.join(updated_vcf_dir, f"ALL.chr{chrom_str}.updated.vcf.gz")
         
-        print(f"Processing chromosome {chrom_str}...")
+        logger.info(f"Processing chromosome {chrom_str}...")
         
         # Download VCF if it doesn't exist
         if not os.path.exists(vcf_file):
@@ -991,9 +917,7 @@ def generate_binary_from_vcf(
     plink_binary_dir = os.path.join(output_dir, "plink_binary")
     os.makedirs(plink_binary_dir, exist_ok=True)
 
-    mounted_dir = "/app/data/external_data/susie"
-    # Use the samples file from the project's output directory
-    # samples_file = os.path.join(output_dir, f"{population.lower()}_samples.txt")
+    samples_file = os.path.join(output_dir, f"{population.lower()}_samples.txt")
     
     binary_files = {}
     for chrom, files in vcf_files.items():
@@ -1004,7 +928,7 @@ def generate_binary_from_vcf(
         if not os.path.exists(f"{plink_prefix}.bed"):
             run_command(
                 f"plink --vcf {updated_vcf_file} "
-                f"--keep {mounted_dir}/{population.lower()}_samples.txt "
+                f"--keep {samples_file} "
                 f"--keep-allele-order "
                 f"--make-bed --out {plink_prefix} "
             )
@@ -1104,9 +1028,9 @@ def expand_snp_regions(cojo_results_path, significant_snp_df, output_dir, window
     """Expand regions around independent SNPs identified by COJO"""
 
     cojo_results_df = pd.read_csv(cojo_results_path, sep='\s+')
-    print("COJO results (.jma.cojo): ", cojo_results_df)
+    logger.info("COJO results (.jma.cojo): ", cojo_results_df)
 
-    print(f"Expanding regions around {len(cojo_results_df)} independent SNPs with window size {window_size}")
+    logger.info(f"Expanding regions around {len(cojo_results_df)} independent SNPs with window size {window_size}")
     
     region_files = []
     expanded_dir = os.path.join(output_dir, "expanded_regionss")
@@ -1128,14 +1052,12 @@ def expand_snp_regions(cojo_results_path, significant_snp_df, output_dir, window
         df_region.to_csv(output_file, sep="\t", index=False)
         region_files.append(output_file)
         
-        print(f"Extracted {len(df_region)} SNPs for Chr{chrom} position {pos} and saved to {output_file}")
+        logger.info(f"Extracted {len(df_region)} SNPs for Chr{chrom} position {pos} and saved to {output_file}")
     
     return region_files
 
-# Alternative implementation using R scripts directly
 @task
 def mapping_cojo(cojo_results_path, output_dir):
-    """Alternative implementation using an R script string"""
     
     if not HAS_RPY2:
         logging.error("rpy2 not available for mapping_cojo_alt task")
@@ -1243,7 +1165,7 @@ def grouping_cojo(mapped_cojo_snps, expanded_region_files, output_dir):
             chrom = file_name.split('_')[0].replace('chr', '')
             pos = int(file_name.split('_')[1].replace('pos', ''))
         except (IndexError, ValueError):
-            print(f"Skipping invalid file name format: {file_name}")
+            logger.info(f"Skipping invalid file name format: {file_name}")
             continue
 
         genes_on_chr = mapped_cojo_snps[mapped_cojo_snps['chromosome'].astype(str) == chrom]
@@ -1329,15 +1251,15 @@ def calculate_ld_for_regions(region_files, plink_bfile, output_dir):
                 f"--out {r2_output_prefix}"
             )
 
-    print(f"LD calculation completed. Files saved in: {ld_dir}")
+    logger.info(f"LD calculation completed. Files saved in: {ld_dir}")
     return ld_dir
 
 @task
 def check_ld_dimensions(ld_matrix, snp_df, bim_file_path):
     
     if ld_matrix.shape[0] != len(snp_df) or ld_matrix.shape[1] != len(snp_df):
-        print("Dimension mismatch detected between LD matrix and SNP list.")
-        print(f"LD shape: {ld_matrix.shape}, SNP list length: {len(snp_df)}")
+        logger.info("Dimension mismatch detected between LD matrix and SNP list.")
+        logger.info(f"LD shape: {ld_matrix.shape}, SNP list length: {len(snp_df)}")
 
         # Load available SNP IDs from bim file (column 2 = SNP)
         available_snps = pd.read_csv(bim_file_path, sep="\t", header=None, names=["CHR", "SNP", "CM", "POS", "A1", "A2"])
@@ -1347,15 +1269,15 @@ def check_ld_dimensions(ld_matrix, snp_df, bim_file_path):
         missing_mask = ~snp_df["SNPID"].isin(available_snps_set)
         missing_snps = snp_df[missing_mask]
 
-        print(f"Missing SNPs count: {len(missing_snps)}")
+        logger.info(f"Missing SNPs count: {len(missing_snps)}")
 
         # Filter out the missing SNPs from snp_df
         filtered_snp_df = snp_df[~missing_mask].reset_index(drop=True)
 
-        print(f"Filtered SNP list length: {len(filtered_snp_df)}")
+        logger.info(f"Filtered SNP list length: {len(filtered_snp_df)}")
         return filtered_snp_df
 
-    print("No dimension mismatch. No filtering needed.")
+    logger.info("No dimension mismatch. No filtering needed.")
     return snp_df
 
 @task
@@ -1408,36 +1330,21 @@ def run_susie_analysis(snp_df, ld_matrix, n=503, L=10):
         logging.error(f"Error in SuSiE analysis: {str(e)}")
         raise
 
-@task(cache_policy=None)
-def get_credible_sets(fit, R_df, coverage=0.95, min_abs_corr=0.5):
-    """Get credible sets from SuSiE fit."""
-    if not HAS_SUSIE:
-        raise ImportError("SuSiE R package is not available. Cannot get credible sets.")
-    
-    credible_sets = susieR.susie_get_cs(
-        fit, 
-        coverage=coverage, 
-        min_abs_corr=min_abs_corr, 
-        Xcorr=R_df
-    )
-    
-    return credible_sets
-
 @task
 def formattating_credible_sets(filtered_snp, fit, R_df):
     with localconverter(default_converter + pandas2ri.converter + numpy2ri.converter):
         filtered_snp["cs"] = 0
         
         # Check if fit is valid
-        print(f"fit object type: {type(fit)}")
+        logger.info(f"fit object type: {type(fit)}")
         
         # Try to get the credible sets
         try:
             cs_result = susieR.susie_get_cs(fit, coverage=0.95, min_abs_corr=0.5, Xcorr=R_df)
-            print(f"cs_result type: {type(cs_result)}")
-            print(f"cs_result keys: {list(cs_result.keys()) if hasattr(cs_result, 'keys') else 'No keys'}")
+            logger.info(f"cs_result type: {type(cs_result)}")
+            logger.info(f"cs_result keys: {list(cs_result.keys()) if hasattr(cs_result, 'keys') else 'No keys'}")
         except Exception as e:
-            print(f"Error getting credible sets: {e}")
+            logger.info(f"Error getting credible sets: {e}")
             cs_result = None
         
         # Try to get the PIPs with proper error handling
@@ -1447,14 +1354,14 @@ def formattating_credible_sets(filtered_snp, fit, R_df):
             # Make sure pips is a numeric array
             if pips is not None:
                 pip_array = np.array(pips)
-                print(f"PIP array shape: {pip_array.shape}")
-                print(f"PIP array type: {pip_array.dtype}")
+                logger.info(f"PIP array shape: {pip_array.shape}")
+                logger.info(f"PIP array type: {pip_array.dtype}")
                 filtered_snp["pip"] = pip_array
             else:
-                print("Warning: PIPs returned None")
+                logger.info("Warning: PIPs returned None")
                 filtered_snp["pip"] = 0.0
         except Exception as e:
-            print(f"Error getting PIPs: {e}")
+            logger.info(f"Error getting PIPs: {e}")
             filtered_snp["pip"] = 0.0
         
         # Initialize as empty in case we don't have valid credible sets
@@ -1476,7 +1383,7 @@ def formattating_credible_sets(filtered_snp, fit, R_df):
                     n_cs = len(credible_sets) if hasattr(credible_sets, '__len__') else 0
                     cs_values = credible_sets
                     
-                print(f"Number of credible sets: {n_cs}")
+                logger.info(f"Number of credible sets: {n_cs}")
                 
                 # Only proceed if we have credible sets and cs_index exists
                 if n_cs > 0 and 'cs_index' in cs_result:
@@ -1507,32 +1414,17 @@ def formattating_credible_sets(filtered_snp, fit, R_df):
             
         return credible_snps
 
-### Project-based Analysis Tasks
-@task(cache_policy=None)
-def create_project_from_upload(db, user_id, filename, file_id):
-    """Create a project automatically when a GWAS file is uploaded"""
-    try:
-        # Generate project name from filename
-        project_name = f"Analysis - {filename.split('.')[0]}"
-        
-        # Create project
-        project_id = db.create_project(user_id, project_name, file_id)
-        
-        print(f"Created project {project_id} for file {filename}")
-        return project_id
-    except Exception as e:
-        print(f"Error creating project: {str(e)}")
-        raise
+### Project-based Analysis Task
 
 @task(cache_policy=None)
 def save_analysis_state_task(db, user_id, project_id, state_data):
     """Save analysis state to file system"""
     try:
         db.save_analysis_state(user_id, project_id, state_data)
-        print(f"Saved analysis state for project {project_id}")
+        logger.info(f"Saved analysis state for project {project_id}")
         return True
     except Exception as e:
-        print(f"Error saving analysis state: {str(e)}")
+        logger.info(f"Error saving analysis state: {str(e)}")
         raise
 
 @task(cache_policy=None)
@@ -1541,12 +1433,12 @@ def load_analysis_state_task(db, user_id, project_id):
     try:
         state = db.load_analysis_state(user_id, project_id)
         if state:
-            print(f"Loaded analysis state for project {project_id}")
+            logger.info(f"Loaded analysis state for project {project_id}")
         else:
-            print(f"No analysis state found for project {project_id}")
+            logger.info(f"No analysis state found for project {project_id}")
         return state
     except Exception as e:
-        print(f"Error loading analysis state: {str(e)}")
+        logger.info(f"Error loading analysis state: {str(e)}")
         raise
 
 @task(cache_policy=None)
@@ -1554,10 +1446,10 @@ def create_analysis_result_task(db, project_id, population, gene_types_identifie
     """Create analysis result entry in database"""
     try:
         analysis_id = db.create_analysis_result(project_id, population, gene_types_identified)
-        print(f"Created analysis result {analysis_id} for project {project_id}")
+        logger.info(f"Created analysis result {analysis_id} for project {project_id}")
         return analysis_id
     except Exception as e:
-        print(f"Error creating analysis result: {str(e)}")
+        logger.info(f"Error creating analysis result: {str(e)}")
         raise
 
 @task(cache_policy=None)
@@ -1568,11 +1460,11 @@ def create_credible_sets_task(db, analysis_id, credible_sets_data):
         for gene_type, data in credible_sets_data.items():
             credible_set_id = db.create_credible_set(analysis_id, gene_type, data)
             credible_set_ids[gene_type] = credible_set_id
-            print(f"Created credible set {credible_set_id} for gene type {gene_type}")
+            logger.info(f"Created credible set {credible_set_id} for gene type {gene_type}")
         
         return credible_set_ids
     except Exception as e:
-        print(f"Error creating credible sets: {str(e)}")
+        logger.info(f"Error creating credible sets: {str(e)}")
         raise
 
 @task(cache_policy=None)
@@ -1587,14 +1479,14 @@ def check_existing_credible_sets(db, analysis_id, requested_gene_types):
                 credible_set = db.get_credible_sets(analysis_id, gene_type=gene_type)
                 if credible_set:
                     existing_sets[gene_type] = credible_set[0]  # Get first result
-                    print(f"Found existing credible set for {gene_type}")
+                    logger.info(f"Found existing credible set for {gene_type}")
             else:
                 missing_gene_types.append(gene_type)
-                print(f"Need to compute credible set for {gene_type}")
+                logger.info(f"Need to compute credible set for {gene_type}")
         
         return existing_sets, missing_gene_types
     except Exception as e:
-        print(f"Error checking existing credible sets: {str(e)}")
+        logger.info(f"Error checking existing credible sets: {str(e)}")
         raise
 
 @task(cache_policy=None)
@@ -1611,146 +1503,8 @@ def get_project_analysis_path_task(db, user_id, project_id):
         os.makedirs(os.path.join(analysis_path, "expanded_regions"), exist_ok=True)
         os.makedirs(os.path.join(analysis_path, "ld"), exist_ok=True)
         
-        print(f"Project analysis path: {analysis_path}")
+        logger.info(f"Project analysis path: {analysis_path}")
         return analysis_path
     except Exception as e:
-        print(f"Error getting project analysis path: {str(e)}")
-        raise
-
-@task(cache_policy=None)
-def check_enrich_v2(db, user_id, credible_set_id, variant, phenotype, hypothesis_id):
-    """Check if enrichment exists for credible set, variant, and phenotype"""
-    try:
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Verifying existence of enrichment data",
-            state=TaskState.STARTED,
-            progress=0  
-        )
-        
-        enrich = db.get_enrich_by_credible_set(user_id, credible_set_id, variant, phenotype)
-        
-        if enrich:
-            emit_task_update(
-                hypothesis_id=hypothesis_id,
-                task_name="Verifying existence of enrichment data",
-                state=TaskState.COMPLETED,
-                progress=80,
-                details={"found": True, "enrich": enrich}
-            )
-            return enrich
-            
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Verifying existence of enrichment data",
-            state=TaskState.COMPLETED,
-            details={"found": False},
-            next_task="Getting candidate genes"
-        )
-        return None
-        
-    except Exception as e:
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Verifying existence of enrichment data",
-            state=TaskState.FAILED,
-            error=str(e)
-        )
-        raise
-
-@task(cache_policy=None)
-def create_enrich_data_v2(db, user_id, project_id, credible_set_id, variant, phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id):
-    """Create enrichment data with project and credible set references"""
-    try:
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Creating enrich data",
-            state=TaskState.STARTED
-        )
-
-        print("Creating enrich data in the database with project context")
-        enrich_id = db.create_enrich_v2(
-            user_id, project_id, credible_set_id, variant, 
-            phenotype, causal_gene, relevant_gos, causal_graph
-        )
-
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Creating enrich data",
-            state=TaskState.COMPLETED,
-            details={"enrichment_id": enrich_id}
-        )
-        
-        hypothesis_history = status_tracker.get_history(hypothesis_id)
-        print("Updating hypothesis in the database...")
-        hypothesis_data = {
-                "task_history": hypothesis_history,
-            }
-        db.update_hypothesis(hypothesis_id, hypothesis_data)
-
-        return enrich_id
-    except Exception as e:
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Creating enrich data",
-            state=TaskState.FAILED,
-            error=str(e)          
-        )
-        raise
-
-@task(cache_policy=None, retries=2)
-def create_hypothesis_v2(db, user_id, project_id, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, hypothesis_id):
-    """Create hypothesis with project reference"""
-    try:
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Generating hypothesis",
-            state=TaskState.STARTED,
-            details={"go_id": go_id}
-        )
-        
-        hypothesis_history = status_tracker.get_history(hypothesis_id)
-        print("Creating hypothesis in the database with project context...")
-        
-        # Update the existing hypothesis with the new data
-        hypothesis_data = {
-                "project_id": project_id,
-                "enrich_id": enrich_id,
-                "go_id": go_id,
-                "variant": variant_id,
-                "phenotype": phenotype,
-                "causal_gene": causal_gene,
-                "graph": causal_graph,
-                "summary": summary,
-                "biological_context": "",
-                "status": "completed",
-                "task_history": hypothesis_history,
-            }
-        db.update_hypothesis(hypothesis_id, hypothesis_data)
-
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Generating hypothesis",
-            state=TaskState.COMPLETED,
-            details={
-                "status": "completed",
-                "result": hypothesis_data
-            }
-        )
-        
-        # Update task history one more time
-        hypothesis_history = status_tracker.get_history(hypothesis_id)
-        hypothesis_data = {
-                "task_history": hypothesis_history,
-            }
-        db.update_hypothesis(hypothesis_id, hypothesis_data)
-        
-        return hypothesis_id
-    except Exception as e:
-        emit_task_update(
-            hypothesis_id=hypothesis_id,
-            task_name="Generating hypothesis",
-            state=TaskState.FAILED,
-            error=str(e)          
-        )
+        logger.info(f"Error getting project analysis path: {str(e)}")
         raise

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import os
 import json
 from uuid import uuid4
+from loguru import logger
 
 class Database:
     def __init__(self, uri, db_name):
@@ -203,8 +204,7 @@ class Database:
         result = self.credible_sets_collection.delete_one({'_id': ObjectId(credible_set_id)})
         return result.deleted_count > 0
 
-    # ==================== UPDATED ENRICHMENT METHODS ====================
-    def create_enrich_v2(self, user_id, project_id, credible_set_id, variant, phenotype, causal_gene, go_terms, causal_graph):
+    def create_enrich(self, user_id, project_id, credible_set_id, variant, phenotype, causal_gene, go_terms, causal_graph):
         """Create enrichment entry with project and credible set references"""
         enrich_data = {
             'id': str(uuid4()),
@@ -229,29 +229,6 @@ class Database:
             'variant': variant,
             'phenotype': phenotype
         })
-
-    # ==================== UPDATED HYPOTHESIS METHODS ====================
-    def create_hypothesis_v2(self, user_id, project_id, enrich_id, go_id, variant, phenotype, causal_gene, graph, summary):
-        """Create hypothesis with project reference"""
-        hypothesis_data = {
-            'id': str(uuid4()),
-            'user_id': user_id,
-            'project_id': project_id,
-            'enrich_id': enrich_id,
-            'go_id': go_id,
-            'variant': variant,
-            'phenotype': phenotype,
-            'causal_gene': causal_gene,
-            'graph': graph,
-            'summary': summary,
-            'biological_context': '',
-            'status': 'completed',
-            'task_history': [],
-            'created_at': datetime.now(timezone.utc),
-            'updated_at': datetime.now(timezone.utc)
-        }
-        result = self.hypothesis_collection.insert_one(hypothesis_data)
-        return hypothesis_data['id']
 
     def get_hypotheses_by_project(self, user_id, project_id):
         """Get all hypotheses for a project"""
@@ -288,71 +265,10 @@ class Database:
                 return json.load(f)
         return None
 
-    # ==================== CLEANUP METHODS (COMMENTED OUT) ====================
-    # def cleanup_old_analysis_states(self, days_old=14):
-    #     """Clean up analysis state files older than specified days"""
-    #     import time
-    #     cutoff_time = time.time() - (days_old * 24 * 60 * 60)
-    #     
-    #     states_dir = "data/states"
-    #     if not os.path.exists(states_dir):
-    #         return
-    #     
-    #     for user_dir in os.listdir(states_dir):
-    #         user_path = os.path.join(states_dir, user_dir)
-    #         if not os.path.isdir(user_path):
-    #             continue
-    #             
-    #         for project_dir in os.listdir(user_path):
-    #             project_path = os.path.join(user_path, project_dir)
-    #             if not os.path.isdir(project_path):
-    #                 continue
-    #                 
-    #             state_file = os.path.join(project_path, "analysis_state.json")
-    #             if os.path.exists(state_file):
-    #                 if os.path.getmtime(state_file) < cutoff_time:
-    #                     os.remove(state_file)
-    #                     # Remove empty directories
-    #                     try:
-    #                         os.rmdir(project_path)
-    #                         os.rmdir(user_path)
-    #                     except OSError:
-    #                         pass  # Directory not empty
-
-    # def cleanup_old_project_files(self, days_old=14):
-    #     """Clean up project analysis files older than specified days"""
-    #     import time
-    #     cutoff_time = time.time() - (days_old * 24 * 60 * 60)
-    #     
-    #     projects_dir = "data/projects"
-    #     if not os.path.exists(projects_dir):
-    #         return
-    #     
-    #     for user_dir in os.listdir(projects_dir):
-    #         user_path = os.path.join(projects_dir, user_dir)
-    #         if not os.path.isdir(user_path):
-    #             continue
-    #             
-    #         for project_dir in os.listdir(user_path):
-    #             project_path = os.path.join(user_path, project_dir)
-    #             if not os.path.isdir(project_path):
-    #                 continue
-    #                 
-    #             # Check if project is older than cutoff
-    #             if os.path.getmtime(project_path) < cutoff_time:
-    #                 import shutil
-    #                 shutil.rmtree(project_path)
-
-    # ==================== EXISTING METHODS (KEPT FOR BACKWARD COMPATIBILITY) ====================
     def create_hypothesis(self, user_id, data):
         data['user_id'] = user_id
         result = self.hypothesis_collection.insert_one(data)
         return {'message': 'Hypothesis created', 'id': str(result.inserted_id)}, 201
-    
-    def create_enrich(self, user_id, data):
-        data['user_id'] = user_id
-        result = self.enrich_collection.insert_one(data)
-        return {'message': 'Enrichment created', 'id': str(result.inserted_id)}, 201
 
     def get_hypotheses(self, user_id=None, hypothesis_id=None):
         query = {}
@@ -453,7 +369,7 @@ class Database:
         if result.deleted_count > 0:
             return {'message': 'Hypothesis deleted'}, 200
         return {'message': 'Hypothesis not found or not authorized'}, 404
-
+    
     def bulk_delete_hypotheses(self, user_id, hypothesis_ids):
         """
         Delete multiple hypotheses by their IDs for a specific user.
@@ -568,6 +484,15 @@ class Database:
         if hypothesis:
             hypothesis['_id'] = str(hypothesis['_id'])
         return hypothesis
+
+    def get_hypothesis_by_phenotype_and_variant_in_project(self, user_id, project_id, phenotype, variant):
+        """Get hypothesis by phenotype, variant, and project (no credible_set_id needed)"""
+        return self.hypothesis_collection.find_one({
+            'user_id': user_id,
+            'project_id': project_id,
+            'phenotype': phenotype,
+            'variant': variant
+        })
     
     def create_summary(self, user_id, hypothesis_id, summary_data):
         summary_doc = {
