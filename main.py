@@ -4,6 +4,7 @@ from flask_restful import Api
 from loguru import logger
 
 from config import Config, create_dependencies
+from logging_config import setup_logging
 from api import (
     EnrichAPI, 
     HypothesisAPI, 
@@ -107,12 +108,14 @@ def main():
     # Create configuration from arguments
     config = Config.from_args(args)
     
+    
+    setup_logging(log_level='INFO')  
     # Validate configuration
     if not all([config.ensembl_hgnc_map, config.hgnc_ensembl_map, config.go_map]):
         raise ValueError("Missing required configuration: ensembl_hgnc_map, hgnc_ensembl_map, go_map")
     
-    print(f"🚀 Starting Flask application...")
-    print(f"   - Host: {config.host}:{config.port}")
+    logger.info("🚀 Starting Flask application...")
+    logger.info(f"   - Host: {config.host}:{config.port}")
 
     
     # Setup application with configuration
@@ -123,9 +126,10 @@ def main():
         app, 
         host=config.host, 
         port=config.port, 
-        debug=True,
+        debug=False,  # Disable debug mode to avoid WSGI issues
         use_reloader=False,
-        allow_unsafe_werkzeug=True
+        allow_unsafe_werkzeug=True,
+        log_output=True
     )
     
 

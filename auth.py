@@ -79,17 +79,27 @@ def socket_token_required(f):
             
             try:
                 data = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-                current_user_id = data['user_id']
-                logging.info(f"Token decoded successfully for user: {current_user_id}")
+                
+                # Check if this is a system service token
+                if data.get('service') == 'prefect':
+                    logging.info("System service (Prefect) token validated")
+                    # For system services, we don't need user_id
+                    return f(self, *args, **kwargs)
+                else:
+                    # Regular user token - extract user_id
+                    current_user_id = data['user_id']
+                    logging.info(f"User token decoded successfully for user: {current_user_id}")
+                    return f(self, *args, current_user_id=current_user_id, **kwargs)
+                    
             except Exception as e:
                 logging.error(f"Token decode error: {e}")
                 disconnect()
                 return False
             
-            return f(self, *args, current_user_id=current_user_id, **kwargs)
-            
         except Exception as e:
             logging.error(f"Socket auth error in {f.__name__}: {str(e)}")
-            disconnect()
+            # Don't disconnect on every error - some might be recoverable
+            if f.__name__ not in ['handle_connect', 'handle_disconnect']:
+                disconnect()
             return False
     return decorated

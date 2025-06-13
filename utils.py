@@ -53,25 +53,46 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         # Check if we're in Flask context (socketio server available)
         if socketio and hasattr(socketio, 'server') and socketio.server:
             socketio.emit('task_update', update, room=room)
-            print(f"Emitted task update to room {room}")
+            logger.info(f"Emitted task update to room {room}")
             socketio.sleep(0)
         else:
-            # We're in Prefect context - use SocketIO client to connect to Flask server
+            # We're in Prefect context - use SocketIO client with service token
             flask_host = os.getenv('FLASK_HOST', 'flask-app')
             flask_port = os.getenv('FLASK_PORT', '5000')
             flask_url = f'http://{flask_host}:{flask_port}'
             
-            # Create a client connection to Flask app
+            # Get the system service token
+            service_token = os.getenv('PREFECT_SERVICE_TOKEN')
+            if not service_token:
+                logger.error("Warning: PREFECT_SERVICE_TOKEN not found. Task update will not be emitted.")
+                logger.info(f"Status update saved locally: {update['task']} - {update['state']}")
+                return
+            
+            # Create a client connection to Flask app with service token
             client = sio.SimpleClient()
             try:
-                client.connect(flask_url, transports=['websocket', 'polling'])
-                client.emit('task_update', update, room=room)
-                print(f"Emitted task update to Flask server at {flask_url}")
+                # Connect with service token in headers
+                headers = {'Authorization': f'Bearer {service_token}'}
+                client.connect(
+                    flask_url, 
+                    headers=headers, 
+                    transports=['websocket', 'polling'],
+                    retry=True,  
+                    retry_delay=3,  
+                    retry_delay_max=5,  
+                    retry_randomization=0.5,  
+                    wait_timeout=10  
+                )
+                
+                # Include room information in the update data since client.emit() doesn't support room parameter
+                update_with_room = {**update, 'target_room': room}
+                client.emit('task_update', update_with_room)
+                logger.info(f"Emitted task update to Flask server at {flask_url}")
                 client.disconnect()
             except Exception as client_e:
-                print(f"Failed to connect to Flask SocketIO server: {client_e}")
+                logger.error(f"Failed to connect to Flask SocketIO server: {client_e}")
                 # Fall back to just updating status without emission
-                print(f"Status update saved locally: {update['task']} - {update['state']}")
+                logger.info(f"Status update saved locally: {update['task']} - {update['state']}")
                 
     except Exception as e:
-        print(f"Error emitting task update: {e}")
+        logger.error(f"Error emitting task update: {e}")
