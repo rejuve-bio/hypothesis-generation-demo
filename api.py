@@ -2,7 +2,7 @@ from threading import Thread, Timer
 import asyncio
 from flask import json, request
 from flask_restful import Resource
-from flask_socketio import join_room
+from flask_socketio import join_room, leave_room
 from socketio_instance import socketio
 from auth import socket_token_required, token_required
 from datetime import datetime, timezone
@@ -11,6 +11,7 @@ from flows import hypothesis_flow
 from run_deployment import invoke_enrichment_deployment
 from status_tracker import status_tracker, TaskState
 from loguru import logger
+import os
 
 class EnrichAPI(Resource):
     def __init__(self, enrichr, llm, prolog_query, db):
@@ -49,23 +50,6 @@ class EnrichAPI(Resource):
                     hypothesis_id=existing_hypothesis['id'])
 
             return {"hypothesis_id": existing_hypothesis['id']}, 202
-
-        # # Define async flow function
-        # def run_async_flow():
-        #     asyncio.run(async_enrichment_process(
-        #         enrichr=self.enrichr, 
-        #         llm=self.llm, 
-        #         prolog_query=self.prolog_query, 
-        #         db=self.db, 
-        #         current_user_id=current_user_id, 
-        #         phenotype=phenotype, 
-        #         variant=variant, 
-        #         hypothesis_id=existing_hypothesis['id'] if existing_hypothesis else hypothesis_id
-        #     ))
-
-        # if existing_hypothesis:
-        #     Thread(target=run_async_flow).start()
-        #     return {"hypothesis_id": existing_hypothesis['id']}, 202
         
         # Generate hypothesis_id immediately
         hypothesis_id = str(uuid4())
@@ -87,10 +71,6 @@ class EnrichAPI(Resource):
                     phenotype=phenotype, 
                     variant=variant, 
                     hypothesis_id=hypothesis_id)
-
-
-        # # Start the thread
-        # Thread(target=run_async_flow).start()
 
         
         return {"hypothesis_id": hypothesis_id}, 201
@@ -129,12 +109,12 @@ class HypothesisAPI(Resource):
             # Get task history
             task_history = status_tracker.get_history(hypothesis_id)
             for task in task_history:
-                task.pop('details', None)  # Remove 'details' if it exists
+                task.pop('details', None) 
 
             # Get only pending tasks from task history
             pending_tasks = [task for task in task_history if task.get('state') == TaskState.STARTED.value]
             last_pending_task = [pending_tasks[-1]] if pending_tasks else [] 
-            print(f"last_pending_task: {last_pending_task}")
+            logger.info(f"last_pending_task: {last_pending_task}")
 
             if is_complete:
                 enrich_id = hypothesis.get('enrich_id')
@@ -208,7 +188,7 @@ class HypothesisAPI(Resource):
             formatted_hypotheses.append(formatted_hypothesis)
             
         return formatted_hypotheses, 200
-        # return hypotheses, 200
+        
 
     @token_required
     def post(self, current_user_id):
@@ -249,24 +229,90 @@ class ChatAPI(Resource):
 def init_socket_handlers(db_instance):
     logger.info("Initializing socket handlers...")
     
+    # Store active timers for cleanup
+    client_timers = {}
+    
     @socketio.on('connect')
-    @socket_token_required
-    def handle_connect(self, current_user_id):
-        logger.info("somehting else")
-        logger.info(f"Client connected: {current_user_id}")
-        client_id = request.sid
-        inactivity_timer = Timer(300, lambda: socketio.close_room(client_id))
-        inactivity_timer.start()
+    def handle_connect(auth=None):
 
-        return True
+        try:
+            logger.info("Client attempting to connect")
+            client_id = request.sid
+
+            logger.info(f"Client connected: {client_id}")
+            
+            # Set a reasonable timeout for all connections
+            inactivity_timer = Timer(300, lambda: socketio.server.disconnect(client_id))
+            inactivity_timer.start()
+            
+            # Store the timer for potential cleanup
+            client_timers[client_id] = inactivity_timer
+            
+            return True
+                
+        except Exception as e:
+            logger.error(f"Error in handle_connect: {str(e)}")
+            return False
 
     @socketio.on('disconnect')
     def handle_disconnect():
-        logger.info("Client disconnected")
+        try:
+            client_id = request.sid
+            logger.info(f"Client disconnected: {client_id}")
+            
+            # Clean up any rooms the client was in
+            try:
+                # Get all rooms for this client
+                rooms = socketio.server.rooms(client_id)
+                if rooms:
+                    logger.info(f"Cleaning up rooms for client {client_id}: {list(rooms)}")
+                    # Leave all rooms
+                    for room in rooms:
+                        if room != client_id:  
+                            leave_room(room)
+                            logger.info(f"Client {client_id} left room: {room}")
+            except Exception as room_e:
+                logger.warning(f"Could not clean up rooms for {client_id}: {room_e}")
+            
+            # Cancel any pending timers for this client
+            if client_id in client_timers:
+                try:
+                    client_timers[client_id].cancel()
+                    del client_timers[client_id]
+                    logger.info(f"Cancelled timeout timer for client: {client_id}")
+                except Exception as timer_e:
+                    logger.warning(f"Could not cancel timer for {client_id}: {timer_e}")
+            
+        except Exception as e:
+            logger.error(f"Error in handle_disconnect: {str(e)}")
+
+    @socketio.on('task_update')
+    @socket_token_required  
+    def handle_task_update(data, current_user_id=None):
+        """
+        Handle task updates from Prefect clients and broadcast to appropriate rooms
+        """
+        try:
+            logger.info(f"Received task update from client: {data}")
+            
+            target_room = data.get('target_room')
+            if not target_room:
+                logger.error("No target_room specified in task update")
+                return
+            
+            # Remove the target_room from data before broadcasting
+            broadcast_data = {k: v for k, v in data.items() if k != 'target_room'}
+            
+            # Broadcast to the specific room
+            socketio.emit('task_update', broadcast_data, room=target_room)
+            logger.info(f"Broadcasted task update to room: {target_room}")
+            
+        except Exception as e:
+            logger.error(f"Error handling task update: {str(e)}")
 
     @socketio.on('subscribe_hypothesis')
     @socket_token_required
-    def handle_subscribe(data, current_user_id):
+    def handle_subscribe(data, current_user_id=None):
         try:
             logger.info(f"Received subscribe request: {data}")
             # Handle both string and dict input
@@ -297,11 +343,18 @@ def init_socket_handlers(db_instance):
             logger.info(f"Joined room: {room}")
 
             # Verify room membership
-            rooms = socketio.server.rooms(request.sid)
-            logger.info(f"Current rooms for client {request.sid}: {rooms}")
+            try:
+                rooms = socketio.server.rooms(request.sid)
+                logger.info(f"Current rooms for client {request.sid}: {rooms}")
+            except Exception as room_e:
+                logger.warning(f"Could not verify room membership: {room_e}")
             
-            # Get hypothesis data
-            hypothesis = db_instance.get_hypotheses(current_user_id, hypothesis_id)
+           
+            if current_user_id is None:
+                hypothesis = db_instance.get_hypothesis_by_id(hypothesis_id)
+            else:
+                hypothesis = db_instance.get_hypotheses(current_user_id, hypothesis_id)
+                
             if not hypothesis:
                 logger.error(f"Hypothesis not found: {hypothesis_id}")
                 raise ValueError("Hypothesis not found or access denied")
@@ -343,4 +396,8 @@ def init_socket_handlers(db_instance):
         except Exception as e:
             logger.error(f"Error in handle_subscribe: {str(e)}")
             return {"error": str(e)}, 500
+    
+    return "Socket handlers initialized"
+
+
 
