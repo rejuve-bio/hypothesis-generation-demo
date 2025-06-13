@@ -4,6 +4,7 @@ from uuid import uuid4
 from socketio_instance import socketio
 from status_tracker import status_tracker, TaskState
 from utils import emit_task_update
+from loguru import logger
 
 ### Enrich Tasks
 @task(retries=2, cache_policy=None)
@@ -56,7 +57,6 @@ def get_candidate_genes(prolog_query, variant, hypothesis_id):
             next_task="Predicting causal gene",
         )
 
-        print("Executing: get candidate genes")
         result = prolog_query.get_candidate_genes(variant)
 
         emit_task_update(
@@ -86,7 +86,7 @@ def predict_causal_gene(llm, phenotype, candidate_genes, hypothesis_id):
             next_task="Getting relevant gene proof"
         )
 
-        print("Executing: predict causal gene")
+        logger.info("Executing: predict causal gene")
         result = llm.predict_casual_gene(phenotype, candidate_genes)["causal_gene"]
 
         emit_task_update(
@@ -115,7 +115,7 @@ def get_relevant_gene_proof(prolog_query, variant, causal_gene, hypothesis_id):
             next_task="Creating enrich data"
         )
 
-        print("Executing: get relevant gene proof")
+        logger.info("Executing: get relevant gene proof")
         result = prolog_query.get_relevant_gene_proof(variant, causal_gene)
 
         emit_task_update(
@@ -145,7 +145,7 @@ def retry_predict_causal_gene(llm, phenotype, candidate_genes, proof, causal_gen
             next_task="Retrying to get relevant gene proof"
         )
 
-        print(f"Retrying predict causal gene with proof: {proof}")
+        logger.info(f"Retrying predict causal gene with proof: {proof}")
         result = llm.predict_casual_gene(phenotype, candidate_genes, rule=proof, prev_gene=causal_gene)["causal_gene"]
 
         emit_task_update(
@@ -174,7 +174,7 @@ def retry_get_relevant_gene_proof(prolog_query, variant, causal_gene, hypothesis
             next_task="Creating enrich data"
         )
 
-        print("Retrying get relevant gene proof")
+        logger.info("Retrying get relevant gene proof")
         result = prolog_query.get_relevant_gene_proof(variant, causal_gene)
        
         emit_task_update(
@@ -202,7 +202,7 @@ def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal
             state=TaskState.STARTED
         )
 
-        print("Creating enrich data in the database")
+        logger.info("Creating enrich data in the database")
         enrich_data = {
             "id": str(uuid4()),
             "created_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
@@ -215,7 +215,7 @@ def create_enrich_data(db, variant, phenotype, causal_gene, relevant_gos, causal
         db.create_enrich(current_user_id, enrich_data)
 
         hypothesis_history = status_tracker.get_history(hypothesis_id)
-        print("Updating hypothesis in the database...")
+        logger.info("Updating hypothesis in the database...")
         hypothesis_data = {
                 "task_history": hypothesis_history,
             }
@@ -248,7 +248,7 @@ def check_hypothesis(db, current_user_id, enrich_id, go_id, hypothesis_id):
             next_task="Getting enrichement data"
         )
 
-        print("Checking hypothesis data")
+        logger.info("Checking hypothesis data")
         if db.check_hypothesis(current_user_id, enrich_id, go_id):
             hypothesis = db.get_hypothesis_by_enrich_and_go(enrich_id, go_id, current_user_id)
             emit_task_update(
@@ -285,7 +285,7 @@ def get_enrich(db, current_user_id, enrich_id, hypothesis_id):
             next_task="Getting gene data"
         )
 
-        print("Fetching enrich data...")
+        logger.info("Fetching enrich data...")
         result = db.get_enrich(current_user_id, enrich_id)
 
         emit_task_update(
@@ -315,7 +315,7 @@ def get_gene_ids(prolog_query, gene_names, hypothesis_id):
             next_task="Querying gene data"
         )
 
-        print("Fetching gene IDs...")
+        logger.info("Fetching gene IDs...")
         result = prolog_query.get_gene_ids(gene_names)
 
         emit_task_update(
@@ -344,7 +344,7 @@ def execute_gene_query(prolog_query, query, hypothesis_id):
             next_task="Querying variant data"
         )
 
-        print("Executing Prolog query to retrieve gene names...")
+        logger.info("Executing Prolog query to retrieve gene names...")
         result = prolog_query.execute_query(query)
 
         emit_task_update(
@@ -372,7 +372,7 @@ def execute_variant_query(prolog_query, query, hypothesis_id):
             state=TaskState.STARTED,
             next_task="Querying phenotype data"
         )
-        print("Executing Prolog query to retrieve variant ids...")
+        logger.info("Executing Prolog query to retrieve variant ids...")
         result = prolog_query.execute_query(query)
 
         emit_task_update(
@@ -400,7 +400,7 @@ def execute_phenotype_query(prolog_query, phenotype, hypothesis_id):
             state=TaskState.STARTED,
             next_task="Generating graph summary"
         )
-        print("Executing Prolog query to retrieve phenotype id...")
+        logger.info("Executing Prolog query to retrieve phenotype id...")
         result = prolog_query.execute_query(f"term_name(efo(X), {phenotype})")
 
         emit_task_update(
@@ -429,7 +429,7 @@ def summarize_graph(llm, causal_graph, hypothesis_id):
             next_task="Generating hypothesis"
         )
 
-        print("Summarizing causal graph...")
+        logger.info("Summarizing causal graph...")
         result = llm.summarize_graph(causal_graph)
 
         emit_task_update(
@@ -458,7 +458,7 @@ def create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, 
             details={"go_id": go_id}
         )
         hypothesis_history = status_tracker.get_history(hypothesis_id)
-        print("Creating hypothesis in the database...")
+        logger.info("Creating hypothesis in the database...")
         hypothesis_data = {
                 "enrich_id": enrich_id,
                 "go_id": go_id,

@@ -30,7 +30,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id):
     try:
         enrich = check_enrich.submit(db, current_user_id, phenotype, variant, hypothesis_id).result()
         if enrich:
-            print("Retrieved enrich data from saved db")
+            logger.info("Retrieved enrich data from saved db")
             return {"id": enrich['id']}, 200
 
         candidate_genes = get_candidate_genes.submit(prolog_query, variant, hypothesis_id).result()
@@ -40,8 +40,8 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id):
         if causal_graph is None:
             causal_gene = retry_predict_causal_gene.submit(llm, phenotype, candidate_genes, proof, causal_gene, hypothesis_id).result()
             causal_graph, proof = retry_get_relevant_gene_proof.submit(prolog_query, variant, causal_gene, hypothesis_id).result()
-            print("Retried causal gene: ", causal_gene)
-            print("Retried causal graph: ", causal_graph)
+            logger.info(f"Retried causal gene: {causal_gene}")
+            logger.info(f"Retried causal graph: {causal_graph}")
 
         enrich_tbl = enrichr.run(causal_gene)
         relevant_gos = llm.get_relevant_go(phenotype, enrich_tbl)
@@ -55,7 +55,6 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id):
         })
 
         logger.info(f"Enrichment flow completed: {enrich_id}")
-        print(f"Enrichment flow completed: {enrich_id}")
         
         return {"id": enrich_id}, 201
     except Exception as e:
@@ -83,7 +82,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id):
 def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog_query, llm):
     hypothesis = check_hypothesis(db, current_user_id, enrich_id, go_id, hypothesis_id)
     if hypothesis:
-        print("Retrieved hypothesis data from saved db")
+        logger.info("Retrieved hypothesis data from saved db")
         return {"summary": hypothesis.get('summary'), "graph": hypothesis.get('graph')}, 200
 
     enrich_data = get_enrich(db, current_user_id, enrich_id, hypothesis_id)
@@ -98,7 +97,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
     coexpressed_gene_names = go_term[0]["genes"]
     causal_graph = enrich_data['causal_graph']
 
-    print(f"Enrich data: {enrich_data}")
+    logger.info(f"Enrich data: {enrich_data}")
 
     causal_gene_id = get_gene_ids(prolog_query, [causal_gene.lower()], hypothesis_id)[0]
     coexpressed_gene_ids = get_gene_ids(prolog_query, [g.lower() for g in coexpressed_gene_names], hypothesis_id)
@@ -151,57 +150,3 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
     hypothesis_id = create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id, hypothesis_id)
     
     return {"summary": summary, "graph": causal_graph}, 201
-
-# @task(cache_key_fn=None, cache_policy=None)
-# async def run_enrichment_task(enrichr, llm, prolog_query, db, current_user_id, phenotype, variant, hypothesis_id):
-#     """Async task to run the enrichment flow"""
-#     try:
-
-#         # Run the enrichment flow
-#         flow_result = await enrichment_flow(
-#             enrichr, 
-#             llm, 
-#             prolog_query, 
-#             db, 
-#             current_user_id, 
-#             phenotype, 
-#             variant, 
-#             hypothesis_id
-#         )
-        
-#         # Update hypothesis with enrichment ID
-#         db.update_hypothesis(hypothesis_id, {
-#             "enrich_id": flow_result[0].get('id')
-#         })
-
-#         logger.info(f"Enrichment flow completed: {flow_result}")
-#         print(f"Enrichment flow completed: {flow_result}")
-        
-#         return flow_result
-#     except Exception as e:
-#         logger.error(f"Enrichment flow failed: {str(e)}")
-        
-#         # Update hypothesis with error state
-#         db.update_hypothesis(hypothesis_id, {
-#             "status": "failed",
-#             "error": str(e),
-#             "updated_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
-#         })
-
-#         # Emit failure update
-#         emit_task_update(
-#             hypothesis_id=hypothesis_id,
-#             task_name="Enrichment",
-#             state=TaskState.FAILED,
-#             error=str(e),
-#             progress=0
-#         )
-#         raise
-
-# @flow(name="async_enrichment_process", task_runner=ConcurrentTaskRunner())
-# async def async_enrichment_process(enrichr, llm, prolog_query, db, current_user_id, phenotype, variant, hypothesis_id):
-#     """Wrapper flow to run enrichment process"""
-#     return await run_enrichment_task(
-#         enrichr, llm, prolog_query, db, 
-#         current_user_id, phenotype, variant, hypothesis_id
-#     )

@@ -48,24 +48,24 @@ def main():
     try:
         args = parse_deployment_arguments()
         config = Config.from_args(args)
-        print("✅ Configuration loaded from command line arguments")
+        logger.info("✅ Configuration loaded from command line arguments")
     except SystemExit:
         # If no args provided, use environment variables
         config = Config.from_env()
-        print("✅ Configuration loaded from environment variables")
+        logger.info("✅ Configuration loaded from environment variables")
     
     # Validate critical configuration
     if not all([config.ensembl_hgnc_map, config.hgnc_ensembl_map, config.go_map]):
         raise ValueError("Missing required configuration: ensembl_hgnc_map, hgnc_ensembl_map, go_map")
     
-    print(f"🚀 Starting Prefect deployment service...")
-    print(f"   - SWIPL Host: {config.swipl_host}:{config.swipl_port}")
-    print(f"   - Data files: {config.ensembl_hgnc_map}")
+    print(f" Starting Prefect deployment service...")
+    logger.info(f"- SWIPL Host: {config.swipl_host}:{config.swipl_port}")
+    logger.info(f"- Data files: {config.ensembl_hgnc_map}")
     
     deployments = setup_deployments(config)
     
     # Start serving deployments
-    print("📡 Serving deployments...")
+    logger.info("Serving deployments...")
     serve(*deployments)
 
 if __name__ == "__main__":

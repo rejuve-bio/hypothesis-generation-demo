@@ -46,7 +46,7 @@ class Database:
             if hypothesis:
                 hypothesis["_id"] = str(hypothesis["_id"])
             else:
-                print("No document found for the given hypothesis id.")
+                logger.info("No document found for the given hypothesis id.")
             return hypothesis
 
         hypotheses = list(self.hypothesis_collection.find(query))
@@ -122,7 +122,7 @@ class Database:
             if enrich:
                 enrich['_id'] = str(enrich['_id'])
             else:
-                print("No document found for the given enrich_id.")
+                logger.info("No document found for the given enrich_id.")
             return enrich
 
         enriches = list(self.enrich_collection.find(query))
@@ -196,3 +196,12 @@ class Database:
             'user_id': user_id,
             'enrich_id': enrich_id
         })
+
+    def get_hypothesis_by_id(self, hypothesis_id):
+        """
+        Get hypothesis by ID without user filtering - used by system services
+        """
+        hypothesis = self.hypothesis_collection.find_one({'id': hypothesis_id})
+        if hypothesis:
+            hypothesis['_id'] = str(hypothesis['_id'])
+        return hypothesis
