@@ -2,15 +2,27 @@ import argparse
 from flask import Flask
 from flask_restful import Api
 from loguru import logger
+import werkzeug
 
 from config import Config, create_dependencies
 from logging_config import setup_logging
 from api import (
-    EnrichAPI, 
+    AnalysisAPI,
+    AnalysisFinemappingAPI,
+    EnrichAPI,
+    FileUploadAPI, 
     HypothesisAPI, 
     BulkHypothesisDeleteAPI,
     ChatAPI, 
-    init_socket_handlers
+    BulkHypothesisDeleteAPI,
+    init_socket_handlers,
+    # Import new v2 APIs
+    ProjectsAPI,
+    FileUploadAPIV2,
+    AnalysisAPIV2,
+    AnalysisFinemappingAPIV2,
+    EnrichAPIV2,
+    HypothesisAPIV2,
 )
 from dotenv import load_dotenv
 import os
@@ -50,6 +62,18 @@ def setup_api(config):
     app.config['JWT_TOKEN_LOCATION'] = ['headers']
     app.config['JWT_HEADER_NAME'] = 'Authorization'
     app.config['JWT_HEADER_TYPE'] = 'Bearer'
+
+    # Add these configurations for handling large file uploads
+    app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1GB max upload size
+    app.config['UPLOAD_TIMEOUT'] = 600  # 10 minutes timeout
+    app.config['PREFERRED_URL_SCHEME'] = 'http'  # Force HTTP scheme to avoid issues
+    
+    # Optional: Increase default stream buffer size
+    app.config['STREAM_BUFFER_SIZE'] = 4 * 1024 * 1024  # 4MB stream buffer
+    
+    # Configure werkzeug for handling larger files
+    from werkzeug.formparser import FormDataParser
+    FormDataParser.max_form_memory_size = 1024 * 1024 * 1024  # 1GB
 
     # Initialize JWTManager
     jwt = JWTManager(app)
@@ -95,6 +119,17 @@ def setup_api(config):
     api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete",
         resource_class_kwargs={"db": deps['db']}
     )
+    api.add_resource(AnalysisAPI, "/analysis", resource_class_kwargs={"db": db})
+    api.add_resource(AnalysisFinemappingAPI, "/analysis/finemapping", resource_class_kwargs={"db": db})
+    api.add_resource(FileUploadAPI,'/api/upload',resource_class_kwargs={'db': db})
+
+    # V2 API Routes for testing project-based workflow
+    api.add_resource(ProjectsAPI, "/v2/projects", resource_class_kwargs={"db": db})
+    api.add_resource(FileUploadAPIV2, "/v2/upload", resource_class_kwargs={"db": db})
+    api.add_resource(AnalysisAPIV2, "/v2/analysis", resource_class_kwargs={"db": db})
+    api.add_resource(AnalysisFinemappingAPIV2, "/v2/analysis/finemapping", resource_class_kwargs={"db": db})
+    api.add_resource(HypothesisAPIV2, "/v2/hypothesis", resource_class_kwargs={"enrichr": enrichr, "prolog_query": prolog_query, "llm": llm, "db": db})
+    api.add_resource(EnrichAPIV2, "/v2/enrich", resource_class_kwargs={"enrichr": enrichr, "llm": llm, "prolog_query": prolog_query, "db": db})
 
     # Initialize socket handlers 
     socket_namespace = init_socket_handlers(deps['db'])

@@ -13,6 +13,7 @@ services:
     image: mongo:latest
     ports:
       - "27019:27017"
+      - "27019:27017"
     volumes:
       - mongo-data:/data/db
     networks:
@@ -24,8 +25,11 @@ services:
       dockerfile: Dockerfile.prolog
     ports:
       - "4242:4242"
+      - "4242:4242"
     volumes:
       - ./pl:/app/pl
+      - /mnt/hdd_1/abdu/prolog_out_v2:/mnt/prolog_out_v2
+      - /mnt/hdd_1/abdu/prolog_out_v3:/mnt/prolog_out_v3
       - /mnt/hdd_1/abdu/prolog_out_v2:/mnt/prolog_out_v2
       - /mnt/hdd_1/abdu/prolog_out_v3:/mnt/prolog_out_v3
     networks:
@@ -44,6 +48,8 @@ services:
       - .env
     volumes:
       - .:/app
+      - ./data:/app/data
+      - /mnt/hdd_1/rediet/hypothesis-generation-demo/data:/app/data/external_data  
     depends_on:
       - base-image
       - mongo
@@ -62,7 +68,7 @@ services:
       context: .
       dockerfile: Dockerfile.prefect
     ports:
-      - "4201:4200"
+      - "4200:4200"
     volumes:
       - .:/app
       - prefect-data:/root/.prefect 

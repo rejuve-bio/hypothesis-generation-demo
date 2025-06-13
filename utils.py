@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import os
+from flask import json
 from socketio_instance import socketio
 from status_tracker import status_tracker, TaskState
 import socketio as sio
@@ -13,6 +15,7 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
 
     # Filter to only include 'started' state entries and keep the latest 5
     filtered_history = [entry for entry in task_history if entry["state"] == "completed"]
+    # latest_5_started_tasks = sorted(filtered_history, key=lambda x: x["timestamp"], reverse=True)[:5]
     latest_5_started_tasks = filtered_history[-5:]
 
     if progress == 0:
@@ -37,12 +40,12 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         update["error"] = error
         update["status"] = "failed"
     
-    # Handle completion states
+    # Handle completion status
     if state == TaskState.COMPLETED:
-        if task_name == "Creating enrich data": #or task_name == "Enrichment process":
+        if task_name == "Creating enrich data" or (task_name =="Verifying existence of enrichment data" and progress == 80):
             update["status"] = "Enrichment_completed"
-            update["progress"] = 80  # enrichment completion is 50%
-        elif task_name == "Generating hypothesis":
+            update["progress"] = 80  # enrichment completion is 80%
+        elif task_name == "Generating hypothesis" or (task_name == "Verifying existence of hypothesis data" and progress == 100):
             update["status"] = "Hypothesis_completed"
             update["progress"] = 100  # hypothesis completion is 100%
     elif state == TaskState.FAILED:
@@ -96,3 +99,57 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
                 
     except Exception as e:
         logger.error(f"Error emitting task update: {e}")
+
+
+
+def save_analysis_state(user_id, state):
+    """Save the analysis state for the second flow"""
+    state_dir = os.path.join('data', 'states', user_id)
+    os.makedirs(state_dir, exist_ok=True)
+    
+    with open(os.path.join(state_dir, 'analysis_state.json'), 'w') as f:
+        json.dump(state, f, default=str)  # Use default=str to handle non-serializable objects
+
+def get_analysis_state(user_id):
+    """Retrieve the analysis state for the second flow"""
+    state_path = os.path.join('data', 'states', user_id, 'analysis_state.json')
+    
+    if not os.path.exists(state_path):
+        raise FileNotFoundError(f"Analysis state not found for user {user_id}")
+    
+    with open(state_path, 'r') as f:
+        return json.load(f)
+
+def allowed_file(filename):
+    """Check if the file extension is allowed"""
+    ALLOWED_EXTENSIONS = {'tsv', 'csv', 'txt', 'bgz', 'gz'}
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def get_user_file_path(file_id, user_id):
+    """Get file path from file ID using metadata system"""
+    import os
+    import json
+    
+    # Check in metadata first
+    metadata_path = f"data/metadata/{user_id}/{file_id}.json"
+    if os.path.exists(metadata_path):
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        return metadata['file_path']
+    
+    # Fallback to direct file path (for backward compatibility)
+    user_upload_dir = f"data/uploads/{user_id}"
+    if os.path.exists(user_upload_dir):
+        for filename in os.listdir(user_upload_dir):
+            if filename.startswith(file_id):
+                return os.path.join(user_upload_dir, filename)
+    
+    raise FileNotFoundError(f"File with ID {file_id} not found for user {user_id}")
+
+def get_user_file_path_v2(db, file_id, user_id):
+    """Get file path from file ID using database metadata"""
+    file_metadata = db.get_file_metadata(user_id, file_id)
+    if not file_metadata:
+        raise FileNotFoundError(f"File with ID {file_id} not found for user {user_id}")
+    
+    return file_metadata['file_path']

@@ -15,7 +15,6 @@ socketio = SocketIO(
     always_connect=False,   
     cookie=None,           
     manage_session=False,
-    # Try to prevent the write() before start_response error
     http_compression=False, # Disable HTTP compression
     compression=False      # Disable compression
 )
