@@ -110,46 +110,34 @@ def save_analysis_state(user_id, state):
     with open(os.path.join(state_dir, 'analysis_state.json'), 'w') as f:
         json.dump(state, f, default=str)  # Use default=str to handle non-serializable objects
 
-def get_analysis_state(user_id):
-    """Retrieve the analysis state for the second flow"""
-    state_path = os.path.join('data', 'states', user_id, 'analysis_state.json')
-    
-    if not os.path.exists(state_path):
-        raise FileNotFoundError(f"Analysis state not found for user {user_id}")
-    
-    with open(state_path, 'r') as f:
-        return json.load(f)
-
 def allowed_file(filename):
     """Check if the file extension is allowed"""
     ALLOWED_EXTENSIONS = {'tsv', 'csv', 'txt', 'bgz', 'gz'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def get_user_file_path(file_id, user_id):
-    """Get file path from file ID using metadata system"""
-    import os
-    import json
-    
-    # Check in metadata first
-    metadata_path = f"data/metadata/{user_id}/{file_id}.json"
-    if os.path.exists(metadata_path):
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
-        return metadata['file_path']
-    
-    # Fallback to direct file path (for backward compatibility)
-    user_upload_dir = f"data/uploads/{user_id}"
-    if os.path.exists(user_upload_dir):
-        for filename in os.listdir(user_upload_dir):
-            if filename.startswith(file_id):
-                return os.path.join(user_upload_dir, filename)
-    
-    raise FileNotFoundError(f"File with ID {file_id} not found for user {user_id}")
-
-def get_user_file_path_v2(db, file_id, user_id):
+def get_user_file_path(db, file_id, user_id):
     """Get file path from file ID using database metadata"""
     file_metadata = db.get_file_metadata(user_id, file_id)
     if not file_metadata:
         raise FileNotFoundError(f"File with ID {file_id} not found for user {user_id}")
     
     return file_metadata['file_path']
+
+def serialize_datetime_fields(data):
+    """Convert datetime objects to ISO format strings for JSON serialization"""
+    if isinstance(data, dict):
+        result = {}
+        for key, value in data.items():
+            if isinstance(value, datetime):
+                result[key] = value.isoformat()
+            elif isinstance(value, dict):
+                result[key] = serialize_datetime_fields(value)
+            elif isinstance(value, list):
+                result[key] = [serialize_datetime_fields(item) if isinstance(item, dict) else item for item in value]
+            else:
+                result[key] = value
+        return result
+    elif isinstance(data, list):
+        return [serialize_datetime_fields(item) for item in data]
+    else:
+        return data
