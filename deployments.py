@@ -2,10 +2,15 @@
 
 import os
 import argparse
+import logging
 from prefect import serve
 from flows import enrichment_flow
 from config import Config
 from dotenv import load_dotenv
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def parse_deployment_arguments():
     """Parse arguments for deployment service"""

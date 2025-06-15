@@ -21,8 +21,6 @@ import subprocess
 from cyvcf2 import VCF, Writer
 from prefect import task, flow
 from typing import List, Dict, Optional
-from rpy2.robjects import default_converter
-from rpy2 import robjects
 import numpy as np
 import contextlib
 
@@ -33,12 +31,10 @@ logging.basicConfig(level=logging.INFO)
 try:
     from rpy2.robjects.packages import importr
     import rpy2.robjects as ro
-    from rpy2.robjects import pandas2ri, numpy2ri
+    from rpy2.robjects import pandas2ri, numpy2ri, default_converter
     from rpy2.robjects.conversion import localconverter
+    from rpy2 import robjects
     
-    # Activate converters
-    numpy2ri.activate()
-    pandas2ri.activate()
     
     # Import necessary R packages
     base = importr('base')
@@ -97,6 +93,10 @@ except ImportError as e:
     HAS_RPY2 = False
     HAS_SUSIE = False
     HAS_VAUTILS = False
+    default_converter = None
+    pandas2ri = None
+    numpy2ri = None
+    robjects = None
 
 ### Enrich Tasks
 @task(retries=2, cache_policy=None)
@@ -1332,6 +1332,9 @@ def run_susie_analysis(snp_df, ld_matrix, n=503, L=10):
 
 @task
 def formattating_credible_sets(filtered_snp, fit, R_df):
+    if not HAS_SUSIE:
+        raise ImportError("SuSiE R package is not available. Cannot format credible sets.")
+    
     with localconverter(default_converter + pandas2ri.converter + numpy2ri.converter):
         filtered_snp["cs"] = 0
         
