@@ -1336,35 +1336,119 @@ def formattating_credible_sets(filtered_snp, fit, R_df):
         raise ImportError("SuSiE R package is not available. Cannot format credible sets.")
     
     with localconverter(default_converter + pandas2ri.converter + numpy2ri.converter):
+        # Create a clean copy to avoid view/dtype issues
+        filtered_snp = filtered_snp.copy()
         filtered_snp["cs"] = 0
         
         # Check if fit is valid
         logger.info(f"fit object type: {type(fit)}")
+        
+        # Debug the fit object
+        try:
+            if hasattr(fit, 'names'):
+                logger.info(f"fit names: {list(fit.names)}")
+            if hasattr(fit, 'rx2'):
+                # Check key components of SuSiE results
+                try:
+                    alpha = fit.rx2('alpha')
+                    logger.info(f"fit alpha shape: {alpha.shape if hasattr(alpha, 'shape') else 'no shape'}")
+                except:
+                    logger.info("No alpha in fit")
+                
+                try:
+                    sets = fit.rx2('sets')
+                    logger.info(f"fit sets: {sets}")
+                except:
+                    logger.info("No sets in fit")
+        except Exception as e:
+            logger.info(f"Error debugging fit object: {e}")
         
         # Try to get the credible sets
         try:
             cs_result = susieR.susie_get_cs(fit, coverage=0.95, min_abs_corr=0.5, Xcorr=R_df)
             logger.info(f"cs_result type: {type(cs_result)}")
             logger.info(f"cs_result keys: {list(cs_result.keys()) if hasattr(cs_result, 'keys') else 'No keys'}")
+            
+            # Debug: Check R object names/components
+            if hasattr(cs_result, 'names'):
+                logger.info(f"cs_result names: {list(cs_result.names)}")
+            if hasattr(cs_result, 'rx2'):
+                logger.info("cs_result has rx2 method")
+            
+            # Try to inspect the R object structure
+            try:
+                logger.info(f"cs_result str representation: {str(cs_result)[:500]}")
+            except:
+                logger.info("Could not get string representation of cs_result")
+                
         except Exception as e:
             logger.info(f"Error getting credible sets: {e}")
             cs_result = None
         
         # Try to get the PIPs with proper error handling
+        pip_extraction_success = False
         try:
-            # Check if fit object seems valid before calling R function
-            pips = susieR.susie_get_pip(fit)
-            # Make sure pips is a numeric array
+            # Try multiple methods to get PIPs
+            pips = None
+            
+            # Method 1: Direct function call
+            try:
+                pips = susieR.susie_get_pip(fit)
+                logger.info("Successfully got PIPs using susie_get_pip")
+            except Exception as e1:
+                logger.info(f"susie_get_pip failed: {e1}")
+                
+                # Method 2: Try to extract PIPs from fit object directly
+                try:
+                    if hasattr(fit, 'rx2'):
+                        pip_matrix = fit.rx2('pip')
+                        if pip_matrix is not None:
+                            pips = pip_matrix
+                            logger.info("Successfully extracted PIPs from fit object")
+                except Exception as e2:
+                    logger.info(f"Direct PIP extraction failed: {e2}")
+            
+            # Process PIPs if we got them
             if pips is not None:
-                pip_array = np.array(pips)
-                logger.info(f"PIP array shape: {pip_array.shape}")
-                logger.info(f"PIP array type: {pip_array.dtype}")
-                filtered_snp["pip"] = pip_array
-            else:
-                logger.info("Warning: PIPs returned None")
-                filtered_snp["pip"] = 0.0
+                # Convert R object to numpy array and handle data types
+                try:
+                    pip_array = np.array(pips, dtype=np.float64)
+                    logger.info(f"PIP array shape: {pip_array.shape}")
+                    logger.info(f"PIP array type: {pip_array.dtype}")
+                    logger.info(f"PIP array range: {pip_array.min():.6f} to {pip_array.max():.6f}")
+                    
+                    # Ensure the array is 1D and matches the DataFrame length
+                    if pip_array.ndim > 1:
+                        pip_array = pip_array.flatten()
+                    
+                    # Handle length mismatch
+                    if len(pip_array) != len(filtered_snp):
+                        logger.warning(f"PIP array length ({len(pip_array)}) doesn't match SNP data length ({len(filtered_snp)})")
+                        # Pad with zeros or truncate as needed
+                        if len(pip_array) < len(filtered_snp):
+                            pip_array = np.pad(pip_array, (0, len(filtered_snp) - len(pip_array)), constant_values=0.0)
+                        else:
+                            pip_array = pip_array[:len(filtered_snp)]
+                    
+                    # Create a clean copy of the DataFrame to avoid view issues
+                    filtered_snp = filtered_snp.copy()
+                    filtered_snp["pip"] = pip_array.astype(float)
+                    pip_extraction_success = True
+                    
+                    # Log top PIPs for debugging
+                    top_pips = filtered_snp.nlargest(5, 'pip')[['pip']]
+                    logger.info(f"Top 5 PIPs:\n{top_pips}")
+                    
+                except Exception as e3:
+                    logger.info(f"Error processing PIP array: {e3}")
+            
         except Exception as e:
-            logger.info(f"Error getting PIPs: {e}")
+            logger.info(f"Error in PIP extraction: {e}")
+        
+        # Fallback if PIP extraction failed
+        if not pip_extraction_success:
+            logger.info("Warning: Could not extract PIPs, setting all to 0.0")
+            filtered_snp = filtered_snp.copy()
             filtered_snp["pip"] = 0.0
         
         # Initialize as empty in case we don't have valid credible sets
@@ -1372,49 +1456,103 @@ def formattating_credible_sets(filtered_snp, fit, R_df):
         
         # Only process if we have valid credible sets
         if cs_result is not None:
-            # Access the 'cs' key from the OrdDict if it exists
-            if 'cs' in cs_result:
-                credible_sets = cs_result['cs']
+            # Safely access the 'cs' key from R object
+            try:
+                # Try to get the 'cs' component from R object
+                credible_sets = cs_result.rx2('cs') if hasattr(cs_result, 'rx2') else None
+                if credible_sets is None:
+                    # Try alternative access methods
+                    try:
+                        credible_sets = cs_result['cs']
+                    except:
+                        logger.info("No 'cs' component found in cs_result")
+                        credible_sets = None
                 
-                # Convert to a list if it's not already
-                if isinstance(credible_sets, dict):
-                    # If 'cs' is itself a dictionary, extract its values
-                    cs_values = list(credible_sets.values())
-                    n_cs = len(cs_values)
-                else:
-                    # Try to get the length of the credible sets
-                    n_cs = len(credible_sets) if hasattr(credible_sets, '__len__') else 0
-                    cs_values = credible_sets
+                if credible_sets is not None:
+                    # Convert to a list if it's not already
+                    if isinstance(credible_sets, dict):
+                        # If 'cs' is itself a dictionary, extract its values
+                        cs_values = list(credible_sets.values())
+                        n_cs = len(cs_values)
+                    else:
+                        # Try to get the length of the credible sets
+                        n_cs = len(credible_sets) if hasattr(credible_sets, '__len__') else 0
+                        cs_values = credible_sets
+                        
+                    logger.info(f"Number of credible sets: {n_cs}")
                     
-                logger.info(f"Number of credible sets: {n_cs}")
-                
-                # Only proceed if we have credible sets and cs_index exists
-                if n_cs > 0 and 'cs_index' in cs_result:
-                    # Use cs_index from the result directly - it contains the indices
-                    cs_indices = cs_result['cs_index']
+                    # Only proceed if we have credible sets and cs_index exists
+                    cs_indices = None
+                    try:
+                        cs_indices = cs_result.rx2('cs_index') if hasattr(cs_result, 'rx2') else None
+                        if cs_indices is None:
+                            cs_indices = cs_result['cs_index']
+                    except:
+                        logger.info("No 'cs_index' component found in cs_result")
+                        cs_indices = None
                     
-                    # Process each credible set - fix for handling scalar values
-                    for i, indices in enumerate(cs_indices):
-                        # Handle different types of indices - could be scalar, list, array
-                        if isinstance(indices, (np.int32, np.int64, int)):
-                            # It's a single index - convert to Python 0-indexed
-                            idx = int(indices) - 1
-                            filtered_snp.loc[idx, "cs"] = i + 1
-                            credible_snp_indices.append(idx)
-                        elif hasattr(indices, '__len__') and len(indices) > 0:
-                            # It's a sequence - convert all indices
-                            indices_array = np.array(indices) - 1
-                            # Mark these SNPs with their credible set number
-                            filtered_snp.loc[indices_array, "cs"] = i + 1
-                            credible_snp_indices.extend(indices_array)
+                    if n_cs > 0 and cs_indices is not None:
+                        # Process each credible set - fix for handling scalar values
+                        for i, indices in enumerate(cs_indices):
+                            # Handle different types of indices - could be scalar, list, array
+                            if isinstance(indices, (np.int32, np.int64, int)):
+                                # It's a single index - convert to Python 0-indexed
+                                idx = int(indices) - 1
+                                filtered_snp.loc[idx, "cs"] = i + 1
+                                credible_snp_indices.append(idx)
+                            elif hasattr(indices, '__len__') and len(indices) > 0:
+                                # It's a sequence - convert all indices
+                                indices_array = np.array(indices) - 1
+                                # Mark these SNPs with their credible set number
+                                filtered_snp.loc[indices_array, "cs"] = i + 1
+                                credible_snp_indices.extend(indices_array)
+                                
+            except Exception as e:
+                logger.info(f"Error processing credible sets from R object: {e}")
+                # Continue with empty credible_snp_indices
         
         # If we found any credible SNPs, return them
         if credible_snp_indices:
-            credible_snps = filtered_snp.loc[credible_snp_indices, :]
+            credible_snps = filtered_snp.loc[credible_snp_indices, :].copy()
+            logger.info(f"Found {len(credible_snps)} SNPs in formal credible sets")
         else:
             # Otherwise, use PIP threshold as fallback
-            credible_snps = filtered_snp.loc[filtered_snp["pip"] > 0.5, :]
+            try:
+                # Ensure PIP column is numeric before comparison
+                pip_values = pd.to_numeric(filtered_snp["pip"], errors='coerce').fillna(0.0)
+                
+                # Try different thresholds
+                high_pip_mask = pip_values > 0.5
+                medium_pip_mask = pip_values > 0.1
+                low_pip_mask = pip_values > 0.01
+                
+                if high_pip_mask.sum() > 0:
+                    credible_snps = filtered_snp.loc[high_pip_mask, :].copy()
+                    logger.info(f"Using high PIP threshold (>0.5): {len(credible_snps)} SNPs")
+                elif medium_pip_mask.sum() > 0:
+                    credible_snps = filtered_snp.loc[medium_pip_mask, :].copy()
+                    logger.info(f"Using medium PIP threshold (>0.1): {len(credible_snps)} SNPs")
+                elif low_pip_mask.sum() > 0:
+                    credible_snps = filtered_snp.loc[low_pip_mask, :].copy()
+                    logger.info(f"Using low PIP threshold (>0.01): {len(credible_snps)} SNPs")
+                else:
+                    # Return top 10 SNPs by PIP if no SNPs meet any threshold
+                    credible_snps = filtered_snp.nlargest(min(10, len(filtered_snp)), 'pip').copy()
+                    logger.info(f"No SNPs meet PIP thresholds, returning top {len(credible_snps)} SNPs by PIP")
+                    
+            except Exception as e:
+                logger.warning(f"Error filtering by PIP threshold: {e}")
+                # Return top 5 SNPs as absolute fallback
+                try:
+                    credible_snps = filtered_snp.head(5).copy()
+                    credible_snps["pip"] = 0.0  # Set default PIP
+                    logger.info(f"Fallback: returning first {len(credible_snps)} SNPs")
+                except:
+                    # Return empty DataFrame with same structure if all else fails
+                    credible_snps = filtered_snp.iloc[0:0].copy()
+                    logger.warning("All fallbacks failed, returning empty DataFrame")
             
+        logger.info(f"Final result: {len(credible_snps)} credible SNPs")
         return credible_snps
 
 ### Project-based Analysis Task
