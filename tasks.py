@@ -1311,7 +1311,6 @@ def run_susie_analysis(snp_df, ld_matrix, n=503, L=10):
         
         # Check for matrix dimensions
         if ld_matrix.shape[0] != len(snp_df) or ld_matrix.shape[1] != len(snp_df):
-            # TODO: EXTRACT missing snps
             raise ValueError(f"LD matrix dimensions ({ld_matrix.shape}) don't match SNP data length ({len(snp_df)})")
         
         # Run SuSiE analysis
