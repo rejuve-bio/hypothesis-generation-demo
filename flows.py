@@ -321,7 +321,7 @@ def finemapping_analysis_flow(db, user_id, project_id, selected_genes):
             filtered_snp = check_ld_dimensions(R_df, expanded_region_snps, bim_file_path)
             R_df = check_ld_semidefiniteness(R_df)
             
-            fit = run_susie_analysis(filtered_snp, R_df, n=503, L=10)
+            fit = run_susie_analysis(filtered_snp, R_df, n=359983, L=2)
             credible_sets = formattating_credible_sets(filtered_snp, fit, R_df)
             
             # Store in new_credible_sets for database storage
