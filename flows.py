@@ -5,18 +5,32 @@ from flask import json
 from loguru import logger
 from prefect import flow
 from status_tracker import TaskState
-from tasks import calculate_ld_for_regions, check_ld_dimensions, check_ld_semidefiniteness, download_and_prepare_vcfs, expand_snp_regions, extract_gene_types, formattating_credible_sets, generate_binary_from_vcf, generate_snplist_file, get_candidate_genes, get_gene_region_files, grouping_cojo, mapping_cojo, merge_plink_binaries, predict_causal_gene, get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof, run_cojo_analysis
-from tasks import check_hypothesis, get_enrich, get_gene_ids, execute_gene_query, execute_variant_query,summarize_graph, create_hypothesis, execute_phenotype_query
-from tasks import load_gwas_data, preprocess_gwas_data, filter_significant_snps, prepare_cojo_file, run_susie_analysis
+
+from tasks import (
+    check_enrich, create_enrich_data, get_candidate_genes, predict_causal_gene, 
+    get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof,
+    check_hypothesis, get_enrich, get_gene_ids, execute_gene_query, execute_variant_query,
+    summarize_graph, create_hypothesis, execute_phenotype_query
+)
+
+from analysis_tasks import (
+    load_gwas_data, preprocess_gwas_data, filter_significant_snps, prepare_cojo_file, run_susie_analysis,
+    calculate_ld_for_regions, check_ld_dimensions, check_ld_semidefiniteness, download_and_prepare_vcfs, 
+    expand_snp_regions, extract_gene_types, formattating_credible_sets, generate_binary_from_vcf, 
+    generate_snplist_file, get_gene_region_files, grouping_cojo, mapping_cojo, merge_plink_binaries, 
+    run_cojo_analysis
+)
+
+from project_tasks import (
+    save_analysis_state_task, load_analysis_state_task, create_analysis_result_task, 
+    create_credible_sets_task, check_existing_credible_sets, get_project_analysis_path_task
+)
+
 import pandas as pd
 from datetime import datetime, timezone
 from prefect.task_runners import ThreadPoolTaskRunner
 
 from utils import emit_task_update
-
-from tasks import (save_analysis_state_task, load_analysis_state_task, 
-                   create_analysis_result_task, create_credible_sets_task, check_existing_credible_sets,
-                   get_project_analysis_path_task, check_enrich, create_enrich_data)
 
 ### Enrichment Flow
 @flow(log_prints=True, persist_result=False, task_runner=ThreadPoolTaskRunner(max_workers=4))
