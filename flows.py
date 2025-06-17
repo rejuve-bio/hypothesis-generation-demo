@@ -338,8 +338,27 @@ def finemapping_analysis_flow(db, user_id, project_id, selected_genes):
             fit = run_susie_analysis(filtered_snp, R_df, n=359983, L=2)
             credible_sets = formattating_credible_sets(filtered_snp, fit, R_df)
             
-            # Store in new_credible_sets for database storage
-            new_credible_sets[gene_type] = credible_sets.to_dict(orient="records")
+            # Create LocusZoom formatted data
+            locus_zoom_data = {
+                "data": {
+                    "beta": credible_sets["beta"].tolist(),
+                    "chromosome": credible_sets["CHR"].tolist(),
+                    "log_pvalue": credible_sets["log_pvalue"].tolist(),
+                    "position": credible_sets["POS"].tolist(),
+                    "ref_allele": credible_sets["minor_allele"].tolist(),
+                    "ref_allele_freq": credible_sets["minor_AF"].tolist(),
+                    "variant": credible_sets["SNPID"].tolist(),
+                    "posterior_prob": credible_sets["pip"].tolist(),
+                    "is_member": (credible_sets["cs"] != 0).tolist()
+                },
+                "lastPage": None
+            }
+            
+            # Store both raw data and LocusZoom formatted data
+            new_credible_sets[gene_type] = {
+                "raw_data": credible_sets.to_dict(orient="records"),
+                "locus_zoom_data": locus_zoom_data
+            }
         
         # Save new credible sets to database and get their IDs
         if new_credible_sets:
