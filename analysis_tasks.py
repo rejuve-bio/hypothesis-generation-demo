@@ -6,7 +6,6 @@ import logging
 from prefect import task
 from datetime import datetime
 from loguru import logger
-import gwaslab as gl
 import pandas as pd
 import numpy as np
 import gzip
