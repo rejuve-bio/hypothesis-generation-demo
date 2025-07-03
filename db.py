@@ -164,7 +164,7 @@ class Database:
         return result.matched_count > 0
 
     # ==================== CREDIBLE SETS METHODS ====================
-    def create_credible_set(self, analysis_id, gene_type, data):
+    def create_credible_set(self, analysis_id, gene_type, data, project_id=None):
         """Create credible set entry"""
         credible_set_data = {
             'analysis_id': analysis_id,
@@ -172,6 +172,11 @@ class Database:
             'data': data,
             'created_at': datetime.now(timezone.utc)
         }
+        
+        # Add project_id if provided
+        if project_id:
+            credible_set_data['project_id'] = project_id
+            
         result = self.credible_sets_collection.insert_one(credible_set_data)
         return str(result.inserted_id)
 
@@ -184,6 +189,17 @@ class Database:
             return credible_set
         
         query = {'analysis_id': analysis_id}
+        if gene_type:
+            query['gene_type'] = gene_type
+        
+        credible_sets = list(self.credible_sets_collection.find(query))
+        for cs in credible_sets:
+            cs['_id'] = str(cs['_id'])
+        return credible_sets
+    
+    def get_credible_sets_by_project(self, project_id, gene_type=None):
+        """Get credible sets for a project (for automated pipeline)"""
+        query = {'project_id': project_id}
         if gene_type:
             query['gene_type'] = gene_type
         

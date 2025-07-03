@@ -13,9 +13,12 @@ from api import (
     ChatAPI, 
     init_socket_handlers,
     ProjectsAPI,
-    FileUploadAPI,
-    AnalysisAPI,
-    AnalysisFinemappingAPI,
+    ProjectCredibleSetsAPI,
+    ProjectAnalysisStateAPI,
+    # FileUploadAPI,
+    # AnalysisAPI,
+    # AnalysisFinemappingAPI,
+    AnalysisPipelineAPI,
 )
 from dotenv import load_dotenv
 import os
@@ -110,9 +113,13 @@ def setup_api(config):
     api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete",resource_class_kwargs={"db": deps['db']})
     # project-based workflow
     api.add_resource(ProjectsAPI, "/projects", resource_class_kwargs={"db": deps['db']})
-    api.add_resource(FileUploadAPI, "/upload", resource_class_kwargs={"db": deps['db']})
-    api.add_resource(AnalysisAPI, "/analysis", resource_class_kwargs={"db": deps['db']})
-    api.add_resource(AnalysisFinemappingAPI, "/analysis/finemapping", resource_class_kwargs={"db": deps['db']})
+    api.add_resource(ProjectCredibleSetsAPI, "/projects/<project_id>/credible-sets", resource_class_kwargs={"db": deps['db']})
+    api.add_resource(ProjectAnalysisStateAPI, "/projects/<project_id>/analysis-state", resource_class_kwargs={"db": deps['db']})
+    # api.add_resource(FileUploadAPI, "/upload", resource_class_kwargs={"db": deps['db']})
+    # api.add_resource(AnalysisAPI, "/analysis", resource_class_kwargs={"db": deps['db']})
+    # api.add_resource(AnalysisFinemappingAPI, "/analysis/finemapping", resource_class_kwargs={"db": deps['db']})
+    # new analysis pipeline
+    api.add_resource(AnalysisPipelineAPI, "/analysis-pipeline", resource_class_kwargs={"db": deps['db']})
 
     # Initialize socket handlers 
     socket_namespace = init_socket_handlers(deps['db'])

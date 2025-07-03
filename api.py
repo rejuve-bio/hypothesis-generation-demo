@@ -9,7 +9,7 @@ from socketio_instance import socketio
 from auth import socket_token_required, token_required
 from datetime import datetime, timezone
 from uuid import uuid4
-from flows import hypothesis_flow, preprocessing_flow, finemapping_analysis_flow
+from flows import hypothesis_flow, analysis_pipeline_flow
 # finemapping_flow
 from run_deployment import invoke_enrichment_deployment
 from status_tracker import status_tracker, TaskState
@@ -555,183 +555,220 @@ class ProjectsAPI(Resource):
             return {"message": "Project deleted successfully"}, 200
         return {"error": "Project not found or access denied"}, 404
 
-class FileUploadAPI(Resource):
-    """
-    file upload API that creates projects automatically
-    """
-    def __init__(self, db):
-        self.db = db
-        self.CHUNK_SIZE = 4 * 1024 * 1024  # 4MB chunks
-
-    @token_required
-    def post(self, current_user_id):
-        """Handle GWAS file uploads and create projects automatically"""
-        try:
-            if 'file' not in request.files:
-                return {"error": "No file part"}, 400
-                
-            file = request.files['file']
-            project_name = request.form.get('project_name', f"Analysis - {file.filename.split('.')[0]}")
-            
-            if file.filename == '':
-                return {"error": "No selected file"}, 400
-                
-            if file and allowed_file(file.filename):
-                # Generate secure filename and file ID
-                filename = secure_filename(file.filename)
-                file_id = str(uuid.uuid4())
-                
-                # Create user upload directory
-                user_upload_dir = os.path.join('data', 'uploads', current_user_id)
-                os.makedirs(user_upload_dir, exist_ok=True)
-                
-                # File path for saving
-                file_path = os.path.join(user_upload_dir, f"{file_id}_{filename}")
-                
-                logger.info(f"Starting upload for file {filename} (ID: {file_id})")
-                start_time = datetime.now()
-                
-                # Save file
-                file.save(file_path)
-                file_size = os.path.getsize(file_path)
-                
-                # Create file metadata in database
-                file_metadata_id = self.db.create_file_metadata(
-                    user_id=current_user_id,
-                    filename=filename,
-                    original_filename=file.filename,
-                    file_path=file_path,
-                    file_type='gwas',
-                    file_size=file_size
-                )
-                
-                # Create project automatically
-                project_id = self.db.create_project(
-                    user_id=current_user_id,
-                    name=project_name,
-                    gwas_file_id=file_metadata_id
-                )
-                
-                # Also save metadata to file system for backward compatibility
-                metadata_dir = os.path.join('data', 'metadata', current_user_id)
-                os.makedirs(metadata_dir, exist_ok=True)
-                
-                metadata = {
-                    'file_id': file_metadata_id,
-                    'user_id': current_user_id,
-                    'filename': filename,
-                    'original_filename': file.filename,
-                    'file_path': file_path,
-                    'file_type': 'gwas',
-                    'upload_date': str(datetime.now()),
-                    'file_size': file_size,
-                    'project_id': project_id
-                }
-                
-                with open(os.path.join(metadata_dir, f"{file_metadata_id}.json"), 'w') as f:
-                    json.dump(metadata, f)
-                
-                total_time = (datetime.now() - start_time).total_seconds()
-                logger.info(f"Completed: {filename} in {total_time:.1f} seconds")
-                
-                return {
-                    'file_id': file_metadata_id,
-                    'project_id': project_id,
-                    'filename': filename,
-                    'project_name': project_name,
-                    'file_size': file_size,
-                    'message': 'File uploaded and project created successfully'
-                }, 200
-                
-            return {"error": "File type not allowed"}, 400
-            
-        except Exception as e:
-            logger.error(f"Error: {str(e)}", exc_info=True)
-            return {"error": f"Server error: {str(e)}"}, 500
-
-class AnalysisAPI(Resource):
-    """
-    Project-based GWAS preprocessing analysis API
-    """
+class ProjectCredibleSetsAPI(Resource):
+    """API endpoint for getting credible sets for a project"""
     def __init__(self, db):
         self.db = db
     
     @token_required
-    def post(self, current_user_id):
-        """Run preprocessing analysis for a project"""
-        data = request.get_json()
-        
-        if not data or 'project_id' not in data:
-            return {"error": "Missing required parameter: project_id"}, 400
-        
-        project_id = data['project_id']
-        population = data.get('population', 'EUR')
-        
+    def get(self, current_user_id, project_id):
+        """Get credible sets for a project"""
         # Verify project exists and belongs to user
         project = self.db.get_projects(current_user_id, project_id)
         if not project:
             return {"error": "Project not found or access denied"}, 404
         
         try:
-            # Get file path from project
-            gwas_file_id = project['gwas_file_id']
-            gwas_file_path = get_user_file_path(self.db, gwas_file_id, current_user_id)
+            # Get credible sets for this project
+            credible_sets = self.db.get_credible_sets_by_project(project_id)
             
-            # Run preprocessing flow
-            gene_types = preprocessing_flow(
-                db=self.db,
-                user_id=current_user_id,
-                project_id=project_id,
-                population=population,
-                gwas_file_path=gwas_file_path
-            )
+            # Serialize datetime objects
+            credible_sets = serialize_datetime_fields(credible_sets)
             
-            return {"gene_types": gene_types}, 200
+            return {
+                "project_id": project_id,
+                "project_name": project.get('name', 'Unknown'),
+                "credible_sets": credible_sets,
+                "count": len(credible_sets)
+            }, 200
             
-        except FileNotFoundError as e:
-            return {"error": str(e)}, 404
         except Exception as e:
-            logger.error(f"Preprocessing failed: {str(e)}")
-            return {"error": f"Analysis failed: {str(e)}"}, 500
+            logger.error(f"Error getting credible sets for project {project_id}: {str(e)}")
+            return {"error": f"Error retrieving credible sets: {str(e)}"}, 500
 
-class AnalysisFinemappingAPI(Resource):
-    """
-    Project-based fine-mapping analysis with credible sets caching
-    """
+class ProjectAnalysisStateAPI(Resource):
+    """API endpoint for getting analysis state for a project"""
     def __init__(self, db):
         self.db = db
     
     @token_required
-    def post(self, current_user_id):
-        """Run fine-mapping analysis with caching"""
-        data = request.get_json()
-        
-        if not data or 'project_id' not in data or 'gene_types' not in data:
-            return {"error": "Missing required parameters: project_id, gene_types"}, 400
-        
-        project_id = data['project_id']
-        selected_genes = data['gene_types']
-        
-        # Verify project exists
+    def get(self, current_user_id, project_id):
+        """Get analysis state for a project"""
+        # Verify project exists and belongs to user
         project = self.db.get_projects(current_user_id, project_id)
         if not project:
             return {"error": "Project not found or access denied"}, 404
         
-        if not isinstance(selected_genes, list) or not selected_genes:
-            return {"error": "gene_types must be a non-empty array"}, 400
-        
         try:
-            # Run fine-mapping analysis with caching
-            susie_result = finemapping_analysis_flow(
-                db=self.db,
-                user_id=current_user_id,
-                project_id=project_id,
-                selected_genes=selected_genes
-            )
+            # Get analysis state
+            analysis_state = self.db.load_analysis_state(current_user_id, project_id)
             
-            return {"susie_result": susie_result}, 200
+            if not analysis_state:
+                return {
+                    "project_id": project_id,
+                    "status": "not_started",
+                    "message": "No analysis state found"
+                }, 200
+            
+            return {
+                "project_id": project_id,
+                "analysis_state": analysis_state
+            }, 200
             
         except Exception as e:
-            logger.error(f"Fine-mapping analysis failed: {str(e)}")
-            return {"error": f"Analysis failed: {str(e)}"}, 500
+            logger.error(f"Error getting analysis state for project {project_id}: {str(e)}")
+            return {"error": f"Error retrieving analysis state: {str(e)}"}, 500
+
+class AnalysisPipelineAPI(Resource):
+    def __init__(self, db):
+        self.db = db
+
+    @token_required
+    def post(self, current_user_id):
+        try:
+            # Get form data and file
+            project_name = request.form.get('project_name')
+            ref_genome = request.form.get('ref_genome', 'GRCh37')
+            population = request.form.get('population', 'EUR')
+            window_kb = int(request.form.get('window_kb', 500))
+            max_workers = int(request.form.get('max_workers', 8))
+            
+            # Validate required fields
+            if not project_name:
+                return {"error": "project_name is required"}, 400
+            
+            # Get uploaded file
+            if 'gwas_file' not in request.files:
+                return {"error": "No GWAS file uploaded"}, 400
+            
+            gwas_file = request.files['gwas_file']
+            if gwas_file.filename == '':
+                return {"error": "No file selected"}, 400
+            
+            logger.info(f"[API] Starting analysis pipeline")
+            logger.info(f"[API] Project: {project_name}")
+            logger.info(f"[API] File: {gwas_file.filename}")
+            logger.info(f"[API] Reference: {ref_genome}, Population: {population}")
+            
+            # Validate file
+            if not allowed_file(gwas_file.filename):
+                return {"error": "Invalid file format. Supported: .tsv, .txt, .csv, .gz, .bgz"}, 400
+            
+            # Validate parameters
+            if ref_genome not in ["GRCh37", "GRCh38"]:
+                return {"error": "Reference genome must be GRCh37 or GRCh38"}, 400
+            
+            if population not in ["EUR", "AFR", "AMR", "EAS", "SAS"]:
+                return {"error": "Population must be one of: EUR, AFR, AMR, EAS, SAS"}, 400
+            
+            if window_kb < 500 or window_kb > 5000:
+                return {"error": "Window size must be between 500-5000 kb"}, 400
+            
+            if max_workers < 1 or max_workers > 16:
+                return {"error": "Max workers must be between 1-16"}, 400
+            
+            # === FILE UPLOAD AND PROJECT CREATION  ===
+            # Generate secure filename and file ID
+            filename = secure_filename(gwas_file.filename)
+            file_id = str(uuid.uuid4())
+            
+            # Create user upload directory
+            user_upload_dir = os.path.join('data', 'uploads', current_user_id)
+            os.makedirs(user_upload_dir, exist_ok=True)
+            
+            # File path for saving
+            file_path = os.path.join(user_upload_dir, f"{file_id}_{filename}")
+            
+            logger.info(f"Starting upload for file {filename} (ID: {file_id})")
+            start_time = datetime.now()
+            
+            # Save file
+            gwas_file.save(file_path)
+            file_size = os.path.getsize(file_path)
+            
+            # Create file metadata in database
+            file_metadata_id = self.db.create_file_metadata(
+                user_id=current_user_id,
+                filename=filename,
+                original_filename=gwas_file.filename,
+                file_path=file_path,
+                file_type='gwas',
+                file_size=file_size
+            )
+            
+            # Create project automatically
+            project_id = self.db.create_project(
+                user_id=current_user_id,
+                name=project_name,
+                gwas_file_id=file_metadata_id
+            )
+            
+            # Save metadata to file system
+            metadata_dir = os.path.join('data', 'metadata', current_user_id)
+            os.makedirs(metadata_dir, exist_ok=True)
+            
+            metadata = {
+                'file_id': file_metadata_id,
+                'user_id': current_user_id,
+                'filename': filename,
+                'original_filename': gwas_file.filename,
+                'file_path': file_path,
+                'file_type': 'gwas',
+                'upload_date': str(datetime.now()),
+                'file_size': file_size,
+                'project_id': project_id
+            }
+            
+            with open(os.path.join(metadata_dir, f"{file_metadata_id}.json"), 'w') as f:
+                json.dump(metadata, f)
+            
+            total_time = (datetime.now() - start_time).total_seconds()
+            logger.info(f"Completed: {filename} in {total_time:.1f} seconds")
+            
+            logger.info(f"[API] Created project {project_id} with file {file_metadata_id}")
+            
+            # Start pipeline in background thread
+            def run_pipeline_background():
+                try:
+                    
+                    
+                    logger.info(f"[API] Running analysis pipeline for project {project_id}")
+                    
+                    # Run the analysis pipeline flow directly
+                    credible_sets = analysis_pipeline_flow(
+                        db=self.db,
+                        user_id=current_user_id,
+                        project_id=project_id,
+                        gwas_file_path=file_path,
+                        ref_genome=ref_genome,
+                        population=population,
+                        window_kb=window_kb,
+                        max_workers=max_workers
+                    )
+                    
+                    logger.info(f"[API] Analysis pipeline for project {project_id} completed successfully")
+                    logger.info(f"[API] Generated {len(credible_sets)} credible sets")
+                    
+                except Exception as e:
+                    logger.error(f"[API] Analysis pipeline for project {project_id} failed: {str(e)}")
+            
+            # Start background thread
+            background_thread = Thread(target=run_pipeline_background)
+            background_thread.start()
+            
+            logger.info(f"[API] Analysis pipeline started for project {project_id}")
+            
+            return {
+                "status": "started",
+                "project_id": project_id,
+                "file_id": file_metadata_id,
+                "message": "Analysis pipeline started successfully",
+            }, 202
+            
+        except Exception as e:
+            logger.error(f"[API] Error starting analysis pipeline: {str(e)}")
+            return {"error": f"Error starting analysis pipeline: {str(e)}"}, 500
+
+
+
 

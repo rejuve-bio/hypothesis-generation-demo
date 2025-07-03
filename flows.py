@@ -14,11 +14,8 @@ from tasks import (
 )
 
 from analysis_tasks import (
-    load_gwas_data, preprocess_gwas_data, filter_significant_snps, prepare_cojo_file, run_susie_analysis,
-    calculate_ld_for_regions, check_ld_dimensions, check_ld_semidefiniteness, download_and_prepare_vcfs, 
-    expand_snp_regions, extract_gene_types, formattating_credible_sets, generate_binary_from_vcf, 
-    generate_snplist_file, get_gene_region_files, grouping_cojo, mapping_cojo, merge_plink_binaries, 
-    run_cojo_analysis
+    munge_sumstats_preprocessing, filter_significant_variants, run_cojo_per_chromosome,
+    check_ld_dimensions, check_ld_semidefiniteness
 )
 
 from project_tasks import (
@@ -183,206 +180,136 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
     
     return {"summary": summary, "graph": causal_graph}, 201
 
-@flow(log_prints=True)
-def preprocessing_flow(db, user_id, project_id, population, gwas_file_path):
-    """Project-based preprocessing flow that creates analysis results and saves state"""
-    
-    POPULATION = population
-    SAMPLE_PANEL_URL = "ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/integrated_call_samples_v3.20130502.ALL.panel"
-    
-    # Get project-specific output directory
-    OUTPUT_DIR = get_project_analysis_path_task(db, user_id, project_id)
-    
-    logger.info("Loading GWAS data")
-    gwas_data_df = load_gwas_data(gwas_file_path)
-    logger.info("Preprocessing GWAS data")
-    gwas_data_df = preprocess_gwas_data(gwas_data_df)
-    
-    logger.info("Filtering significant SNPs")
-    significant_snp_df = filter_significant_snps(gwas_data_df, output_dir=OUTPUT_DIR)
 
-    logger.info("Downloading and preparing VCF files")
-    vcf_files = download_and_prepare_vcfs(
-        output_dir=OUTPUT_DIR,
-        population=POPULATION,
-        sample_panel_url=SAMPLE_PANEL_URL,
-    )
-
-    logger.info("Generating snplist file")
-    gwas_snplist_file = generate_snplist_file(
-        gwas_snps=significant_snp_df,
-        output_dir=OUTPUT_DIR
-    )
-    
-    logger.info("Generating binary files from VCFs")
-    binary_files = generate_binary_from_vcf(
-        vcf_files=vcf_files,
-        gwas_snplist_file=gwas_snplist_file,
-        output_dir=OUTPUT_DIR,
-        population=POPULATION
-    )
-    
-    logger.info("Merging binary files")
-    merged_binary = merge_plink_binaries(
-        binary_files=binary_files,
-        output_dir=OUTPUT_DIR,
-        population=POPULATION
-    )
-
-    logger.info("Preparing COJO file")
-    cojo_file_path = prepare_cojo_file(
-        significant_snp_df=significant_snp_df, 
-        output_dir=OUTPUT_DIR
-    )
-    
-    logger.info("Running COJO analysis")
-    cojo_results_path = run_cojo_analysis(
-        merged_binary_path=merged_binary,
-        cojo_file_path=cojo_file_path,
-        output_dir=OUTPUT_DIR,
-        maf_threshold=0.05
-    )
-    
-
-    logger.info("Expanding SNP regions")
-    expanded_regions = expand_snp_regions(
-        cojo_results_path=cojo_results_path,
-        significant_snp_df=significant_snp_df,
-        output_dir=OUTPUT_DIR,
-        window_size=500000
-    )
-
-    logger.info("Mapping COJO results with gene type")
-    mapped_cojo_results = mapping_cojo(cojo_results_path, output_dir=OUTPUT_DIR)
-
-    logger.info("Grouping mapped COJO results by gene type")
-    grouped_cojo_results = grouping_cojo(
-        mapped_cojo_snps=mapped_cojo_results, 
-        expanded_region_files=expanded_regions, 
-        output_dir=OUTPUT_DIR
-    )
-
-    # Extract gene types
-    gene_types = extract_gene_types(grouped_cojo_results)
-    
-    # Create analysis result in database
-    analysis_id = create_analysis_result_task(db, project_id, population, gene_types)
-    
-    # Save analysis state for project
-    analysis_state = {
-        "analysis_id": analysis_id,
-        "merged_binary": merged_binary,
-        "grouped_cojo_results": grouped_cojo_results,
-        "population": population,
-        "output_dir": OUTPUT_DIR
-    }
-    
-    save_analysis_state_task(db, user_id, project_id, analysis_state)
-    
-    return gene_types
 
 @flow(log_prints=True)
-def finemapping_analysis_flow(db, user_id, project_id, selected_genes):
-    """Project-based finemapping flow with credible sets caching"""
+def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="GRCh37", 
+                           population="EUR", window_kb=500, batch_size=5, max_workers=8):
+    """
+    Complete analysis pipeline flow using Prefect for orchestration
+    but multiprocessing for fine-mapping batches (R safety)
+    """
+    import multiprocessing as mp
+    from analysis_tasks import create_region_batches, finemap_region_batch_worker
     
-    # Load analysis state
-    state = load_analysis_state_task(db, user_id, project_id)
-    if not state:
-        raise ValueError(f"No analysis state found for project {project_id}")
+    logger.info(f"[PIPELINE] Starting Prefect analysis pipeline with multiprocessing fine-mapping")
+    logger.info(f"[PIPELINE] Project: {project_id}, User: {user_id}")
+    logger.info(f"[PIPELINE] File: {gwas_file_path}")
+    logger.info(f"[PIPELINE] Batch size: {batch_size} regions per worker process")
+    logger.info(f"[PIPELINE] Max workers: {max_workers}")
     
-    analysis_id = state["analysis_id"]
-    merged_binary = state["merged_binary"]
-    grouped_cojo_results = state["grouped_cojo_results"]
-    OUTPUT_DIR = state["output_dir"]
-    
-    # Check which credible sets already exist
-    existing_sets, missing_gene_types = check_existing_credible_sets(db, analysis_id, selected_genes)
-    
-    logger.info(f"Found existing credible sets for: {list(existing_sets.keys())}")
-    logger.info(f"Need to compute credible sets for: {missing_gene_types}")
-    
-    # Compute missing credible sets
-    new_credible_sets = {}
-    new_credible_set_ids = {}
-    if missing_gene_types:
-        for gene_type in missing_gene_types:
-            logger.info(f"Processing gene type: {gene_type}")
-            
-            gene_region_files = get_gene_region_files(grouped_cojo_results, gene_type)
-            if not gene_region_files:
-                logger.info(f"No region files found for gene type: {gene_type}")
-                new_credible_sets[gene_type] = []
-                continue
-
-            # Generate LD matrices
-            ld_dir = calculate_ld_for_regions(
-                region_files=gene_region_files, 
-                plink_bfile=merged_binary,
-                output_dir=OUTPUT_DIR
-            )
-
-            region_file = gene_region_files[0]
-            region_name = os.path.basename(region_file).split('_snps')[0]
-            
-            ld_file = f"{ld_dir}/{region_name}_snps_ld.ld"
-            ld_r = pd.read_csv(ld_file, sep="\t", header=None)
-            R_df = ld_r.values
-            
-            expanded_region_snps = pd.read_csv(region_file, sep="\t")
-            bim_file_path = f"{OUTPUT_DIR}/plink_binary/merged_{state['population'].lower()}.bim"
-            
-            # Check LD dimensions and run SuSiE
-            filtered_snp = check_ld_dimensions(R_df, expanded_region_snps, bim_file_path)
-            R_df = check_ld_semidefiniteness(R_df)
-            
-            fit = run_susie_analysis(filtered_snp, R_df, n=359983, L=2)
-            credible_sets = formattating_credible_sets(filtered_snp, fit, R_df)
-            
-            # Create LocusZoom formatted data
-            locus_zoom_data = {
-                "data": {
-                    "beta": credible_sets["beta"].tolist(),
-                    "chromosome": credible_sets["CHR"].tolist(),
-                    "log_pvalue": credible_sets["log_pvalue"].tolist(),
-                    "position": credible_sets["POS"].tolist(),
-                    "ref_allele": credible_sets["minor_allele"].tolist(),
-                    "ref_allele_freq": credible_sets["minor_AF"].tolist(),
-                    "variant": credible_sets["SNPID"].tolist(),
-                    "posterior_prob": credible_sets["pip"].tolist(),
-                    "is_member": (credible_sets["cs"] != 0).tolist()
-                },
-                "lastPage": None
-            }
-            
-            # Store both raw data and LocusZoom formatted data
-            new_credible_sets[gene_type] = {
-                "raw_data": credible_sets.to_dict(orient="records"),
-                "locus_zoom_data": locus_zoom_data
-            }
+    try:
+        # Get project-specific output directory (using Prefect task)
+        output_dir = get_project_analysis_path_task.submit(db, user_id, project_id).result()
+        logger.info(f"[PIPELINE] Using output directory: {output_dir}")
         
-        # Save new credible sets to database and get their IDs
-        if new_credible_sets:
-            new_credible_set_ids = create_credible_sets_task(db, analysis_id, new_credible_sets)
-    
-    # Combine existing and new credible sets WITH IDs
-    all_results = {}
-    
-    # Add existing credible sets
-    for gene_type, credible_set_entry in existing_sets.items():
-        if gene_type in selected_genes:
-            all_results[gene_type] = {
-                'credible_set_id': credible_set_entry['_id'],
-                'data': credible_set_entry['data']
+        # Stage 1: Preprocessing (using Prefect tasks)
+        logger.info(f"[PIPELINE] Stage 1: MungeSumstats preprocessing")
+        munged_file_result = munge_sumstats_preprocessing.submit(gwas_file_path, output_dir, ref_genome=ref_genome, n_threads=14).result()
+        
+        # Extract the actual file path from the result
+        if isinstance(munged_file_result, tuple):
+            munged_df, munged_file = munged_file_result
+        else:
+            munged_file = munged_file_result
+            munged_df = pd.read_csv(munged_file, sep='\t')
+        
+        logger.info(f"[PIPELINE] Stage 2: Loading and filtering variants")
+        significant_df_result = filter_significant_variants.submit(munged_df, output_dir).result()
+        
+        # Extract the actual DataFrame
+        if isinstance(significant_df_result, tuple):
+            significant_df, _ = significant_df_result
+        else:
+            significant_df = significant_df_result
+        
+        logger.info(f"[PIPELINE] Stage 3: COJO analysis")
+        plink_dir = "/mnt/hdd_1/rediet/hypothesis-generation-demo/data/external_data"
+        cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, population=population).result()
+        
+        # Extract the actual DataFrame
+        if isinstance(cojo_result, tuple):
+            cojo_results, _ = cojo_result
+        else:
+            cojo_results = cojo_result
+        
+        if cojo_results is None or len(cojo_results) == 0:
+            logger.error("[PIPELINE] No COJO results to process")
+            return None
+        
+        logger.info(f"[PIPELINE] Stage 4: Multiprocessing fine-mapping (NOT using Prefect workers)")
+        logger.info(f"[PIPELINE] Processing {len(cojo_results)} regions with {batch_size} regions per batch")
+        
+        # Create region batches for process-based execution
+        region_batches = create_region_batches(cojo_results, batch_size=batch_size)
+        logger.info(f"[PIPELINE] Created {len(region_batches)} batches for {max_workers} worker processes")
+        
+        # Prepare batch data for multiprocessing (include sumstats data)
+        batch_data_list = []
+        for i, batch in enumerate(region_batches):
+            batch_data = (batch, f"batch_{i}", significant_df)
+            batch_data_list.append(batch_data)
+        
+        # CRITICAL: Use multiprocessing instead of Prefect workers for R safety
+        logger.info(f"[PIPELINE] Using mp.Pool({max_workers}) for R session isolation")
+        all_results = []
+        successful_batches = 0
+        failed_batches = 0
+        
+        with mp.Pool(max_workers) as pool:
+            try:
+                # Process all batches in parallel using multiprocessing
+                batch_results_list = pool.map(finemap_region_batch_worker, batch_data_list)
+                
+                # Collect results
+                for i, batch_results in enumerate(batch_results_list):
+                    if batch_results and len(batch_results) > 0:
+                        all_results.extend(batch_results)
+                        successful_batches += 1
+                        logger.info(f"[PIPELINE] Batch {i} completed with {len(batch_results)} regions")
+                    else:
+                        failed_batches += 1
+                        logger.warning(f"[PIPELINE] ❌ Batch {i} failed or returned no results")
+                        
+            except Exception as e:
+                logger.error(f"[PIPELINE] Error in multiprocessing: {str(e)}")
+                raise
+        
+        # Combine and save results (using Prefect tasks)
+        if all_results:
+            logger.info(f"[PIPELINE] Combining results from {successful_batches} successful batches")
+            combined_results = pd.concat(all_results, ignore_index=True)
+            
+            # Save results using Prefect tasks
+            results_file = create_analysis_result_task.submit(db, user_id, project_id, combined_results, output_dir).result()
+            
+            credible_sets_file = create_credible_sets_task.submit(db, user_id, project_id, combined_results, output_dir).result()
+            
+            # Summary statistics
+            total_variants = len(combined_results)
+            high_pip_variants = len(combined_results[combined_results['PIP'] > 0.5])
+            total_credible_sets = combined_results.get('credible_set', pd.Series([0])).max()
+            
+            logger.info(f"[PIPELINE] Analysis completed successfully!")
+            logger.info(f"[PIPELINE] - Total variants: {total_variants}")
+            logger.info(f"[PIPELINE] - High-confidence variants (PIP > 0.5): {high_pip_variants}")
+            logger.info(f"[PIPELINE] - Total credible sets: {total_credible_sets}")
+            logger.info(f"[PIPELINE] - Successful batches: {successful_batches}/{len(region_batches)}")
+            logger.info(f"[PIPELINE] - Results saved: {results_file}")
+            
+            return {
+                "results_file": results_file,
+                "credible_sets_file": credible_sets_file,
+                "total_variants": total_variants,
+                "high_pip_variants": high_pip_variants,
+                "total_credible_sets": total_credible_sets,
+                "successful_batches": successful_batches,
+                "total_batches": len(region_batches)
             }
-    
-    # Add newly computed credible sets
-    for gene_type, data in new_credible_sets.items():
-        if gene_type in selected_genes:
-            all_results[gene_type] = {
-                'credible_set_id': new_credible_set_ids.get(gene_type),
-                'data': data
-            }
-    
-    return all_results
-
-    
+        else:
+            logger.error("[PIPELINE]  No fine-mapping results generated")
+            raise RuntimeError("All fine-mapping batches failed")
+            
+    except Exception as e:
+        logger.error(f"[PIPELINE]  Analysis pipeline failed: {str(e)}")
+        raise

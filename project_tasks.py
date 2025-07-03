@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 from prefect import task
 from loguru import logger
 
@@ -31,31 +32,47 @@ def load_analysis_state_task(db, user_id, project_id):
 
 
 @task(cache_policy=None)
-def create_analysis_result_task(db, project_id, population, gene_types_identified):
-    """Create analysis result entry in database"""
+def create_analysis_result_task(db, user_id, project_id, combined_results, output_dir):
+    """Create and save analysis results"""
     try:
-        analysis_id = db.create_analysis_result(project_id, population, gene_types_identified)
-        logger.info(f"Created analysis result {analysis_id} for project {project_id}")
-        return analysis_id
+        # Save to output directory
+        results_file = os.path.join(output_dir, "analysis_results.csv")
+        combined_results.to_csv(results_file, index=False)
+        
+        # Save to database
+        db.save_analysis_results(user_id, project_id, combined_results.to_dict('records'))
+        
+        logger.info(f"Analysis results saved: {results_file}")
+        return results_file
     except Exception as e:
-        logger.info(f"Error creating analysis result: {str(e)}")
+        logger.error(f"Error saving analysis results: {str(e)}")
         raise
 
 
 @task(cache_policy=None)
-def create_credible_sets_task(db, analysis_id, credible_sets_data):
-    """Create credible sets entries in database"""
+def create_credible_sets_task(db, user_id, project_id, combined_results, output_dir):
+    """Create and save credible sets from analysis results"""
     try:
-        credible_set_ids = {}
-        for gene_type, data in credible_sets_data.items():
-            credible_set_id = db.create_credible_set(analysis_id, gene_type, data)
-            credible_set_ids[gene_type] = credible_set_id
-            logger.info(f"Created credible set {credible_set_id} for gene type {gene_type}")
+        # Filter for credible variants (those with credible set assignments)
+        credible_sets = combined_results[combined_results.get('cs', 0) > 0].copy()
         
-        return credible_set_ids
+        if len(credible_sets) > 0:
+            # Save to output directory
+            credible_sets_file = os.path.join(output_dir, "credible_sets.csv")
+            credible_sets.to_csv(credible_sets_file, index=False)
+            
+            # Save to database
+            db.save_credible_sets(user_id, project_id, credible_sets.to_dict('records'))
+            
+            logger.info(f"Credible sets saved: {credible_sets_file}")
+            return credible_sets_file
+        else:
+            logger.warning("No credible sets found in results")
+            return None
     except Exception as e:
-        logger.info(f"Error creating credible sets: {str(e)}")
+        logger.error(f"Error saving credible sets: {str(e)}")
         raise
+
 
 
 @task(cache_policy=None)
@@ -100,3 +117,4 @@ def get_project_analysis_path_task(db, user_id, project_id):
     except Exception as e:
         logger.info(f"Error getting project analysis path: {str(e)}")
         raise
+
