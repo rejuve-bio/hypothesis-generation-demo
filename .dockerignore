@@ -65,11 +65,17 @@ pip-delete-this-directory.txt
 .env.local
 .env.*.local
 
-# Data directories (adjust based on your needs)
+# Prefect runtime directories
+.prefect/
+
+# Data directories 
 data/uploads/
 data/projects/
 data/states/
 data/susie/
+data/raw/
+logs/
+data/1000Genomes_phase3/
 *.pkl
 *.csv
 
