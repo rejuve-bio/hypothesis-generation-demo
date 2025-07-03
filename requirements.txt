@@ -27,3 +27,9 @@ gwaslab
 cyvcf2
 polars
 websocket-client
+
+optuna  
+tzlocal 
+pandas 
+PyYAML  
+psutil
