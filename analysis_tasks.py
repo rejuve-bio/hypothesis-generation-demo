@@ -16,20 +16,20 @@ import numpy as np
 from prefect import flow
 import multiprocessing as mp
 from functools import partial
-
-from project_tasks import get_project_analysis_path_task
+import psutil
+import gc
+import optuna
 
 logging.basicConfig(level=logging.INFO)
 
-# Configure rpy2
 try:
-    from rpy2.robjects.packages import importr
     import rpy2.robjects as ro
+    from rpy2.robjects.packages import importr
     from rpy2.robjects import pandas2ri, numpy2ri, default_converter
     from rpy2.robjects.conversion import localconverter
     from rpy2 import robjects
     from rpy2.robjects.vectors import ListVector
-    
+    from rpy2.robjects.conversion import Converter
     
     # Import necessary R packages
     base = importr('base')
@@ -37,30 +37,8 @@ try:
     
     # Check if packages are available before trying to import
     def check_r_package_available(package_name):
-        """Check if an R package is available for import"""
         r_code = f'is.element("{package_name}", installed.packages()[,1])'
         return ro.r(r_code)[0]
-    
-    # Check and install Rfast for better performance
-    if check_r_package_available('Rfast'):
-        try:
-            rfast = importr('Rfast')
-            HAS_RFAST = True
-            logging.info("Rfast package loaded successfully - will use fast matrix operations")
-        except Exception as e:
-            logging.warning(f"Error loading Rfast: {e}")
-            HAS_RFAST = False
-    else:
-        logging.warning("The R package 'Rfast' is not installed. Installing for better performance...")
-        try:
-            # Install Rfast for faster matrix operations
-            ro.r('install.packages("Rfast", repos="https://cran.rstudio.com/", dependencies=TRUE)')
-            rfast = importr('Rfast')
-            HAS_RFAST = True
-            logging.info("Rfast package installed and loaded successfully")
-        except Exception as e:
-            logging.error(f"Failed to install Rfast: {e}")
-            HAS_RFAST = False
     
     # Import analysis packages with proper error handling
     if check_r_package_available('susieR'):
@@ -76,51 +54,57 @@ try:
         logging.warning("The R package 'susieR' is not installed")
         HAS_SUSIE = False
         susieR = None
-    
-    # Check and import vautils and related packages
-    HAS_VAUTILS = False
-    if check_r_package_available('vautils'):
-        try:
-            vautils = importr('vautils')
-            HAS_VAUTILS = True
-            logging.info("vautils package loaded successfully")
-        except Exception as e:
-            logging.error(f"Error importing vautils: {e}")
-    else:
-        logging.warning("The R package 'vautils' is not installed. Attempting installation...")
-        try:
-            # Try to install vautils if not already installed
-            ro.r('if(!requireNamespace("remotes", quietly=TRUE)) install.packages("remotes", repos="https://cran.rstudio.com/")')
-            ro.r('remotes::install_github("oyhel/vautils", dependencies=TRUE, upgrade="never")')
-            vautils = importr('vautils')
-            HAS_VAUTILS = True
-            logging.info("vautils package installed and loaded successfully")
-        except Exception as e:
-            logging.error(f"Failed to install vautils: {e}")
-    
-    # Import other analysis packages
-    try:
-        dplyr = importr('dplyr')
-        readr = importr('readr')
-        data_table = importr('data.table')
-        logging.info("Additional R analysis packages loaded successfully")
-    except Exception as e:
-        logging.warning(f"Could not import some R analysis packages: {e}")
-    
-    # We have rpy2
+
     HAS_RPY2 = True
     
 except ImportError as e:
     logging.warning(f"rpy2 not available: {e}. R-based analyses will not work.")
     HAS_RPY2 = False
     HAS_SUSIE = False
-    HAS_VAUTILS = False
-    default_converter = None
+    # Set all rpy2 related variables to None
+    ro = None
+    importr = None
     pandas2ri = None
     numpy2ri = None
+    default_converter = None
+    localconverter = None
     robjects = None
     susieR = None
+    ListVector = None
+    Converter = None
 
+# === RPY2 MULTIPROCESSING HELPERS ===
+def initialize_rpy2_for_worker():
+    try:
+        import rpy2.robjects as ro
+        from rpy2.robjects import pandas2ri, numpy2ri, default_converter
+        from rpy2.robjects.conversion import localconverter
+        
+        # Force activation of converters in worker process
+        pandas2ri.activate()
+        numpy2ri.activate()
+        
+        # Create combined converter
+        global_converter = default_converter + pandas2ri.converter + numpy2ri.converter        
+        
+        return global_converter, True, None
+        
+    except Exception as e:
+        # Alternative initialization if standard method fails
+        try:
+            import rpy2.robjects as ro
+            from rpy2.robjects import pandas2ri, numpy2ri
+            from rpy2.robjects.conversion import Converter
+            
+            # Manual converter setup
+            cv = Converter('worker_converter')
+            cv += pandas2ri.converter
+            cv += numpy2ri.converter
+            
+            return cv, True, None
+            
+        except Exception as alt_e:
+            return None, False, str(alt_e)
 
 # === UTILITY TASKS ===
 @task
@@ -132,9 +116,6 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
         logger.error(result.stderr)
         raise Exception(f"Command failed with exit code {result.returncode}")
     return result
-
-
-
 
 # === MUNGESUMSTATS PREPROCESSING ===
 @task(cache_policy=None)
@@ -180,10 +161,7 @@ def munge_sumstats_preprocessing(gwas_file_path, output_dir, ref_genome="GRCh37"
                 # force_new=False
             )
             
-            # Extract file path within the conversion context - convert R string to Python string
-            # Remove R formatting: [1] "path" -> path
             formatted_file_path_raw = str(formatted_file_path_r[0])
-            # Extract just the file path from R output format
             import re
             path_match = re.search(r'"([^"]+)"', formatted_file_path_raw)
             if path_match:
@@ -209,21 +187,14 @@ def munge_sumstats_preprocessing(gwas_file_path, output_dir, ref_genome="GRCh37"
         munged_df.reset_index(drop=True, inplace=True)
         munged_df.set_index(["ID"], inplace=True)
         
-        # Z-scores are already provided by MungeSumstats - no need to recalculate
-        logger.info(f"[MUNGE] Using existing Z-scores from MungeSumstats")
-        
         # Save the processed data
         final_output_path = os.path.join(output_dir, "munged_sumstats_processed.tsv")
         munged_df.to_csv(final_output_path, sep='\t', index=False)
         
         # Calculate processing time and stats
         elapsed_time = (datetime.now() - start_time).total_seconds()
-        memory_usage = munged_df.memory_usage(deep=True).sum() / (1024*1024)
-        
+
         logger.info(f"[MUNGE] Processing completed in {elapsed_time:.2f} seconds")
-        logger.info(f"[MUNGE] Final dataset: {munged_df.shape[0]} variants, {memory_usage:.2f} MB")
-        logger.info(f"[MUNGE] Chromosomes: {sorted(munged_df['CHR'].unique().tolist())}")
-        
         return munged_df, final_output_path
         
     except Exception as e:
@@ -235,22 +206,10 @@ def munge_sumstats_preprocessing(gwas_file_path, output_dir, ref_genome="GRCh37"
 def filter_significant_variants(munged_df, output_dir, p_threshold=5e-8):
     """Filter significant variants from munged sumstats."""
     logger.info(f"[FILTER] Filtering variants with p < {p_threshold}")
-    start_time = datetime.now()
-    
-    # Filter significant variants
+
     significant_df = munged_df[munged_df['P'] < p_threshold].copy()
-    logger.info(f"[FILTER] Found {len(significant_df)} significant variants from {len(munged_df)} total")
-    
-    # Save significant variants
     sig_output_path = os.path.join(output_dir, "significant_variants.tsv")
     significant_df.to_csv(sig_output_path, sep='\t', index=False)
-    
-    # Calculate summary statistics
-    chr_counts = significant_df['CHR'].value_counts().sort_index()
-    elapsed_time = (datetime.now() - start_time).total_seconds()
-    
-    logger.info(f"[FILTER] Filtering completed in {elapsed_time:.2f} seconds")
-    logger.info(f"[FILTER] Chromosome distribution: {dict(chr_counts)}")
     
     return significant_df, sig_output_path
 
@@ -262,11 +221,6 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
     Run GCTA COJO analysis per chromosome and combine results.
     """
     logger.info(f"[COJO] Starting per-chromosome COJO analysis for population {population}")
-    logger.info(f"[COJO] Input: {len(significant_df)} significant variants, MAF threshold: {maf_threshold}")
-    
-
-    
-    start_time = datetime.now()
     
     # Create temporary directory for COJO processing
     with tempfile.TemporaryDirectory(prefix="cojo_analysis_") as temp_dir:
@@ -282,7 +236,6 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
         cojo_df.to_csv(cojo_input_path, sep='\t', index=False)
         logger.info(f"[COJO] COJO input prepared: {len(cojo_df)} variants")
         
-        # Run COJO for each chromosome in parallel using ThreadPoolExecutor
         from concurrent.futures import ThreadPoolExecutor, as_completed
         
         def run_cojo_for_chromosome(chrom):
@@ -313,7 +266,7 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
                 ]
                 
                 logger.info(f"[COJO] Running command for chr{chrom}: {' '.join(cojo_cmd)}")
-                result = subprocess.run(cojo_cmd, capture_output=True, text=True, timeout=1800)  # 30 min timeout
+                result = subprocess.run(cojo_cmd, capture_output=True, text=True, timeout=1800)
                 
                 if result.returncode != 0:
                     logger.warning(f"[COJO] GCTA failed for chromosome {chrom}: {result.stderr}")
@@ -345,10 +298,9 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
         # Run all chromosomes in parallel
         combined_results = []
         successful_chromosomes = []
-        max_workers = 4  # Reasonable parallelism
+        max_workers = 4 
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all chromosome tasks
             future_to_chrom = {
                 executor.submit(run_cojo_for_chromosome, chrom): chrom 
                 for chrom in range(1, 23)
@@ -364,19 +316,17 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
                         successful_chromosomes.append(chrom)
                 except Exception as e:
                     logger.error(f"[COJO] Exception in chromosome {chrom}: {str(e)}")
-        
-       
+             
         if combined_results:
             combined_cojo_df = pd.concat(combined_results, ignore_index=True)
             
-            # Ensure consistent column naming
             if 'SNP' in combined_cojo_df.columns:
                 combined_cojo_df = combined_cojo_df.rename(columns={'SNP': 'ID'})
             
             # Remove duplicates and clean up
             combined_cojo_df = combined_cojo_df.drop_duplicates(subset=['ID'] if 'ID' in combined_cojo_df.columns else None)
             
-            # Set ID as index (consistent with susie_finemapping_v1.py)
+            # Set ID as index
             if 'ID' in combined_cojo_df.columns:
                 combined_cojo_df = combined_cojo_df.set_index('ID')
             
@@ -385,13 +335,7 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
             cojo_output_path = os.path.join(output_dir, "combined_cojo_results.txt")
             combined_cojo_df.to_csv(cojo_output_path, sep='\t', index=True)
             
-            # Calculate final statistics
-            elapsed_time = (datetime.now() - start_time).total_seconds()
-            logger.info(f"[COJO] Analysis completed in {elapsed_time:.2f} seconds")
-            logger.info(f"[COJO] Successful chromosomes: {successful_chromosomes}")
-            logger.info(f"[COJO] Total independent signals: {len(combined_cojo_df)}")
-            logger.info(f"[COJO] Results saved to: {cojo_output_path}")
-            
+            logger.info(f"[COJO] Results saved to: {cojo_output_path}")           
             return combined_cojo_df, cojo_output_path
             
         else:
@@ -403,8 +347,6 @@ def check_ld_dimensions(ld_matrix, snp_df, bim_file_path):
     
     if ld_matrix.shape[0] != len(snp_df) or ld_matrix.shape[1] != len(snp_df):
         logger.info("Dimension mismatch detected between LD matrix and SNP list.")
-        logger.info(f"LD shape: {ld_matrix.shape}, SNP list length: {len(snp_df)}")
-
         # Load available SNP IDs from bim file
         available_snps = pd.read_csv(bim_file_path, sep="\t", header=None, names=["CHR", "SNP", "CM", "POS", "A1", "A2"])
         available_snps_set = set(available_snps["SNP"])
@@ -439,18 +381,9 @@ def check_ld_semidefiniteness(R_df):
 
 # === FINE-MAPPING SINGLE REGION ===
 @task(cache_policy=None)
-def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position, window=2000, 
+def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000, 
                                  population="EUR", L=-1, coverage=0.95, min_abs_corr=0.5):
-    try:
-        import rpy2.robjects as ro
-        from rpy2.robjects.packages import importr
-        from rpy2.robjects import pandas2ri, numpy2ri, default_converter
-        from rpy2.robjects.conversion import localconverter
-        import optuna
-        import tempfile
-        import numpy as np
-        import os
-        
+    try:     
         logger.info(f"[FINEMAP] Fine-mapping chr{chr_num}:{lead_variant_position} ±{window}kb")
         
         # Calculate LD 
@@ -472,10 +405,8 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
         if len(filtered_ids) < 2:
             logger.warning(f"[FINEMAP] Insufficient SNPs for chr{chr_num}:{lead_variant_position}")
             return None
-        
-
-        
-        # Calculate LD using plink2 with better temp file handling
+         
+        # Calculate LD
         try:
             with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt') as tmp_file:
                 for snp_id in filtered_ids:
@@ -541,9 +472,6 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
         
         # Get sub-region sumstats matching LD
         sub_region_sumstats_ld = sumstats.loc[ld_df.index]
-        
-        # Apply LD quality control checks using check_ld_dimensions
-        logger.info(f"[FINEMAP] Applying LD quality control checks")
         LD_mat = ld_df.values
         
         # Prepare SNP dataframe for check_ld_dimensions function
@@ -560,7 +488,6 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
             try:
                 filtered_snp_df = check_ld_dimensions(LD_mat, snp_df_for_check, bim_file_path)
                 
-                # Update our data based on check_ld_dimensions results
                 if len(filtered_snp_df) != len(snp_df_for_check):
                     logger.info(f"[FINEMAP] LD dimensions check filtered SNPs: {len(snp_df_for_check)} → {len(filtered_snp_df)}")
                     # Re-filter LD matrix and sumstats to match filtered SNPs
@@ -583,15 +510,6 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
 
         # Get Z-scores after LD filtering
         zhat = sub_region_sumstats_ld["Z"].values.flatten()
-        
-        # Monitor LD structure for debugging (but don't prune)
-        max_ld_off_diag = np.max(np.abs(LD_mat - np.diag(np.diag(LD_mat))))
-        logger.info(f"[DEBUG] Max off-diagonal LD in region: {max_ld_off_diag:.6f}")
-        
-        if max_ld_off_diag > 0.98:
-            logger.warning(f"[DEBUG] High LD detected ({max_ld_off_diag:.6f}) - SuSiE will handle this")
-        
-        logger.info(f"[DEBUG] Final data shape: Z={len(zhat)}, LD={LD_mat.shape}")
 
         # Basic validation of final data
         if len(sub_region_sumstats_ld) < 10:
@@ -604,18 +522,6 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
         
         num_samples = int(sub_region_sumstats_ld["N"].iloc[0])
         
-        # DEBUG: Detailed data inspection before SuSiE
-        logger.info(f"[DEBUG] Pre-SuSiE data inspection for chr{chr_num}:{lead_variant_position}")
-        logger.info(f"[DEBUG] - LD matrix shape: {LD_mat.shape}")
-        logger.info(f"[DEBUG] - Z-scores shape: ({len(zhat)},)")
-        logger.info(f"[DEBUG] - Sample size (N): {num_samples}")
-        logger.info(f"[DEBUG] - LD matrix stats: min={LD_mat.min():.3f}, max={LD_mat.max():.3f}, mean={LD_mat.mean():.3f}")
-        logger.info(f"[DEBUG] - Z-scores stats: min={zhat.min():.3f}, max={zhat.max():.3f}, mean={zhat.mean():.3f}")
-        logger.info(f"[DEBUG] - LD matrix NaN count: {np.isnan(LD_mat).sum()}")
-        logger.info(f"[DEBUG] - Z-scores NaN count: {np.isnan(zhat).sum()}")
-        logger.info(f"[DEBUG] - LD matrix inf count: {np.isinf(LD_mat).sum()}")
-        logger.info(f"[DEBUG] - Z-scores inf count: {np.isinf(zhat).sum()}")
-        
         # Check for invalid data
         if np.isnan(LD_mat).any() or np.isinf(LD_mat).any():
             logger.error(f"[DEBUG] Invalid LD matrix detected - contains NaN or inf values")
@@ -625,109 +531,70 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
             return None
         
         # Check if susieR is available
-        if not HAS_SUSIE or susieR is None:
+        local_susieR = None
+        local_has_susie = False
+        
+        # Using global variables (main process)
+        if 'HAS_SUSIE' in globals() and HAS_SUSIE and 'susieR' in globals() and susieR is not None:
+            local_susieR = susieR
+            local_has_susie = True
+            logger.info(f"[FINEMAP] Using global susieR for chr{chr_num}:{lead_variant_position}")
+        else:
+            try:
+                # Check if susieR is available in this R session
+                if check_r_package_available('susieR'):
+                    local_susieR = importr('susieR')
+                    local_has_susie = True
+                    logger.info(f"[FINEMAP] Imported susieR locally in worker for chr{chr_num}:{lead_variant_position}")
+                else:
+                    logger.error(f"[FINEMAP] susieR package not available in worker process for chr{chr_num}:{lead_variant_position}")
+                    
+            except Exception as e:
+                logger.error(f"[FINEMAP] Error importing susieR in worker process for chr{chr_num}:{lead_variant_position}: {e}")
+        
+        if not local_has_susie or local_susieR is None:
             logger.error(f"[FINEMAP] susieR not available for chr{chr_num}:{lead_variant_position}")
             return None
         
         # Set up R conversions properly for multithreading
         with localconverter(default_converter + pandas2ri.converter + numpy2ri.converter):
-            # Set seed for reproducibility
             try:
                 ro.r(f'set.seed({seed})')
             except Exception as e:
                 logger.error(f"[FINEMAP] Error setting R seed: {str(e)}")
                 return None
             
-            # Convert to R objects with memory management
             try:
                 logger.info(f"[DEBUG] Converting Python objects to R...")
                 zhat_r = ro.conversion.get_conversion().py2rpy(zhat)
                 R_r = ro.conversion.get_conversion().py2rpy(LD_mat)
                 logger.info(f"[DEBUG] R conversion successful")
-                logger.info(f"[DEBUG] - zhat_r type: {type(zhat_r)}")
-                logger.info(f"[DEBUG] - R_r type: {type(R_r)}")
-                
-                # Test R objects accessibility
-                try:
-                    zhat_length = len(zhat)
-                    test_result = ro.r(f'length(c({",".join(map(str, zhat[:5]))}))')
-                    logger.info(f"[DEBUG] R vector creation test successful")
-                except Exception as r_test_e:
-                    logger.warning(f"[DEBUG] R vector test failed: {r_test_e}")
                     
             except Exception as e:
                 logger.error(f"[FINEMAP] Error converting data to R objects: {str(e)}")
-                logger.error(f"[FINEMAP] Matrix dimensions: LD_mat={LD_mat.shape}, zhat=({len(zhat)},)")
-                logger.error(f"[FINEMAP] LD_mat sample: {LD_mat[:2, :2]}")
-                logger.error(f"[FINEMAP] zhat sample: {zhat[:5]}")
                 return None
             
             # Optuna hyperparameter optimization
             if L <= 0:
                 def objective_susie(trial):
                     L_trial = trial.suggest_int("L", 1, 20)
-                    logger.info(f"[DEBUG] Starting SuSiE trial with L={L_trial}")
-
-                    # 1. CHECK INPUT DATA QUALITY
-                    logger.info(f"[DEBUG] Input validation for L={L_trial}:")
-                    logger.info(f"  - Z-scores shape: {zhat.shape if hasattr(zhat, 'shape') else len(zhat)}")
-                    logger.info(f"  - Z-scores range: [{np.min(zhat):.3f}, {np.max(zhat):.3f}]")
-                    logger.info(f"  - Z-scores mean/std: {np.mean(zhat):.3f} ± {np.std(zhat):.3f}")
-                    logger.info(f"  - LD matrix shape: {LD_mat.shape}")
-                    logger.info(f"  - LD matrix diagonal range: [{np.min(np.diag(LD_mat)):.3f}, {np.max(np.diag(LD_mat)):.3f}]")
-                    logger.info(f"  - LD matrix off-diagonal max: {np.max(np.abs(LD_mat - np.diag(np.diag(LD_mat)))):.3f}")
-                    logger.info(f"  - Sample size: {num_samples}")
-
-                    # 2. CHECK FOR PROBLEMATIC DATA PATTERNS
-                    # Check if LD matrix is identity (would cause artificial convergence)
-                    if np.allclose(LD_mat, np.eye(LD_mat.shape[0]), atol=1e-6):
-                        logger.warning(f"[DEBUG] LD matrix is nearly identity! This causes artificial convergence")
-                    
-                    # Monitor LD structure (allow SuSiE to handle high LD with conditioning)
-                    max_ld = np.max(np.abs(LD_mat - np.diag(np.diag(LD_mat))))
-                    if max_ld > 0.99:
-                        logger.warning(f"[DEBUG] High LD detected ({max_ld:.6f}), SuSiE will use matrix conditioning")
-                    
-                    # Check if Z-scores are too extreme
-                    if np.any(np.abs(zhat) > 20):
-                        logger.warning(f"[DEBUG] Extreme Z-scores detected (|Z| > 20): {np.sum(np.abs(zhat) > 20)} variants")
-                    
-                    # Check for NaN/Inf
-                    if np.any(np.isnan(zhat)) or np.any(np.isinf(zhat)):
-                        logger.error(f"[DEBUG]  NaN/Inf in Z-scores!")
-                        return -np.inf
-                    
-                    if np.any(np.isnan(LD_mat)) or np.any(np.isinf(LD_mat)):
-                        logger.error(f"[DEBUG]  NaN/Inf in LD matrix!")
-                        return -np.inf
+                    logger.info(f"[DEBUG] Starting SuSiE trial with L={L_trial}")                
                     
                     try:
-                        susie_fit = susieR.susie_rss(z=zhat_r, R=R_r, L=L_trial, n=num_samples)
+                        susie_fit = local_susieR.susie_rss(z=zhat_r, R=R_r, L=L_trial, n=num_samples)
                         logger.info(f"[DEBUG] SuSiE execution completed for L={L_trial}")
                     except Exception as e:
                         logger.error(f"[DEBUG] SuSiE execution failed for L={L_trial}: {str(e)}")
                         return -np.inf
                     
-                    # Extract ELBO and convergence with robust object handling
-                    try:
-                        logger.info(f"[DEBUG] SuSiE fit object type: {type(susie_fit)}")
-                        logger.info(f"[DEBUG] SuSiE fit object attributes: {dir(susie_fit)[:10]}")
-                        logger.info(f"[DEBUG] hasattr(susie_fit, 'rx2'): {hasattr(susie_fit, 'rx2')}")
-                        logger.info(f"[DEBUG] Checking if rx2 in dir: {'rx2' in dir(susie_fit)}")
-                        
-                        # Try to understand the object structure
-                        try:
-                            logger.info(f"[DEBUG] susie_fit.__class__.__mro__: {susie_fit.__class__.__mro__}")
-                        except:
-                            pass
-                        
+                    # Extract ELBO and convergence
+                    try:                       
                         # Try multiple extraction methods
                         elbo = None
                         converged = None
                         
-                        # Convert NamedList to proper R object that supports rx2
                         if hasattr(susie_fit, 'rx2'):
-                            # Direct rx2 access (like notebook)
+                            # Direct rx2 access
                             elbo = susie_fit.rx2('elbo')[-1]
                             converged = susie_fit.rx2('converged')[0]
                             logger.info(f"[DEBUG] Extracted using direct rx2 method!")
@@ -739,15 +606,11 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
                             try:
                                 # Convert the NamedList to a proper R ListVector
                                 susie_fit_r = ListVector(susie_fit)
-                                logger.info(f"[DEBUG] SuSiE fit object type: {type(susie_fit_r)}")
-                                logger.info(f"[DEBUG] hasattr(susie_fit_r, 'rx2'): {hasattr(susie_fit_r, 'rx2')}")
                                 elbo = susie_fit_r.rx2('elbo')[-1]
                                 converged = susie_fit_r.rx2('converged')[0]
                                 logger.info(f"[DEBUG] Extracted using ListVector conversion method!")
                             except Exception as conv_e:
-                                logger.warning(f"[DEBUG] ListVector conversion failed: {conv_e}")
-                                
-
+                                logger.warning(f"[DEBUG] ListVector conversion failed: {conv_e}")                               
                         
                         # Method 2: Try dictionary access
                         if elbo is None:
@@ -775,7 +638,6 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
                             logger.error(f"[DEBUG] All extraction methods failed for L={L_trial}")
                             return -np.inf
                         
-                        # ENHANCED CONVERGENCE VALIDATION
                         logger.info(f"[DEBUG] Extracted - L={L_trial}, converged={converged}, ELBO={elbo:.6f}")
                         
                         # Extract additional validation info for suspicious convergence detection
@@ -788,15 +650,6 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
                             ro.r('rm(temp_fit_check)')
                         except:
                             pass
-                        
-                        # SUSPICIOUS CONVERGENCE DETECTION - Enhanced debugging
-                        logger.info(f"[DEBUG] 🔍 CONVERGENCE ANALYSIS for L={L_trial}:")
-                        logger.info(f"[DEBUG]   - Converged: {converged}")
-                        logger.info(f"[DEBUG]   - ELBO: {elbo:.6f}")
-                        logger.info(f"[DEBUG]   - Iterations: {niter}")
-                        logger.info(f"[DEBUG]   - Data size: {len(zhat)} variants")
-                        logger.info(f"[DEBUG]   - Max |Z-score|: {np.max(np.abs(zhat)):.3f}")
-                        logger.info(f"[DEBUG]   - Sample size: {num_samples}")
                         
                         # Check for suspicious patterns
                         suspicious_flags = []
@@ -821,11 +674,6 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
                             logger.warning(f"[DEBUG] SUSPICIOUS: L={L_trial} positive ELBO: {elbo} (should be negative)")
                             return -np.inf
                         
-                        # Additional validation: Check if ELBO is in reasonable range for real data
-                        expected_elbo_range = (-1000000, -1000)  # Typical range for real GWAS data
-                        if not (expected_elbo_range[0] <= elbo <= expected_elbo_range[1]):
-                            logger.warning(f"[DEBUG] ELBO outside expected range {expected_elbo_range}: {elbo:.2f}")
-                        
                         # Strict convergence validation
                         if converged == 1:
                             if niter is not None:
@@ -849,34 +697,23 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
             # Run SuSiE with final L
             logger.info(f"[DEBUG] Running final SuSiE with L={L}")
             try:
-                susie_fit = susieR.susie_rss(z=zhat_r, R=R_r, L=L, n=num_samples)
+                susie_fit = local_susieR.susie_rss(z=zhat_r, R=R_r, L=L, n=num_samples)
                 logger.info(f"[DEBUG] Final SuSiE execution completed")
                 
-                # Check final convergence using robust method
+                # Check final convergence
                 try:
                     final_converged = None
                     final_elbo = None
-                    
-                    # Try rx2 first (force attempt like notebook)
+                
                     try:
-                        logger.info(f"[DEBUG] Attempting final rx2 extraction...")
-                        final_converged = susie_fit.rx2('converged')[0]
-                        final_elbo = susie_fit.rx2('elbo')[-1]
-                        logger.info(f"[DEBUG] Final rx2 extraction successful!")
-                    except Exception as rx2_e:
-                        logger.warning(f"[DEBUG] Final rx2 extraction failed: {rx2_e}")
-                    
-                    # Fallback to R method
-                    if final_converged is None:
-                        try:
-                            ro.globalenv['final_fit'] = susie_fit
-                            final_converged_r = ro.r('final_fit$converged')
-                            final_elbo_r = ro.r('tail(final_fit$elbo, 1)')
-                            ro.r('rm(final_fit)')
-                            final_converged = int(final_converged_r[0])
-                            final_elbo = float(final_elbo_r[0])
-                        except:
-                            pass
+                        ro.globalenv['final_fit'] = susie_fit
+                        final_converged_r = ro.r('final_fit$converged')
+                        final_elbo_r = ro.r('tail(final_fit$elbo, 1)')
+                        ro.r('rm(final_fit)')
+                        final_converged = int(final_converged_r[0])
+                        final_elbo = float(final_elbo_r[0])
+                    except:
+                        pass
                     
                     if final_converged is not None:
                         logger.info(f"[DEBUG] Final SuSiE - converged={final_converged}, ELBO={final_elbo:.6f}")
@@ -889,35 +726,35 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
                 logger.error(f"[DEBUG] Final SuSiE execution failed: {str(e)}")
                 return None
             
-            # Extract credible sets and PIPs with ROBUST error handling
+            # Extract credible sets and PIPs
             logger.info(f"[DEBUG] Extracting credible sets and PIPs...")
             
             # Step 1: Extract credible sets
             try:
                 logger.info(f"[DEBUG] Calling susie_get_cs...")
-                credible_sets = susieR.susie_get_cs(susie_fit, coverage=coverage, min_abs_corr=min_abs_corr, Xcorr=R_r)
+                credible_sets = local_susieR.susie_get_cs(susie_fit, coverage=coverage, min_abs_corr=min_abs_corr, Xcorr=R_r)
                 logger.info(f"[DEBUG] susie_get_cs completed successfully")
             except Exception as e:
                 logger.error(f"[FINEMAP] Error extracting credible sets: {str(e)}")
                 credible_sets = None
 
-            # Step 2: Extract PIPs with multiple robust methods
+            # Step 2: Extract PIPs
             pips = None
             
-            # Method 1: Try susie_get_pip (often fails with R error)
+            # Method 1: Try susie_get_pip
             try:
                 logger.info(f"[DEBUG] Method 1: Trying susieR.susie_get_pip...")
-                pips = susieR.susie_get_pip(susie_fit)
+                pips = local_susieR.susie_get_pip(susie_fit)
                 pips = np.array(pips, dtype=np.float64)
                 logger.info(f"[DEBUG] Method 1 SUCCESS: susie_get_pip worked!")
             except Exception as e:
                 logger.warning(f"[DEBUG]  Method 1 FAILED: {str(e)}")
                 pips = None
             
-            # Method 2: Manual alpha calculation (PROVEN WORKING from prev_analysisTask.py)
+            # Method 2: Manual alpha calculation
             if pips is None:
                 try:
-                    logger.info(f"[DEBUG] Method 2: Using PROVEN manual alpha calculation from prev_analysisTask.py...")
+                    logger.info(f"[DEBUG] Method 2: Using PROVEN manual alpha calculation")
                     ro.globalenv['susie_fit'] = susie_fit
                     
                     r_pip_code = """
@@ -971,7 +808,7 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
             # Method 3: Direct fit$pip extraction
             if pips is None:
                 try:
-                    logger.info(f"[DEBUG] Method 3: Direct fit$pip extraction...")
+                    logger.info(f"[DEBUG] Method 3: Direct fit$pip extraction")
                     ro.globalenv['direct_fit'] = susie_fit
                     pip_direct_r = ro.r('direct_fit$pip')
                     ro.r('rm(direct_fit)')
@@ -1002,12 +839,9 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
                     logger.warning(f"[DEBUG] Invalid PIPs detected, clipping to [0,1]")
                     pips = np.clip(pips, 0, 1)
                     
-                logger.info(f"[DEBUG] Final PIPs: min={np.min(pips):.6f}, max={np.max(pips):.6f}, mean={np.mean(pips):.6f}")
-                logger.info(f"[DEBUG] Non-zero PIPs: {np.sum(pips > 0.001)}/{len(pips)}")
-                logger.info(f"[DEBUG] High PIPs (>0.1): {np.sum(pips > 0.1)}")
-                
+                logger.info(f"[DEBUG] Non-zero PIPs: {np.sum(pips > 0.001)}/{len(pips)}")                
             else:
-                logger.error(f"[DEBUG] 🚨 ALL PIP EXTRACTION METHODS FAILED!")
+                logger.error(f"[DEBUG] ALL PIP EXTRACTION METHODS FAILED!")
                 return None
             
             # Explicit memory cleanup for large R objects
@@ -1021,17 +855,10 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
         sub_region_sumstats_ld["PIP"] = pips
         sub_region_sumstats_ld["cs"] = 0
         
-        logger.info(f"[DEBUG] 🔍 CREDIBLE SETS PROCESSING - Using susie_finemapping_v1.py simple approach:")
-        logger.info(f"[DEBUG] credible_sets type: {type(credible_sets)}")
-        
-        # Process credible sets using the SIMPLE working approach from susie_finemapping_v1.py
+        # Process credible sets
         try:
             if credible_sets is not None and len(credible_sets) > 0:
-                # Extract credible set indices - this is the simple approach that works
-                cs_data = credible_sets[0]  # This contains the credible sets
-                logger.info(f"[DEBUG] Credible sets data type: {type(cs_data)}")
-                logger.info(f"[DEBUG] Number of credible sets found: {len(cs_data) if hasattr(cs_data, '__len__') else 'not iterable'}")
-                
+                cs_data = credible_sets[0]                
                 if hasattr(cs_data, '__len__') and len(cs_data) > 0:
                     # Process each credible set
                     for cs_idx, cs_variants in enumerate(cs_data):
@@ -1045,7 +872,6 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
                             sub_region_sumstats_ld.iloc[valid_indices, sub_region_sumstats_ld.columns.get_loc("cs")] = cs_idx + 1
                             logger.info(f"[DEBUG] Assigned {len(valid_indices)} variants to credible set {cs_idx+1}")
                     
-                    # Extract only credible SNPs (those with cs > 0)
                     credible_mask = sub_region_sumstats_ld["cs"] > 0
                     credible_snps = sub_region_sumstats_ld[credible_mask].copy()
                     
@@ -1057,17 +883,13 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
                         credible_snps['converged'] = True
                         credible_snps['credible_set'] = credible_snps['cs']
                         
-                        logger.info(f"[DEBUG] CREDIBLE SETS EXTRACTION SUCCESSFUL:")
-                        logger.info(f"[DEBUG] Total credible variants: {len(credible_snps)}")
-                        logger.info(f"[DEBUG] Credible sets: {sorted(credible_snps['cs'].unique())}")
-                        logger.info(f"[DEBUG] PIP range: {credible_snps['PIP'].min():.6f} - {credible_snps['PIP'].max():.6f}")
-                        
                         # Log per-credible-set stats
                         for cs_num in sorted(credible_snps['cs'].unique()):
                             cs_subset = credible_snps[credible_snps['cs'] == cs_num]
                             logger.info(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - Credible set {cs_num}: {len(cs_subset)} variants, PIP range: {cs_subset['PIP'].min():.6f}-{cs_subset['PIP'].max():.6f}")
                         
-                        return credible_snps
+                        # Format for LocusZoom and return
+                        return credible_snps 
                     else:
                         logger.warning(f"[DEBUG] No variants in credible sets")
                 else:
@@ -1079,7 +901,7 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
             logger.warning(f"[DEBUG] Error processing credible sets: {str(e)}")
         
         # Fallback: use high PIP threshold
-        logger.info(f"[DEBUG] 🔄 Using fallback: variants with PIP > 0.1")
+        logger.info(f"[DEBUG] Using fallback: variants with PIP > 0.1")
         high_pip_mask = sub_region_sumstats_ld["PIP"] > 0.1
         if high_pip_mask.sum() > 0:
             fallback_result = sub_region_sumstats_ld[high_pip_mask].copy()
@@ -1097,14 +919,16 @@ def finemap_region_notebook_exact(seed, sumstats, chr_num, lead_variant_position
         fallback_result['converged'] = True
         
         logger.info(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - Fallback result: {len(fallback_result)} SNPs with PIP > 0.1 or top variants")
+        
+        # Return DataFrame directly for multiprocessing
         return fallback_result
             
     except Exception as e:
         logger.error(f"[FINEMAP] Error in fine-mapping chr{chr_num}:{lead_variant_position}: {str(e)}")
         return None
 
-def create_region_batches(cojo_results, batch_size=5):
-    """Split COJO results into batches for process-based execution"""
+def create_region_batches(cojo_results, batch_size=3):
+    """Split COJO results into smaller batches for memory-efficient processing"""
     batches = []
     
     # Convert COJO results to list of region info
@@ -1125,93 +949,257 @@ def create_region_batches(cojo_results, batch_size=5):
             logger.warning(f"[BATCH] Error parsing variant ID {variant_id}: {e}")
             continue
     
-    # Split into batches
+    # Split into smaller batches (reduced from 5 to 3 for memory efficiency)
     for i in range(0, len(regions), batch_size):
         batch = regions[i:i + batch_size]
         batches.append(batch)
     
-    logger.info(f"[BATCH] Created {len(batches)} batches from {len(regions)} regions (batch_size={batch_size})")
+    logger.info(f"[BATCH] Created {len(batches)} batches from {len(regions)} regions")
     return batches
 
 def finemap_region_batch_worker(batch_data):
 
-    region_batch, batch_id, sumstats_data = batch_data
-    logger.info(f"[BATCH-{batch_id}] Starting batch with {len(region_batch)} regions")
+    # Unpack the batch_data tuple
+    if len(batch_data) == 3:
+        region_batch, batch_id, sumstats_file_path = batch_data
+        additional_params = None
+    elif len(batch_data) == 4:
+        region_batch, batch_id, sumstats_file_path, additional_params = batch_data
+    else:
+        raise ValueError(f"Expected 3 or 4 elements in batch_data, got {len(batch_data)}")
     
-    # Import R packages in this isolated process
-    try:
-        from rpy2.robjects.packages import importr
-        import rpy2.robjects as ro
-        from rpy2.robjects import pandas2ri, numpy2ri, default_converter
-        from rpy2.robjects.conversion import localconverter
-        
-        # Check if susieR is available in this process
-        def check_r_package_available(package_name):
-            r_code = f'is.element("{package_name}", installed.packages()[,1])'
-            return ro.r(r_code)[0]
-        
-        if not check_r_package_available('susieR'):
-            logger.error(f"[BATCH-{batch_id}] susieR not available in worker process")
-            return []
-            
-        susieR = importr('susieR')
-        logger.info(f"[BATCH-{batch_id}] Fresh R session initialized with susieR")
-        
-    except Exception as e:
-        logger.error(f"[BATCH-{batch_id}] Error setting up R environment: {e}")
+    sumstats_data = load_sumstats_from_file(sumstats_file_path)
+    
+    if sumstats_data is None:
+        logger.error(f"[BATCH-{batch_id}] Failed to load sumstats from file")
         return []
+
+    # Extract database connection info
+    db = None
+    user_id = None
+    project_id = None
+
+    if additional_params:
+        db_params = additional_params.get('db_params', None)
+        user_id = additional_params.get('user_id', None)
+        project_id = additional_params.get('project_id', None)
+        
+        if db_params:
+            try:
+                from db import Database
+                db = Database(db_params['uri'], db_params['db_name'])
+                logger.info(f"[BATCH-{batch_id}] Database connection recreated in worker process")
+            except Exception as db_e:
+                logger.error(f"[BATCH-{batch_id}] Error recreating database connection: {db_e}")
+                db = None
     
     batch_results = []
     successful_regions = 0
     failed_regions = 0
     
-    # Process each region in this batch using the same R session
-    for region in region_batch:
-        try:
-            logger.info(f"[BATCH-{batch_id}] Processing region {region['variant_id']}")
-            
-            # Use the existing finemap_region_notebook_exact function 
-            # but in this isolated process
-            result = finemap_region_notebook_exact(
-                seed=42,
-                sumstats=sumstats_data,
-                chr_num=region['chr'],
-                lead_variant_position=region['position'],
-                window=2000,
-                population="EUR",
-                L=-1,
-                coverage=0.95,
-                min_abs_corr=0.5
-            )
-            
-            if result is not None and len(result) > 0:
-                # Add batch and region metadata
-                result['batch_id'] = batch_id
-                result['processed_by'] = f"mp-worker-{os.getpid()}"
-                batch_results.append(result)
-                successful_regions += 1
-                
-                # Log success metrics
-                max_pip = result['PIP'].max()
-                high_pip_count = len(result[result['PIP'] > 0.5])
-                cs_count = len(result.get('credible_set', [0]).unique()) if 'credible_set' in result.columns else 0
-                logger.info(f"[BATCH-{batch_id}] {region['variant_id']}: {cs_count} credible sets, max PIP={max_pip:.3f}")
-            else:
-                failed_regions += 1
-                logger.warning(f"[BATCH-{batch_id}] Failed {region['variant_id']}")
-                
-        except Exception as e:
-            failed_regions += 1
-            logger.error(f"[BATCH-{batch_id}] Error processing {region['variant_id']}: {str(e)}")
+    logger.info(f"[BATCH-{batch_id}] Initializing single R session for entire batch")
     
-    # Cleanup R session
+    # Single R session initialization 
+    global_converter, r_session_initialized, init_error = initialize_rpy2_for_worker()
+    
+    if not r_session_initialized:
+        logger.error(f"[BATCH-{batch_id}] rpy2 initialization failed: {init_error}")
+        return []
+    
+    logger.info(f"[BATCH-{batch_id}] rpy2 conversion context initialized successfully")
+    
+    # Now initialize susieR
+    susieR = None
     try:
-        ro.r('gc()')  # Force garbage collection
-        logger.info(f"[BATCH-{batch_id}] R session cleaned up")
-    except:
-        pass
+        from rpy2.robjects.packages import importr
+        import rpy2.robjects as ro
+        from rpy2.robjects.conversion import localconverter
+        
+        # Use the conversion context for all R operations including imports
+        with localconverter(global_converter):
+            # Check susieR availability
+            if not check_r_package_available('susieR'):
+                logger.error(f"[BATCH-{batch_id}] susieR not available in this worker")
+                return []
+                
+            susieR = importr('susieR')
+            logger.info(f"[BATCH-{batch_id}] susieR imported successfully")
+            
+            # Set global R options for memory management
+            ro.r('options(warn=-1)')
+            ro.r('options(scipen=999)') 
+        
+    except Exception as susie_e:
+        logger.error(f"[BATCH-{batch_id}] susieR import failed: {susie_e}")
+        return []
     
-    logger.info(f"[BATCH-{batch_id}] Completed: {successful_regions} successful, {failed_regions} failed")
+    # Process regions with shared R session
+    for region_idx, region in enumerate(region_batch):
+        region_id = region['variant_id']
+        
+        logger.info(f"[BATCH-{batch_id}] Processing region {region_idx+1}/{len(region_batch)}: {region_id}")
+        
+        try:
+            # Ensure imports are available in this scope
+            import rpy2.robjects as ro
+            from rpy2.robjects.conversion import localconverter
+            
+            # Use the shared R session with proper context management
+            logger.info(f"[BATCH-{batch_id}] Running fine-mapping for {region_id} with shared R session")
+            
+            # Ensure conversion context is active before calling fine-mapping
+            try:
+                # Verify conversion context is still active
+                import numpy as np
+                test_val = np.array([1.0])
+                with localconverter(global_converter):
+                    test_r = ro.conversion.get_conversion().py2rpy(test_val)
+            except Exception as ctx_e:
+                logger.warning(f"[BATCH-{batch_id}] Conversion context issue before {region_id}: {ctx_e}")
+                # Reactivate converters
+                from rpy2.robjects import pandas2ri, numpy2ri
+                pandas2ri.activate()
+                numpy2ri.activate()
+            
+            with localconverter(global_converter):
+                result = finemap_region(
+                    seed=42,
+                    sumstats=sumstats_data,
+                    chr_num=region['chr'],
+                    lead_variant_position=region['position'],
+                    window=2000,
+                    population="EUR",
+                    L=-1,
+                    coverage=0.95,
+                    min_abs_corr=0.5
+                )
+                
+                if result is not None and len(result) > 0:
+                    # Add batch and region metadata
+                    result['batch_id'] = batch_id
+                    result['region_idx'] = region_idx
+                    result['processed_by'] = f"mp-worker-{os.getpid()}"
+                    batch_results.append(result)
+                    successful_regions += 1
+                    
+                    # Save to database if available
+                    if db and user_id and project_id:
+                        try:
+                            from utils import transform_credible_sets_to_locuszoom
+                            
+                            lead_variant_id = region['variant_id']
+                            credible_sets_data = []
+                            
+                            # Transform results
+                            if 'cs' in result.columns:
+                                for cs_id in sorted(result['cs'].unique()):
+                                    if cs_id > 0:
+                                        cs_variants = result[result['cs'] == cs_id]
+                                        locuszoom_data = transform_credible_sets_to_locuszoom(cs_variants)
+                                        
+                                        credible_set = {
+                                            "set_id": int(cs_id),
+                                            "coverage": 0.95,
+                                            "variants": locuszoom_data
+                                        }
+                                        credible_sets_data.append(credible_set)
+                            
+                            # Save to database
+                            metadata = {
+                                "chr": region['chr'],
+                                "position": region['position'],
+                                "window_kb": 2000,
+                                "population": "EUR",
+                                "total_variants_analyzed": len(result),
+                                "credible_sets_count": len(credible_sets_data),
+                                "completed_at": datetime.now().isoformat()
+                            }
+                            
+                            db.save_lead_variant_credible_sets(
+                                user_id, project_id, lead_variant_id, 
+                                {
+                                    "credible_sets": credible_sets_data,
+                                    "metadata": metadata
+                                }
+                            )
+                            
+                            logger.info(f"[BATCH-{batch_id}] Saved {len(credible_sets_data)} credible sets for {lead_variant_id}")
+                            
+                        except Exception as save_e:
+                            logger.error(f"[BATCH-{batch_id}] Error saving credible sets for {region_id}: {save_e}")
+                else:
+                    failed_regions += 1
+                    logger.warning(f"[BATCH-{batch_id}] No results for {region_id}")
+        
+        except Exception as processing_e:
+            failed_regions += 1
+            logger.error(f"[BATCH-{batch_id}] Error processing {region_id}: {str(processing_e)}")
+        
+        # cleanup after each region to prevent accumulation
+        try:
+            # Force Python garbage collection
+            collected = gc.collect()
+            
+            # Lightweight R cleanup 
+            with localconverter(global_converter):
+                ro.r('rm(list=ls()[!(ls() %in% c("base", "stats", "utils", "methods"))])')
+                ro.r('gc(verbose=FALSE)')
+                
+        except Exception as cleanup_e:
+            logger.warning(f"[BATCH-{batch_id}] Cleanup error after {region_id}: {cleanup_e}")
+    
+    # Final cleanup of R session
+    if r_session_initialized:
+        try:
+            with localconverter(global_converter):
+                ro.r('rm(list=ls())')  # Clear everything
+                ro.r('gc(verbose=FALSE)')
+            logger.info(f"[BATCH-{batch_id}] Final R session cleanup completed")
+        except Exception as final_cleanup_e:
+            logger.warning(f"[BATCH-{batch_id}] Final cleanup error: {final_cleanup_e}") 
+    
     return batch_results
+
+# === MEMORY-EFFICIENT DATA SHARING ===
+def save_sumstats_for_workers(sumstats_df, temp_dir=None):
+    """Save sumstats to a temporary file for memory-efficient worker access"""
+    if temp_dir is None:
+        temp_dir = tempfile.gettempdir()
+    
+    # Create a unique temporary file
+    temp_file = tempfile.NamedTemporaryFile(
+        mode='w', suffix='.tsv', dir=temp_dir, delete=False
+    )
+    temp_path = temp_file.name
+    temp_file.close()
+    
+    # Save the DataFrame
+    sumstats_df.to_csv(temp_path, sep='\t', index=True)
+    logger.info(f"[MEMORY] Saved sumstats to temporary file: {temp_path}")
+    logger.info(f"[MEMORY] File size: {os.path.getsize(temp_path) / (1024**2):.1f} MB")
+    
+    return temp_path
+
+def load_sumstats_from_file(temp_path):
+    """Load sumstats from temporary file in worker process"""
+    try:
+        # Load with proper index handling
+        sumstats_df = pd.read_csv(temp_path, sep='\t', index_col=0, low_memory=False)
+        logger.info(f"[WORKER] Loaded sumstats: {sumstats_df.shape[0]} variants, {sumstats_df.shape[1]} columns")
+        return sumstats_df
+    except Exception as e:
+        logger.error(f"[WORKER] Error loading sumstats from {temp_path}: {e}")
+        return None
+
+def cleanup_sumstats_file(temp_path):
+    """Clean up temporary sumstats file after all workers are done"""
+    try:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            logger.info(f"[MEMORY] Cleaned up temporary sumstats file: {temp_path}")
+        else:
+            logger.warning(f"[MEMORY] Temporary file not found for cleanup: {temp_path}")
+    except Exception as e:
+        logger.error(f"[MEMORY] Error cleaning up temporary file {temp_path}: {e}")
 
 

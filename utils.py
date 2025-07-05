@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import os
 from flask import json
+from loguru import logger
 from socketio_instance import socketio
 from status_tracker import status_tracker, TaskState
 import socketio as sio
@@ -141,3 +142,41 @@ def serialize_datetime_fields(data):
         return [serialize_datetime_fields(item) for item in data]
     else:
         return data
+
+def transform_credible_sets_to_locuszoom(credible_sets_data):
+    """Transform credible sets to LocusZoom format"""
+    import pandas as pd
+    import numpy as np
+    
+    # Convert to DataFrame
+    if isinstance(credible_sets_data, list):
+        if len(credible_sets_data) > 0 and 'data' in credible_sets_data[0]:
+            all_variants = []
+            for cs_obj in credible_sets_data:
+                all_variants.extend(cs_obj['data'])
+            df = pd.DataFrame(all_variants)
+        else:
+            df = pd.DataFrame(credible_sets_data)
+    else:
+        df = credible_sets_data.copy() if hasattr(credible_sets_data, 'copy') else pd.DataFrame(credible_sets_data)
+    
+    if len(df) == 0:
+        return {"data": {"beta": [], "chromosome": [], "log_pvalue": [], "position": [], 
+                        "ref_allele": [], "ref_allele_freq": [], "variant": [], 
+                        "posterior_prob": [], "is_member": []}, "lastPage": None}
+    
+    # Create LocusZoom format
+    return {
+        "data": {
+            "beta": df['BETA'].astype(float).tolist(),
+            "chromosome": df['CHR'].astype(int).tolist(), 
+            "log_pvalue": (-np.log10(df['P'].astype(float))).tolist(),
+            "position": df['BP'].astype(int).tolist(),
+            "ref_allele": df['A2'].astype(str).tolist(),
+            "ref_allele_freq": df['FRQ'].astype(float).tolist(),
+            "variant": [f"{row['CHR']}:{row['BP']}:{row['A2']}:{row['A1']}" for _, row in df.iterrows()],
+            "posterior_prob": df['PIP'].astype(float).tolist() if 'PIP' in df.columns else [0.0] * len(df),
+            "is_member": (df.get('cs', 0) != 0).tolist()
+        },
+        "lastPage": None
+    }

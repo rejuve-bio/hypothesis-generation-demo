@@ -1,7 +1,6 @@
 import os
 from threading import Thread, Timer
 import uuid
-import asyncio
 from flask import json, request
 from flask_restful import Resource
 from flask_socketio import join_room, leave_room
@@ -14,7 +13,7 @@ from flows import hypothesis_flow, analysis_pipeline_flow
 from run_deployment import invoke_enrichment_deployment
 from status_tracker import status_tracker, TaskState
 from prefect import flow
-from utils import allowed_file, get_user_file_path
+from utils import allowed_file, transform_credible_sets_to_locuszoom
 from loguru import logger
 from werkzeug.utils import secure_filename
 from utils import serialize_datetime_fields
@@ -68,23 +67,23 @@ class EnrichAPI(Resource):
         args = request.args
         phenotype, variant = args['phenotype'], args['variant']
         project_id = args.get('project_id')
-        credible_set_id = args.get('credible_set_id')
+        lead_variant_id = args.get('lead_variant_id')
         
         if not project_id:
             return {"error": "project_id is required"}, 400
         
-        if not credible_set_id:
-            return {"error": "credible_set_id is required"}, 400
+        if not lead_variant_id:
+            return {"error": "lead_variant_id is required"}, 400
         
         # Validate project exists
         project = self.db.get_projects(current_user_id, project_id)
         if not project:
             return {"error": "Project not found or access denied"}, 404
         
-        # Validate credible set exists
-        credible_set = self.db.get_credible_sets(None, None, credible_set_id)
-        if not credible_set:
-            return {"error": "Credible set not found"}, 404
+        # Validate lead variant exists
+        lead_variant = self.db.get_lead_variant_credible_sets(current_user_id, project_id, lead_variant_id)
+        if not lead_variant:
+            return {"error": "Lead variant not found"}, 404
         
         logger.info(f"Project-based enrichment request for project {project_id}")
         
@@ -102,7 +101,7 @@ class EnrichAPI(Resource):
                 variant=variant, 
                 hypothesis_id=existing_hypothesis['id'],
                 project_id=project_id,
-                credible_set_id=credible_set_id
+                lead_variant_id=lead_variant_id
             )
             return {"hypothesis_id": existing_hypothesis['id'], "project_id": project_id}, 202
         
@@ -126,7 +125,7 @@ class EnrichAPI(Resource):
             variant=variant, 
             hypothesis_id=hypothesis_id,
             project_id=project_id,
-            credible_set_id=credible_set_id
+            lead_variant_id=lead_variant_id
         )
         
         return {"hypothesis_id": hypothesis_id}, 201
@@ -562,24 +561,49 @@ class ProjectCredibleSetsAPI(Resource):
     
     @token_required
     def get(self, current_user_id, project_id):
-        """Get credible sets for a project"""
+        """Get credible sets for a project, optionally filtered by lead variant"""
+        from flask import request
+        
         # Verify project exists and belongs to user
         project = self.db.get_projects(current_user_id, project_id)
         if not project:
             return {"error": "Project not found or access denied"}, 404
         
+        # Check for lead_variant_id query parameter
+        lead_variant_id = request.args.get('lead_variant_id')
+        
         try:
-            # Get credible sets for this project
-            credible_sets = self.db.get_credible_sets_by_project(project_id)
+            # First try to get incremental results (organized by lead variant)
+            lead_variant_results = self.db.get_lead_variant_credible_sets(
+                current_user_id, project_id, lead_variant_id
+            )
             
-            # Serialize datetime objects
-            credible_sets = serialize_datetime_fields(credible_sets)
+            if lead_variant_results:
+                if lead_variant_id:
+                    # Return single lead variant result
+                    if lead_variant_results and 'data' in lead_variant_results:
+                        return lead_variant_results['data'], 200
+                    else:
+                        return {"error": "Lead variant not found"}, 404
+                else:
+                    # Return all lead variants organized by lead variant ID
+                    organized_results = {}
+                    for result in lead_variant_results:
+                        lead_var_id = result['lead_variant_id']
+                        organized_results[lead_var_id] = result['data']
+                    
+                    return {
+                        "data": organized_results,
+                        "structure": "by_lead_variant",
+                        "total_lead_variants": len(organized_results)
+                    }, 200
             
+            # No results found - return empty structure
             return {
-                "project_id": project_id,
-                "project_name": project.get('name', 'Unknown'),
-                "credible_sets": credible_sets,
-                "count": len(credible_sets)
+                "data": {},
+                "structure": "by_lead_variant", 
+                "total_lead_variants": 0,
+                "message": "No credible sets found - analysis may still be running"
             }, 200
             
         except Exception as e:
@@ -631,7 +655,7 @@ class AnalysisPipelineAPI(Resource):
             ref_genome = request.form.get('ref_genome', 'GRCh37')
             population = request.form.get('population', 'EUR')
             window_kb = int(request.form.get('window_kb', 500))
-            max_workers = int(request.form.get('max_workers', 8))
+            max_workers = int(request.form.get('max_workers', 3))
             
             # Validate required fields
             if not project_name:
@@ -747,7 +771,10 @@ class AnalysisPipelineAPI(Resource):
                     )
                     
                     logger.info(f"[API] Analysis pipeline for project {project_id} completed successfully")
-                    logger.info(f"[API] Generated {len(credible_sets)} credible sets")
+                    if credible_sets and isinstance(credible_sets, dict):
+                        logger.info(f"[API] Generated {credible_sets.get('total_variants', 0)} variants in {credible_sets.get('total_credible_sets', 0)} credible sets")
+                    else:
+                        logger.info(f"[API] Analysis completed but no credible sets generated")
                     
                 except Exception as e:
                     logger.error(f"[API] Analysis pipeline for project {project_id} failed: {str(e)}")

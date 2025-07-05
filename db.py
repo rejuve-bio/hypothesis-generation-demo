@@ -9,6 +9,10 @@ from loguru import logger
 
 class Database:
     def __init__(self, uri, db_name):
+        # Store connection parameters for multiprocessing
+        self.uri = uri
+        self.db_name = db_name
+        
         self.client = MongoClient(uri)
         self.db = self.client[db_name]
         
@@ -163,70 +167,87 @@ class Database:
         )
         return result.matched_count > 0
 
+    def save_analysis_results(self, user_id, project_id, results_data):
+        """Save analysis results to database"""
+        try:
+            # Create analysis result entry
+            analysis_data = {
+                'user_id': user_id,
+                'project_id': project_id,
+                'analysis_date': datetime.now(timezone.utc),
+                'status': 'completed',
+                'results_data': results_data
+            }
+            result = self.analysis_results_collection.insert_one(analysis_data)
+            logger.info(f"Saved analysis results for project {project_id}: {len(results_data)} variants")
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Error saving analysis results: {str(e)}")
+            raise
+
     # ==================== CREDIBLE SETS METHODS ====================
-    def create_credible_set(self, analysis_id, gene_type, data, project_id=None):
-        """Create credible set entry"""
-        credible_set_data = {
-            'analysis_id': analysis_id,
-            'gene_type': gene_type,
-            'data': data,
-            'created_at': datetime.now(timezone.utc)
-        }
-        
-        # Add project_id if provided
-        if project_id:
-            credible_set_data['project_id'] = project_id
+    def save_lead_variant_credible_sets(self, user_id, project_id, lead_variant_id, lead_variant_data):
+        """Save credible sets for a specific lead variant incrementally"""
+        try:
+            # Create entry organized by lead variant
+            credible_set_data = {
+                'user_id': user_id,
+                'project_id': project_id,
+                'lead_variant_id': lead_variant_id,
+                'data': lead_variant_data,
+                'created_at': datetime.now(timezone.utc),
+                'type': 'lead_variant_credible_sets'
+            }
             
-        result = self.credible_sets_collection.insert_one(credible_set_data)
-        return str(result.inserted_id)
+            # Upsert - update if exists, create if doesn't
+            result = self.credible_sets_collection.update_one(
+                {
+                    'user_id': user_id,
+                    'project_id': project_id,
+                    'lead_variant_id': lead_variant_id,
+                    'type': 'lead_variant_credible_sets'
+                },
+                {'$set': credible_set_data},
+                upsert=True
+            )
+            
+            logger.info(f"Saved/updated credible sets for lead variant {lead_variant_id} in project {project_id}")
+            return str(result.upserted_id) if result.upserted_id else "updated"
+        except Exception as e:
+            logger.error(f"Error saving lead variant credible sets: {str(e)}")
+            raise
 
-    def get_credible_sets(self, analysis_id, gene_type=None, credible_set_id=None):
-        """Get credible sets for an analysis"""
-        if credible_set_id:
-            credible_set = self.credible_sets_collection.find_one({'_id': ObjectId(credible_set_id)})
-            if credible_set:
-                credible_set['_id'] = str(credible_set['_id'])
-            return credible_set
-        
-        query = {'analysis_id': analysis_id}
-        if gene_type:
-            query['gene_type'] = gene_type
-        
-        credible_sets = list(self.credible_sets_collection.find(query))
-        for cs in credible_sets:
-            cs['_id'] = str(cs['_id'])
-        return credible_sets
-    
-    def get_credible_sets_by_project(self, project_id, gene_type=None):
-        """Get credible sets for a project (for automated pipeline)"""
-        query = {'project_id': project_id}
-        if gene_type:
-            query['gene_type'] = gene_type
-        
-        credible_sets = list(self.credible_sets_collection.find(query))
-        for cs in credible_sets:
-            cs['_id'] = str(cs['_id'])
-        return credible_sets
+    def get_lead_variant_credible_sets(self, user_id, project_id, lead_variant_id=None):
+        """Get credible sets organized by lead variant"""
+        try:
+            query = {
+                'user_id': user_id,
+                'project_id': project_id,
+                'type': 'lead_variant_credible_sets'
+            }
+            
+            if lead_variant_id:
+                query['lead_variant_id'] = lead_variant_id
+                result = self.credible_sets_collection.find_one(query)
+                if result:
+                    result['_id'] = str(result['_id'])
+                return result
+            else:
+                results = list(self.credible_sets_collection.find(query))
+                for result in results:
+                    result['_id'] = str(result['_id'])
+                return results
+        except Exception as e:
+            logger.error(f"Error getting lead variant credible sets: {str(e)}")
+            raise
 
-    def check_credible_set_exists(self, analysis_id, gene_type):
-        """Check if credible set exists for analysis and gene type"""
-        return self.credible_sets_collection.find_one({
-            'analysis_id': analysis_id,
-            'gene_type': gene_type
-        }) is not None
-
-    def delete_credible_set(self, credible_set_id):
-        """Delete credible set"""
-        result = self.credible_sets_collection.delete_one({'_id': ObjectId(credible_set_id)})
-        return result.deleted_count > 0
-
-    def create_enrich(self, user_id, project_id, credible_set_id, variant, phenotype, causal_gene, go_terms, causal_graph):
-        """Create enrichment entry with project and credible set references"""
+    def create_enrich(self, user_id, project_id, lead_variant_id, variant, phenotype, causal_gene, go_terms, causal_graph):
+        """Create enrichment entry with project and lead variant references"""
         enrich_data = {
             'id': str(uuid4()),
             'user_id': user_id,
             'project_id': project_id,
-            'credible_set_id': credible_set_id,
+            'lead_variant_id': lead_variant_id,
             'variant': variant,
             'phenotype': phenotype,
             'causal_gene': causal_gene,
@@ -237,11 +258,11 @@ class Database:
         result = self.enrich_collection.insert_one(enrich_data)
         return enrich_data['id']
 
-    def get_enrich_by_credible_set(self, user_id, credible_set_id, variant, phenotype):
-        """Check if enrichment exists for credible set, variant, and phenotype"""
+    def get_enrich_by_lead_variant(self, user_id, lead_variant_id, variant, phenotype):
+        """Check if enrichment exists for lead variant, variant, and phenotype"""
         return self.enrich_collection.find_one({
             'user_id': user_id,
-            'credible_set_id': credible_set_id,
+            'lead_variant_id': lead_variant_id,
             'variant': variant,
             'phenotype': phenotype
         })

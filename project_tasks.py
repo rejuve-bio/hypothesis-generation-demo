@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from prefect import task
 from loguru import logger
+from datetime import datetime
 
 
 @task(cache_policy=None)
@@ -50,51 +51,24 @@ def create_analysis_result_task(db, user_id, project_id, combined_results, outpu
 
 
 @task(cache_policy=None)
-def create_credible_sets_task(db, user_id, project_id, combined_results, output_dir):
-    """Create and save credible sets from analysis results"""
+def save_lead_variant_credible_sets_task(db, user_id, project_id, lead_variant_id, credible_sets_data, metadata):
+    """Save credible sets for a single lead variant incrementally"""
     try:
-        # Filter for credible variants (those with credible set assignments)
-        credible_sets = combined_results[combined_results.get('cs', 0) > 0].copy()
+        # Organize data by lead variant
+        lead_variant_data = {
+            "lead_variant_id": lead_variant_id,
+            "credible_sets": credible_sets_data,
+            "metadata": metadata,
+            "saved_at": datetime.now().isoformat()
+        }
         
-        if len(credible_sets) > 0:
-            # Save to output directory
-            credible_sets_file = os.path.join(output_dir, "credible_sets.csv")
-            credible_sets.to_csv(credible_sets_file, index=False)
-            
-            # Save to database
-            db.save_credible_sets(user_id, project_id, credible_sets.to_dict('records'))
-            
-            logger.info(f"Credible sets saved: {credible_sets_file}")
-            return credible_sets_file
-        else:
-            logger.warning("No credible sets found in results")
-            return None
+        # Save to database immediately
+        db.save_lead_variant_credible_sets(user_id, project_id, lead_variant_id, lead_variant_data)
+        
+        logger.info(f"Saved credible sets for lead variant {lead_variant_id}: {len(credible_sets_data)} sets")
+        return True
     except Exception as e:
-        logger.error(f"Error saving credible sets: {str(e)}")
-        raise
-
-
-
-@task(cache_policy=None)
-def check_existing_credible_sets(db, analysis_id, requested_gene_types):
-    """Check which credible sets already exist and which need to be computed"""
-    try:
-        existing_sets = {}
-        missing_gene_types = []
-        
-        for gene_type in requested_gene_types:
-            if db.check_credible_set_exists(analysis_id, gene_type):
-                credible_set = db.get_credible_sets(analysis_id, gene_type=gene_type)
-                if credible_set:
-                    existing_sets[gene_type] = credible_set[0]  # Get first result
-                    logger.info(f"Found existing credible set for {gene_type}")
-            else:
-                missing_gene_types.append(gene_type)
-                logger.info(f"Need to compute credible set for {gene_type}")
-        
-        return existing_sets, missing_gene_types
-    except Exception as e:
-        logger.info(f"Error checking existing credible sets: {str(e)}")
+        logger.error(f"Error saving credible sets for lead variant {lead_variant_id}: {str(e)}")
         raise
 
 

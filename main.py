@@ -15,9 +15,6 @@ from api import (
     ProjectsAPI,
     ProjectCredibleSetsAPI,
     ProjectAnalysisStateAPI,
-    # FileUploadAPI,
-    # AnalysisAPI,
-    # AnalysisFinemappingAPI,
     AnalysisPipelineAPI,
 )
 from dotenv import load_dotenv
@@ -115,10 +112,6 @@ def setup_api(config):
     api.add_resource(ProjectsAPI, "/projects", resource_class_kwargs={"db": deps['db']})
     api.add_resource(ProjectCredibleSetsAPI, "/projects/<project_id>/credible-sets", resource_class_kwargs={"db": deps['db']})
     api.add_resource(ProjectAnalysisStateAPI, "/projects/<project_id>/analysis-state", resource_class_kwargs={"db": deps['db']})
-    # api.add_resource(FileUploadAPI, "/upload", resource_class_kwargs={"db": deps['db']})
-    # api.add_resource(AnalysisAPI, "/analysis", resource_class_kwargs={"db": deps['db']})
-    # api.add_resource(AnalysisFinemappingAPI, "/analysis/finemapping", resource_class_kwargs={"db": deps['db']})
-    # new analysis pipeline
     api.add_resource(AnalysisPipelineAPI, "/analysis-pipeline", resource_class_kwargs={"db": deps['db']})
 
     # Initialize socket handlers 
@@ -142,8 +135,8 @@ def main():
     if not all([config.ensembl_hgnc_map, config.hgnc_ensembl_map, config.go_map]):
         raise ValueError("Missing required configuration: ensembl_hgnc_map, hgnc_ensembl_map, go_map")
     
-    logger.info("🚀 Starting Flask application...")
-    logger.info(f"   - Host: {config.host}:{config.port}")
+    logger.info("Starting Flask application...")
+    logger.info(f"Host: {config.host}:{config.port}")
 
     
     # Setup application with configuration

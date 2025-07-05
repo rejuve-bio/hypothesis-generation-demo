@@ -14,13 +14,13 @@ from tasks import (
 )
 
 from analysis_tasks import (
-    munge_sumstats_preprocessing, filter_significant_variants, run_cojo_per_chromosome,
-    check_ld_dimensions, check_ld_semidefiniteness
+    munge_sumstats_preprocessing, filter_significant_variants, run_cojo_per_chromosome, create_region_batches, finemap_region_batch_worker,
+    save_sumstats_for_workers, cleanup_sumstats_file
 )
 
 from project_tasks import (
-    save_analysis_state_task, load_analysis_state_task, create_analysis_result_task, 
-    create_credible_sets_task, check_existing_credible_sets, get_project_analysis_path_task
+    save_analysis_state_task, create_analysis_result_task, 
+    get_project_analysis_path_task
 )
 
 import pandas as pd
@@ -31,7 +31,7 @@ from utils import emit_task_update
 
 ### Enrichment Flow
 @flow(log_prints=True, persist_result=False, task_runner=ThreadPoolTaskRunner(max_workers=4))
-def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id, credible_set_id):
+def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id, lead_variant_id):
     """
     Fully project-based enrichment flow that initializes dependencies from centralized config
     """
@@ -47,10 +47,10 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     db = deps['db']
     
     try:
-        logger.info(f"Running project-based enrichment for project {project_id}, credible set {credible_set_id}")
+        logger.info(f"Running project-based enrichment for project {project_id}, lead variant {lead_variant_id}")
         
         # Check for existing enrichment data
-        enrich = check_enrich.submit(db, current_user_id, credible_set_id, variant, phenotype, hypothesis_id).result()
+        enrich = check_enrich.submit(db, current_user_id, lead_variant_id, variant, phenotype, hypothesis_id).result()
         
         if enrich:
             logger.info("Retrieved enrich data from saved db")
@@ -72,7 +72,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
 
         # Create enrichment data with project context
         enrich_id = create_enrich_data.submit(
-            db, current_user_id, project_id, credible_set_id, variant, 
+            db, current_user_id, project_id, lead_variant_id, variant, 
             phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id
         ).result()
 
@@ -184,13 +184,12 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
 
 @flow(log_prints=True)
 def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="GRCh37", 
-                           population="EUR", window_kb=500, batch_size=5, max_workers=8):
+                           population="EUR", window_kb=500, batch_size=5, max_workers=3):
     """
     Complete analysis pipeline flow using Prefect for orchestration
     but multiprocessing for fine-mapping batches (R safety)
     """
     import multiprocessing as mp
-    from analysis_tasks import create_region_batches, finemap_region_batch_worker
     
     logger.info(f"[PIPELINE] Starting Prefect analysis pipeline with multiprocessing fine-mapping")
     logger.info(f"[PIPELINE] Project: {project_id}, User: {user_id}")
@@ -203,7 +202,16 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
         output_dir = get_project_analysis_path_task.submit(db, user_id, project_id).result()
         logger.info(f"[PIPELINE] Using output directory: {output_dir}")
         
-        # Stage 1: Preprocessing (using Prefect tasks)
+        # Save initial analysis state
+        initial_state = {
+            "status": "Running",
+            "stage": "Preprocessing",
+            "progress": 10,
+            "message": "Starting MungeSumstats preprocessing",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+        save_analysis_state_task.submit(db, user_id, project_id, initial_state).result()
+        
         logger.info(f"[PIPELINE] Stage 1: MungeSumstats preprocessing")
         munged_file_result = munge_sumstats_preprocessing.submit(gwas_file_path, output_dir, ref_genome=ref_genome, n_threads=14).result()
         
@@ -214,6 +222,16 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
             munged_file = munged_file_result
             munged_df = pd.read_csv(munged_file, sep='\t')
         
+        # Update analysis state after preprocessing
+        preprocessing_state = {
+            "status": "Running",
+            "stage": "Filtering",
+            "progress": 30,
+            "message": "Preprocessing completed, filtering significant variants",
+            "started_at": initial_state["started_at"]
+        }
+        save_analysis_state_task.submit(db, user_id, project_id, preprocessing_state).result()
+        
         logger.info(f"[PIPELINE] Stage 2: Loading and filtering variants")
         significant_df_result = filter_significant_variants.submit(munged_df, output_dir).result()
         
@@ -223,8 +241,17 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
         else:
             significant_df = significant_df_result
         
+        # Update analysis state after filtering
+        filtering_state = {
+            "status": "Running",
+            "stage": "Cojo",
+            "progress": 50,
+            "message": "Filtering completed, running COJO analysis"
+        }
+        save_analysis_state_task.submit(db, user_id, project_id, filtering_state).result()
+        
         logger.info(f"[PIPELINE] Stage 3: COJO analysis")
-        plink_dir = "/mnt/hdd_1/rediet/hypothesis-generation-demo/data/external_data"
+        plink_dir = "./data/1000Genomes_phase3/plink_format_b37"
         cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, population=population).result()
         
         # Extract the actual DataFrame
@@ -235,47 +262,88 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
         
         if cojo_results is None or len(cojo_results) == 0:
             logger.error("[PIPELINE] No COJO results to process")
+            # Save failed state
+            failed_state = {
+                "status": "Failed",
+                "stage": "Cojo",
+                "progress": 50,
+                "message": "COJO analysis failed - no independent signals found",
+            }
+            save_analysis_state_task.submit(db, user_id, project_id, failed_state).result()
             return None
         
-        logger.info(f"[PIPELINE] Stage 4: Multiprocessing fine-mapping (NOT using Prefect workers)")
+        # Update analysis state after COJO
+        cojo_state = {
+            "status": "Running",
+            "stage": "Fine_mapping",
+            "progress": 70,
+            "message": "COJO analysis completed, starting fine-mapping"
+        }
+        save_analysis_state_task.submit(db, user_id, project_id, cojo_state).result()
+        
+        logger.info(f"[PIPELINE] Stage 4: Multiprocessing fine-mapping)")
         logger.info(f"[PIPELINE] Processing {len(cojo_results)} regions with {batch_size} regions per batch")
         
-        # Create region batches for process-based execution
         region_batches = create_region_batches(cojo_results, batch_size=batch_size)
         logger.info(f"[PIPELINE] Created {len(region_batches)} batches for {max_workers} worker processes")
         
-        # Prepare batch data for multiprocessing (include sumstats data)
+        sumstats_temp_file = save_sumstats_for_workers(significant_df, output_dir)
+        
+        # Prepare batch data for multiprocessing
         batch_data_list = []
         for i, batch in enumerate(region_batches):
-            batch_data = (batch, f"batch_{i}", significant_df)
+            db_params = {
+                'uri': db.uri,
+                'db_name': db.db_name
+            }
+            batch_data = (batch, f"batch_{i}", sumstats_temp_file, {
+                'db_params': db_params,
+                'user_id': user_id,
+                'project_id': project_id
+            })
             batch_data_list.append(batch_data)
         
-        # CRITICAL: Use multiprocessing instead of Prefect workers for R safety
-        logger.info(f"[PIPELINE] Using mp.Pool({max_workers}) for R session isolation")
+        original_method = mp.get_start_method()
+        if original_method != 'spawn':
+            logger.info(f"[PIPELINE] Switching multiprocessing method from '{original_method}' to 'spawn' to reduce memory usage")
+            mp.set_start_method('spawn', force=True)
+        
         all_results = []
         successful_batches = 0
         failed_batches = 0
         
-        with mp.Pool(max_workers) as pool:
-            try:
-                # Process all batches in parallel using multiprocessing
-                batch_results_list = pool.map(finemap_region_batch_worker, batch_data_list)
-                
-                # Collect results
-                for i, batch_results in enumerate(batch_results_list):
-                    if batch_results and len(batch_results) > 0:
-                        all_results.extend(batch_results)
-                        successful_batches += 1
-                        logger.info(f"[PIPELINE] Batch {i} completed with {len(batch_results)} regions")
-                    else:
-                        failed_batches += 1
-                        logger.warning(f"[PIPELINE] ❌ Batch {i} failed or returned no results")
-                        
-            except Exception as e:
-                logger.error(f"[PIPELINE] Error in multiprocessing: {str(e)}")
-                raise
+        try:
+            with mp.Pool(max_workers) as pool:
+                try:
+                    # Process all batches in parallel
+                    batch_results_list = pool.map(finemap_region_batch_worker, batch_data_list)
+                    
+                    # Collect results
+                    for i, batch_results in enumerate(batch_results_list):
+                        if batch_results and len(batch_results) > 0:
+                            all_results.extend(batch_results)
+                            successful_batches += 1
+                            logger.info(f"[PIPELINE] Batch {i} completed with {len(batch_results)} regions")
+                        else:
+                            failed_batches += 1
+                            logger.warning(f"[PIPELINE] Batch {i} failed or returned no results")
+                            
+                except Exception as e:
+                    logger.error(f"[PIPELINE] Error in multiprocessing: {str(e)}")
+                    raise
+                finally:
+                    # Clean up temporary sumstats file after all workers are done
+                    cleanup_sumstats_file(sumstats_temp_file)
+        finally:
+            # Restore original multiprocessing method
+            if original_method != 'spawn':
+                try:
+                    mp.set_start_method(original_method, force=True)
+                    logger.info(f"[PIPELINE] Restored multiprocessing method to '{original_method}'")
+                except:
+                    logger.warning(f"[PIPELINE] Could not restore multiprocessing method to '{original_method}'")
         
-        # Combine and save results (using Prefect tasks)
+        # Combine and save results
         if all_results:
             logger.info(f"[PIPELINE] Combining results from {successful_batches} successful batches")
             combined_results = pd.concat(all_results, ignore_index=True)
@@ -283,12 +351,18 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
             # Save results using Prefect tasks
             results_file = create_analysis_result_task.submit(db, user_id, project_id, combined_results, output_dir).result()
             
-            credible_sets_file = create_credible_sets_task.submit(db, user_id, project_id, combined_results, output_dir).result()
-            
             # Summary statistics
             total_variants = len(combined_results)
             high_pip_variants = len(combined_results[combined_results['PIP'] > 0.5])
             total_credible_sets = combined_results.get('credible_set', pd.Series([0])).max()
+            
+            # Save completed analysis state
+            completed_state = {
+                "status": "Completed",
+                "progress": 100,
+                "message": "Analysis completed successfully",
+            }
+            save_analysis_state_task.submit(db, user_id, project_id, completed_state).result()
             
             logger.info(f"[PIPELINE] Analysis completed successfully!")
             logger.info(f"[PIPELINE] - Total variants: {total_variants}")
@@ -299,17 +373,33 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
             
             return {
                 "results_file": results_file,
-                "credible_sets_file": credible_sets_file,
                 "total_variants": total_variants,
                 "high_pip_variants": high_pip_variants,
-                "total_credible_sets": total_credible_sets,
-                "successful_batches": successful_batches,
-                "total_batches": len(region_batches)
+                "total_credible_sets": total_credible_sets
             }
         else:
             logger.error("[PIPELINE]  No fine-mapping results generated")
+            # Save failed state for fine-mapping
+            failed_finemap_state = {
+                "status": "Failed",
+                "stage": "Fine_mapping",
+                "progress": 70,
+                "message": "Fine-mapping failed - no results generated",
+            }
+            save_analysis_state_task.submit(db, user_id, project_id, failed_finemap_state).result()
             raise RuntimeError("All fine-mapping batches failed")
             
     except Exception as e:
         logger.error(f"[PIPELINE]  Analysis pipeline failed: {str(e)}")
+        # Save failed analysis state
+        try:
+            failed_state = {
+                "status": "Failed",
+                "stage": "Unknown",
+                "progress": 0,
+                "message": f"Analysis pipeline failed: {str(e)}",
+            }
+            save_analysis_state_task.submit(db, user_id, project_id, failed_state).result()
+        except Exception as state_e:
+            logger.error(f"[PIPELINE] Failed to save error state: {str(state_e)}")
         raise
