@@ -342,7 +342,7 @@ def plot_curves(all_folds_roc_data, all_folds_pr_data,
         if len(plot_fpr) < 2: # Need at least two points to draw a line or calculate AUC
             print(f"Warning: Fold {i+1} has insufficient ROC points after processing.")
             fold_roc_aucs.append(np.nan)
-            continue
+            continue    
             
         roc_auc_fold = auc(plot_fpr, plot_tpr)
         fold_roc_aucs.append(roc_auc_fold)

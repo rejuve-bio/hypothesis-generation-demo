@@ -1,7 +1,3 @@
-%:- module(hypgen, [
-    %server_start/1,
-    %server_stop/1
-  %]).
 :- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_json)).

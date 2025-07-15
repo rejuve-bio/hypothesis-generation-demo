@@ -1,9 +1,9 @@
-:- module(meta_interpreter, [
-    prooftree/2,
-    json_proof_tree/2,
-    rule_body/2,
-    mi/2
-  ]).
+% :- module(meta_interpreter, [
+%     prooftree/2,
+%     json_proof_tree/2,
+%     rule_body/2,
+%     mi/2
+%   ]).
 
 :- style_check(-discontiguous).
 :- op(500, xfy, =>).
@@ -108,11 +108,23 @@ mi(subset(X, Xs), t(R, C, [])) :- !,
   C = "subset_of({$X1, $X2,...}, {$Xs1, $Xs2, $Xs3...})",
   R = "{$X1, $X2,...}".
 
+library_predicate(Goal, Library) :-
+   current_predicate(Goal, Pred),
+    predicate_property(Pred, imported_from(Module)),
+    Module = Library, % don't track library predicates.
+
+mi(G, t(lib, lib, [P])) :-
+   G \= true,
+   library(G, mcintyre),
+   
+
+
 mi(G, t(built_in, G, [])) :- % Check if the goal is a built-in predicate.
     G \= true,
     G \= findall(_, _, _),
     G \= hideme(_),
     (predicate_property(G, built_in) ; %or
+     library_predicate(G, mcintyre) ; % add more libraries here
     \+ predicate_property(G,number_of_clauses(_))), !,
     call(G). % Directly call the built-in predicate.
 
@@ -122,6 +134,7 @@ mi(G, t(R, G, [P])) :-
     G \=  (_,_),
     G \= (_;_),
     G \= hideme(_),
+    \+ library_predicate(G, mcintyre),
     % format("G: ~w ~n", [G]),
     clause(G, Body, Ref), 
     clause(HeadC, BodyC, Ref),

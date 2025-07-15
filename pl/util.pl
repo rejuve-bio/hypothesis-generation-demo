@@ -1,5 +1,3 @@
-:- use_module(library(thread)).
-
 /**
  * concurrent_include(:Goal, +List, -Included).
  *

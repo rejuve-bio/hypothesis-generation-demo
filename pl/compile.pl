@@ -29,6 +29,7 @@ compile_with_time(Dir, Hook, Nodes, Edges) :-
         format("Compiling edges file ~w ...~n", [AbsEdgesFile]),
         qcompile(AbsEdgesFile)
         ; true),
+    retractall(seen_predicate(_, _, _)),
     format("Compilation Done.~n").
 
 % Define the options specification

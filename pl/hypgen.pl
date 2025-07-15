@@ -5,21 +5,28 @@
 %     within_k_distance/3,
 %     find_and_rank_tfs/3,
 %     bgc/1,
-%     %relevant_gene/2,
-%     %hideme/1,
-%     load_atomspace/0]).
-%     %in_tad_with/2,
-%     %regulatary_effect/2,
-%     %in_regulatory_region/2,
-%     %alters_tfbs/3,
-%     %overlaps_with_tf_enh/2,
-%     %read_partition_file/2,
-%     %read_samples/2,
-%     %read_train_set/1,
-%     %read_test_set/1,
-%     %fold/2
-%     %]).
+%     relevant_gene/2,
+%     % hideme/1,
+%     load_atomspace/0, 
+%     init/0]).
+    %in_tad_with/2,
+    %regulatary_effect/2,
+    %in_regulatory_region/2,
+    %alters_tfbs/3,
+    %overlaps_with_tf_enh/2,
+    %read_partition_file/2,
+    %read_samples/2,
+    %read_train_set/1,
+    %read_test_set/1,
+    %fold/2
+    %]).
 % :- use_module(library(main)).
+
+% :- use_module(library(interpolate)).
+:- use_module(library(janus)).
+:- use_module(library(http/http_client)).
+:- use_module(library(http/json)).
+:- use_module(library(thread)).
 
 :- style_check(-discontiguous).
 :- style_check(-singleton).
