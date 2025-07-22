@@ -503,8 +503,15 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         LD_mat = check_ld_semidefiniteness(LD_mat)
         logger.info(f"[FINEMAP] Sub-region shape after LD filtering: {sub_region_sumstats_ld.shape}")
 
-        # Get Z-scores after LD filtering
-        zhat = sub_region_sumstats_ld["Z"].values.flatten()
+        # Get Z-scores after LD filtering - calculate if not available
+        if "Z" in sub_region_sumstats_ld.columns:
+            zhat = sub_region_sumstats_ld["Z"].values.flatten()
+        elif "BETA" in sub_region_sumstats_ld.columns and "SE" in sub_region_sumstats_ld.columns:
+            logger.info(f"[FINEMAP] Z-scores not available, calculating from BETA/SE")
+            zhat = (sub_region_sumstats_ld["BETA"] / sub_region_sumstats_ld["SE"]).values.flatten()
+        else:
+            logger.error(f"[FINEMAP] Neither Z-scores nor BETA/SE available for Z-score calculation")
+            return None
 
         # Basic validation of final data
         if len(sub_region_sumstats_ld) < 10:
