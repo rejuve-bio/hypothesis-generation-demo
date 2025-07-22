@@ -6,7 +6,8 @@ from socketio_instance import socketio
 from status_tracker import status_tracker, TaskState
 import socketio as sio
 import os
-
+import pandas as pd
+import numpy as np
 
 def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, next_task=None, error=None):
     """
@@ -145,8 +146,6 @@ def serialize_datetime_fields(data):
 
 def transform_credible_sets_to_locuszoom(credible_sets_data):
     """Transform credible sets to LocusZoom format"""
-    import pandas as pd
-    import numpy as np
     
     # Convert to DataFrame
     if isinstance(credible_sets_data, list):

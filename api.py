@@ -562,7 +562,6 @@ class ProjectCredibleSetsAPI(Resource):
     @token_required
     def get(self, current_user_id, project_id):
         """Get credible sets for a project, optionally filtered by lead variant"""
-        from flask import request
         
         # Verify project exists and belongs to user
         project = self.db.get_projects(current_user_id, project_id)

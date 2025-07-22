@@ -23,6 +23,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from socketio_instance import socketio
 from status_tracker import StatusTracker
+from werkzeug.formparser import FormDataParser
 
 def parse_flask_arguments():
     """Parse arguments specific to Flask application"""
@@ -65,7 +66,6 @@ def setup_api(config):
     app.config['STREAM_BUFFER_SIZE'] = 4 * 1024 * 1024  # 4MB stream buffer
     
     # Configure werkzeug for handling larger files
-    from werkzeug.formparser import FormDataParser
     FormDataParser.max_form_memory_size = 1024 * 1024 * 1024  # 1GB
 
     # Initialize JWTManager

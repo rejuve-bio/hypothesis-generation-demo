@@ -5,6 +5,7 @@ from flask import json
 from loguru import logger
 from prefect import flow
 from status_tracker import TaskState
+import multiprocessing as mp
 
 from tasks import (
     check_enrich, create_enrich_data, get_candidate_genes, predict_causal_gene, 
@@ -28,6 +29,7 @@ from datetime import datetime, timezone
 from prefect.task_runners import ThreadPoolTaskRunner
 
 from utils import emit_task_update
+from config import Config, create_dependencies
 
 ### Enrichment Flow
 @flow(log_prints=True, persist_result=False, task_runner=ThreadPoolTaskRunner(max_workers=4))
@@ -35,8 +37,6 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     """
     Fully project-based enrichment flow that initializes dependencies from centralized config
     """
-    from config import Config, create_dependencies
-    
     # Initialize dependencies from environment variables
     config = Config.from_env()
     deps = create_dependencies(config)
@@ -146,7 +146,6 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
     variant_entities = [f"snp({id})" for id in variant_rsids]
     query = f"maplist(variant_id, {variant_entities}, X)".replace("'", "")
 
-    time.sleep(3)
     variant_ids = execute_variant_query(prolog_query, query, hypothesis_id)
     for variant_id, rsid, node in zip(variant_ids, variant_rsids, variant_nodes):
         variant_id = variant_id.replace("'", "")
@@ -189,7 +188,6 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
     Complete analysis pipeline flow using Prefect for orchestration
     but multiprocessing for fine-mapping batches (R safety)
     """
-    import multiprocessing as mp
     
     logger.info(f"[PIPELINE] Starting Prefect analysis pipeline with multiprocessing fine-mapping")
     logger.info(f"[PIPELINE] Project: {project_id}, User: {user_id}")
@@ -251,7 +249,9 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
         save_analysis_state_task.submit(db, user_id, project_id, filtering_state).result()
         
         logger.info(f"[PIPELINE] Stage 3: COJO analysis")
-        plink_dir = "./data/1000Genomes_phase3/plink_format_b37"
+       
+        config = Config.from_env()
+        plink_dir = config.plink_dir
         cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, population=population).result()
         
         # Extract the actual DataFrame

@@ -12,14 +12,15 @@ import gzip
 import subprocess
 import tempfile
 from cyvcf2 import VCF, Writer
-import numpy as np
 from prefect import flow
 import multiprocessing as mp
 from functools import partial
 import psutil
 import gc
 import optuna
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from config import Config
+import re
 logging.basicConfig(level=logging.INFO)
 
 try:
@@ -76,10 +77,6 @@ except ImportError as e:
 # === RPY2 MULTIPROCESSING HELPERS ===
 def initialize_rpy2_for_worker():
     try:
-        import rpy2.robjects as ro
-        from rpy2.robjects import pandas2ri, numpy2ri, default_converter
-        from rpy2.robjects.conversion import localconverter
-        
         # Force activation of converters in worker process
         pandas2ri.activate()
         numpy2ri.activate()
@@ -92,9 +89,6 @@ def initialize_rpy2_for_worker():
     except Exception as e:
         # Alternative initialization if standard method fails
         try:
-            import rpy2.robjects as ro
-            from rpy2.robjects import pandas2ri, numpy2ri
-            from rpy2.robjects.conversion import Converter
             
             # Manual converter setup
             cv = Converter('worker_converter')
@@ -162,7 +156,6 @@ def munge_sumstats_preprocessing(gwas_file_path, output_dir, ref_genome="GRCh37"
             )
             
             formatted_file_path_raw = str(formatted_file_path_r[0])
-            import re
             path_match = re.search(r'"([^"]+)"', formatted_file_path_raw)
             if path_match:
                 formatted_file_path = path_match.group(1)
@@ -235,8 +228,6 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
         cojo_input_path = os.path.join(temp_dir, "cojo_input.txt")
         cojo_df.to_csv(cojo_input_path, sep='\t', index=False)
         logger.info(f"[COJO] COJO input prepared: {len(cojo_df)} variants")
-        
-        from concurrent.futures import ThreadPoolExecutor, as_completed
         
         def run_cojo_for_chromosome(chrom):
             """Run COJO analysis for a single chromosome"""
@@ -386,6 +377,10 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
     try:     
         logger.info(f"[FINEMAP] Fine-mapping chr{chr_num}:{lead_variant_position} ±{window}kb")
         
+
+        config = Config.from_env()
+        plink_dir = config.plink_dir
+        
         # Calculate LD 
         window_bp = window * 1000
         start = lead_variant_position - window_bp
@@ -418,7 +413,7 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                 
             plink_cmd = [
                 "plink2",
-                "--bfile", f"./data/1000Genomes_phase3/plink_format_b37/{population}/{population}.{chr_num}.1000Gp3.20130502",
+                "--bfile", f"{plink_dir}/{population}/{population}.{chr_num}.1000Gp3.20130502",
                 "--keep-allele-order",
                 "--r-unphased", "square", 
                 "--extract", tmp_file_path,
@@ -482,7 +477,7 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         })
         
         # Use check_ld_dimensions to reconcile any mismatches
-        bim_file_path = f"./data/1000Genomes_phase3/plink_format_b37/{population}/{population}.{chr_num}.1000Gp3.20130502.bim"
+        bim_file_path = f"{plink_dir}/{population}/{population}.{chr_num}.1000Gp3.20130502.bim"
         
         if os.path.exists(bim_file_path):
             try:
@@ -599,9 +594,7 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                             converged = susie_fit.rx2('converged')[0]
                             logger.info(f"[DEBUG] Extracted using direct rx2 method!")
                         else:
-                            # Convert NamedList to ListVector for rx2 access
-                            from rpy2.robjects.vectors import ListVector
-                            
+                        
                             # Method 1: Convert to ListVector
                             try:
                                 # Convert the NamedList to a proper R ListVector
@@ -986,6 +979,7 @@ def finemap_region_batch_worker(batch_data):
         
         if db_params:
             try:
+                # Import Database locally to avoid circular imports in multiprocessing
                 from db import Database
                 db = Database(db_params['uri'], db_params['db_name'])
                 logger.info(f"[BATCH-{batch_id}] Database connection recreated in worker process")
@@ -1011,10 +1005,7 @@ def finemap_region_batch_worker(batch_data):
     # Now initialize susieR
     susieR = None
     try:
-        from rpy2.robjects.packages import importr
-        import rpy2.robjects as ro
-        from rpy2.robjects.conversion import localconverter
-        
+           
         # Use the conversion context for all R operations including imports
         with localconverter(global_converter):
             # Check susieR availability
@@ -1040,9 +1031,6 @@ def finemap_region_batch_worker(batch_data):
         logger.info(f"[BATCH-{batch_id}] Processing region {region_idx+1}/{len(region_batch)}: {region_id}")
         
         try:
-            # Ensure imports are available in this scope
-            import rpy2.robjects as ro
-            from rpy2.robjects.conversion import localconverter
             
             # Use the shared R session with proper context management
             logger.info(f"[BATCH-{batch_id}] Running fine-mapping for {region_id} with shared R session")
@@ -1050,14 +1038,11 @@ def finemap_region_batch_worker(batch_data):
             # Ensure conversion context is active before calling fine-mapping
             try:
                 # Verify conversion context is still active
-                import numpy as np
                 test_val = np.array([1.0])
                 with localconverter(global_converter):
                     test_r = ro.conversion.get_conversion().py2rpy(test_val)
             except Exception as ctx_e:
                 logger.warning(f"[BATCH-{batch_id}] Conversion context issue before {region_id}: {ctx_e}")
-                # Reactivate converters
-                from rpy2.robjects import pandas2ri, numpy2ri
                 pandas2ri.activate()
                 numpy2ri.activate()
             
