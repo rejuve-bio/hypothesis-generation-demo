@@ -12,8 +12,8 @@ logging.basicConfig(level=logging.INFO)
 
 ### Enrich Tasks
 @task(retries=2, cache_policy=None)
-def check_enrich(db, current_user_id, lead_variant_id, variant, phenotype, hypothesis_id):
-    """Check if enrichment exists for lead variant, variant, and phenotype"""
+def check_enrich(db, current_user_id, variant, phenotype, hypothesis_id):
+    """Check if enrichment exists for variant and phenotype"""
     try: 
         emit_task_update(
             hypothesis_id=hypothesis_id,

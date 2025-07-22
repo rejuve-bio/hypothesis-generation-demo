@@ -50,7 +50,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         logger.info(f"Running project-based enrichment for project {project_id}, lead variant {lead_variant_id}")
         
         # Check for existing enrichment data
-        enrich = check_enrich.submit(db, current_user_id, lead_variant_id, variant, phenotype, hypothesis_id).result()
+        enrich = check_enrich.submit(db, current_user_id, variant, phenotype, hypothesis_id).result()
         
         if enrich:
             logger.info("Retrieved enrich data from saved db")
