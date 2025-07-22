@@ -1,6 +1,5 @@
 import os
 import argparse
-from enrich import Enrich
 from llm import LLM
 from query_swipl import PrologQuery
 from db import Database
@@ -59,6 +58,9 @@ class Config:
 
 def create_dependencies(config):
     """Factory function to create all dependencies from config"""
+    # Import here to avoid circular dependency
+    from enrich import Enrich
+    
     enrichr = Enrich(
         config.ensembl_hgnc_map,
         config.hgnc_ensembl_map,
