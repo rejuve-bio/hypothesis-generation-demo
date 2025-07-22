@@ -967,15 +967,25 @@ def finemap_region_batch_worker(batch_data):
         logger.error(f"[BATCH-{batch_id}] Failed to load sumstats from file")
         return []
 
-    # Extract database connection info
     db = None
     user_id = None
     project_id = None
-
+    
     if additional_params:
         db_params = additional_params.get('db_params', None)
         user_id = additional_params.get('user_id', None)
         project_id = additional_params.get('project_id', None)
+        finemap_params = additional_params.get('finemap_params', {})
+        
+        # Extract parameters
+        seed = finemap_params['seed']
+        window = finemap_params['window']
+        L = finemap_params['L']
+        coverage = finemap_params['coverage']
+        min_abs_corr = finemap_params['min_abs_corr']
+        population = finemap_params['population']
+    else:
+        raise ValueError("No additional_params provided to worker - this should not happen")
         
         if db_params:
             try:
@@ -1048,15 +1058,15 @@ def finemap_region_batch_worker(batch_data):
             
             with localconverter(global_converter):
                 result = finemap_region(
-                    seed=42,
+                    seed=seed,
                     sumstats=sumstats_data,
                     chr_num=region['chr'],
                     lead_variant_position=region['position'],
-                    window=2000,
-                    population="EUR",
-                    L=-1,
-                    coverage=0.95,
-                    min_abs_corr=0.5
+                    window=window,
+                    population=population,
+                    L=L,
+                    coverage=coverage,
+                    min_abs_corr=min_abs_corr
                 )
                 
                 if result is not None and len(result) > 0:
@@ -1084,7 +1094,7 @@ def finemap_region_batch_worker(batch_data):
                                         
                                         credible_set = {
                                             "set_id": int(cs_id),
-                                            "coverage": 0.95,
+                                            "coverage": coverage,
                                             "variants": locuszoom_data
                                         }
                                         credible_sets_data.append(credible_set)
@@ -1093,8 +1103,12 @@ def finemap_region_batch_worker(batch_data):
                             metadata = {
                                 "chr": region['chr'],
                                 "position": region['position'],
-                                "window_kb": 2000,
-                                "population": "EUR",
+                                "window_kb": window,
+                                "population": population,
+                                "seed": seed,
+                                "L": L,
+                                "coverage": coverage,
+                                "min_abs_corr": min_abs_corr,
                                 "total_variants_analyzed": len(result),
                                 "credible_sets_count": len(credible_sets_data),
                                 "completed_at": datetime.now().isoformat()

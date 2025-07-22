@@ -656,6 +656,15 @@ class AnalysisPipelineAPI(Resource):
             window_kb = int(request.form.get('window_kb', 500))
             max_workers = int(request.form.get('max_workers', 3))
             
+            # Fine-mapping parameters with defaults
+            maf_threshold = float(request.form.get('maf_threshold', 0.01))
+            seed = int(request.form.get('seed', 42))
+            window = int(request.form.get('window', 2000))
+            L = int(request.form.get('L', -1))
+            coverage = float(request.form.get('coverage', 0.95))
+            min_abs_corr = float(request.form.get('min_abs_corr', 0.5))
+            batch_size = int(request.form.get('batch_size', 5))
+            
             # Validate required fields
             if not project_name:
                 return {"error": "project_name is required"}, 400
@@ -672,6 +681,7 @@ class AnalysisPipelineAPI(Resource):
             logger.info(f"[API] Project: {project_name}")
             logger.info(f"[API] File: {gwas_file.filename}")
             logger.info(f"[API] Reference: {ref_genome}, Population: {population}")
+            logger.info(f"[API] Fine-mapping params: maf={maf_threshold}, seed={seed}, window={window}kb, L={L}, coverage={coverage}, min_abs_corr={min_abs_corr}")
             
             # Validate file
             if not allowed_file(gwas_file.filename):
@@ -689,6 +699,28 @@ class AnalysisPipelineAPI(Resource):
             
             if max_workers < 1 or max_workers > 16:
                 return {"error": "Max workers must be between 1-16"}, 400
+            
+            # Validate fine-mapping parameters
+            if maf_threshold < 0.001 or maf_threshold > 0.5:
+                return {"error": "MAF threshold must be between 0.001-0.5"}, 400
+            
+            if seed < 1 or seed > 999999:
+                return {"error": "Seed must be between 1-999999"}, 400
+            
+            if window < 500 or window > 10000:
+                return {"error": "Fine-mapping window must be between 500-10000 kb"}, 400
+            
+            if L != -1 and (L < 1 or L > 50):
+                return {"error": "L must be -1 (auto) or between 1-50"}, 400
+            
+            if coverage < 0.5 or coverage > 0.999:
+                return {"error": "Coverage must be between 0.5-0.999"}, 400
+            
+            if min_abs_corr < 0.1 or min_abs_corr > 1.0:
+                return {"error": "Min absolute correlation must be between 0.1-1.0"}, 400
+            
+            if batch_size < 1 or batch_size > 20:
+                return {"error": "Batch size must be between 1-20"}, 400
             
             # === FILE UPLOAD AND PROJECT CREATION  ===
             # Generate secure filename and file ID
@@ -766,7 +798,14 @@ class AnalysisPipelineAPI(Resource):
                         ref_genome=ref_genome,
                         population=population,
                         window_kb=window_kb,
-                        max_workers=max_workers
+                        batch_size=batch_size,
+                        max_workers=max_workers,
+                        maf_threshold=maf_threshold,
+                        seed=seed,
+                        window=window,
+                        L=L,
+                        coverage=coverage,
+                        min_abs_corr=min_abs_corr
                     )
                     
                     logger.info(f"[API] Analysis pipeline for project {project_id} completed successfully")

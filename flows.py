@@ -183,7 +183,9 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
 
 @flow(log_prints=True)
 def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="GRCh37", 
-                           population="EUR", window_kb=500, batch_size=5, max_workers=3):
+                           population="EUR", window_kb=500, batch_size=5, max_workers=3,
+                           maf_threshold=0.01, seed=42, window=2000, L=-1, 
+                           coverage=0.95, min_abs_corr=0.5):
     """
     Complete analysis pipeline flow using Prefect for orchestration
     but multiprocessing for fine-mapping batches (R safety)
@@ -194,6 +196,7 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
     logger.info(f"[PIPELINE] File: {gwas_file_path}")
     logger.info(f"[PIPELINE] Batch size: {batch_size} regions per worker process")
     logger.info(f"[PIPELINE] Max workers: {max_workers}")
+    logger.info(f"[PIPELINE] Parameters: maf={maf_threshold}, seed={seed}, window={window}kb, L={L}, coverage={coverage}, min_abs_corr={min_abs_corr}")
     
     try:
         # Get project-specific output directory (using Prefect task)
@@ -252,7 +255,7 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
        
         config = Config.from_env()
         plink_dir = config.plink_dir
-        cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, population=population).result()
+        cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, maf_threshold=maf_threshold, population=population).result()
         
         # Extract the actual DataFrame
         if isinstance(cojo_result, tuple):
@@ -299,7 +302,15 @@ def analysis_pipeline_flow(db, user_id, project_id, gwas_file_path, ref_genome="
             batch_data = (batch, f"batch_{i}", sumstats_temp_file, {
                 'db_params': db_params,
                 'user_id': user_id,
-                'project_id': project_id
+                'project_id': project_id,
+                'finemap_params': {
+                    'seed': seed,
+                    'window': window,
+                    'L': L,
+                    'coverage': coverage,
+                    'min_abs_corr': min_abs_corr,
+                    'population': population
+                }
             })
             batch_data_list.append(batch_data)
         
