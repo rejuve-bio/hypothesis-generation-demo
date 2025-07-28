@@ -567,10 +567,8 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                 return None
             
             try:
-                logger.info(f"[DEBUG] Converting Python objects to R...")
                 zhat_r = ro.conversion.get_conversion().py2rpy(zhat)
                 R_r = ro.conversion.get_conversion().py2rpy(LD_mat)
-                logger.info(f"[DEBUG] R conversion successful")
                     
             except Exception as e:
                 logger.error(f"[FINEMAP] Error converting data to R objects: {str(e)}")
@@ -590,99 +588,32 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                         return -np.inf
                     
                     # Extract ELBO and convergence
-                    try:                       
-                        # Try multiple extraction methods
-                        elbo = None
-                        converged = None
-                        
-                        if hasattr(susie_fit, 'rx2'):
-                            # Direct rx2 access
-                            elbo = susie_fit.rx2('elbo')[-1]
-                            converged = susie_fit.rx2('converged')[0]
-                            logger.info(f"[DEBUG] Extracted using direct rx2 method!")
-                        else:
-                        
-                            # Method 1: Convert to ListVector
-                            try:
-                                # Convert the NamedList to a proper R ListVector
-                                susie_fit_r = ListVector(susie_fit)
-                                elbo = susie_fit_r.rx2('elbo')[-1]
-                                converged = susie_fit_r.rx2('converged')[0]
-                                logger.info(f"[DEBUG] Extracted using ListVector conversion method!")
-                            except Exception as conv_e:
-                                logger.warning(f"[DEBUG] ListVector conversion failed: {conv_e}")                               
-                        
-                        # Method 2: Try dictionary access
-                        if elbo is None:
-                            try:
-                                elbo = susie_fit['elbo'][-1]
-                                converged = susie_fit['converged'][0]
-                                logger.info(f"[DEBUG] Extracted using dictionary method")
-                            except Exception as e2:
-                                logger.warning(f"[DEBUG] Dictionary method failed: {e2}")
-                        
-                        # Method 3: Try R-based extraction
-                        if elbo is None:
-                            try:
-                                ro.globalenv['temp_fit'] = susie_fit
-                                elbo_r = ro.r('tail(temp_fit$elbo, 1)')
-                                converged_r = ro.r('temp_fit$converged')
-                                ro.r('rm(temp_fit)')
-                                elbo = float(elbo_r[0])
-                                converged = int(converged_r[0])
-                                logger.info(f"[DEBUG] Extracted using R method")
-                            except Exception as e3:
-                                logger.warning(f"[DEBUG] R method failed: {e3}")
-                        
-                        if elbo is None:
-                            logger.error(f"[DEBUG] All extraction methods failed for L={L_trial}")
-                            return -np.inf
-                        
-                        logger.info(f"[DEBUG] Extracted - L={L_trial}, converged={converged}, ELBO={elbo:.6f}")
-                        
-                        # Extract additional validation info for suspicious convergence detection
-                        niter = None
+                    try:
+                        # Primary method: ListVector conversion (known to work reliably)
                         try:
-                            ro.globalenv['temp_fit_check'] = susie_fit
-                            niter_r = ro.r('temp_fit_check$niter')
-                            if niter_r is not None:
-                                niter = int(niter_r[0])
-                            ro.r('rm(temp_fit_check)')
-                        except:
-                            pass
-                        
-                        # Check for suspicious patterns
-                        suspicious_flags = []
-                        if niter is not None and niter < 5:
-                            suspicious_flags.append(f"Very quick convergence ({niter} iter)")
-                        if elbo > -1000:  # ELBOs should typically be much more negative
-                            suspicious_flags.append(f"Unexpectedly high ELBO ({elbo:.2f})")
-                        if abs(elbo) < 1000:  # Too small in magnitude
-                            suspicious_flags.append(f"ELBO magnitude too small ({abs(elbo):.2f})")
-                            
-                        if suspicious_flags:
-                            logger.warning(f"[DEBUG] 🚨 SUSPICIOUS CONVERGENCE DETECTED:")
-                            for flag in suspicious_flags:
-                                logger.warning(f"[DEBUG]     - {flag}")
+                            susie_fit_r = ListVector(susie_fit)
+                            elbo = susie_fit_r.rx2('elbo')[-1]
+                            converged = susie_fit_r.rx2('converged')[0]
+                        except Exception:
+                            # Fallback: R-based extraction
+                            ro.globalenv['temp_fit'] = susie_fit
+                            elbo_r = ro.r('tail(temp_fit$elbo, 1)')
+                            converged_r = ro.r('temp_fit$converged')
+                            ro.r('rm(temp_fit)')
+                            elbo = float(elbo_r[0])
+                            converged = int(converged_r[0])
                         
                         # Validate ELBO is reasonable
-                        if np.isnan(elbo) or np.isinf(elbo):
-                            logger.error(f"[DEBUG]  L={L_trial} invalid ELBO: {elbo}")
+                        if np.isnan(elbo) or np.isinf(elbo) or elbo > 0:
+                            logger.warning(f"[DEBUG] L={L_trial} invalid ELBO: {elbo}")
                             return -np.inf
                         
-                        if elbo > 0:
-                            logger.warning(f"[DEBUG] SUSPICIOUS: L={L_trial} positive ELBO: {elbo} (should be negative)")
-                            return -np.inf
-                        
-                        # Strict convergence validation
+                        # Check convergence
                         if converged == 1:
-                            if niter is not None:
-                                logger.info(f"[DEBUG] L={L_trial} CONVERGED with ELBO {elbo:.6f} in {niter} iterations")
-                            else:
-                                logger.info(f"[DEBUG] L={L_trial} CONVERGED with ELBO {elbo:.6f}")
+                            logger.info(f"[DEBUG] L={L_trial} converged with ELBO {elbo:.6f}")
                             return elbo
                         else:
-                            logger.warning(f"[DEBUG]  L={L_trial} did NOT converge (converged={converged})")
+                            logger.warning(f"[DEBUG] L={L_trial} did not converge")
                             return -np.inf
                             
                     except Exception as e:
@@ -695,154 +626,73 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                 logger.info(f"[FINEMAP] Best L found: {L} with ELBO {study.best_value}")
             
             # Run SuSiE with final L
-            logger.info(f"[DEBUG] Running final SuSiE with L={L}")
+            logger.info(f"[FINEMAP] Running SuSiE with L={L}")
             try:
                 susie_fit = local_susieR.susie_rss(z=zhat_r, R=R_r, L=L, n=num_samples)
-                logger.info(f"[DEBUG] Final SuSiE execution completed")
-                
-                # Check final convergence
-                try:
-                    final_converged = None
-                    final_elbo = None
-                
-                    try:
-                        ro.globalenv['final_fit'] = susie_fit
-                        final_converged_r = ro.r('final_fit$converged')
-                        final_elbo_r = ro.r('tail(final_fit$elbo, 1)')
-                        ro.r('rm(final_fit)')
-                        final_converged = int(final_converged_r[0])
-                        final_elbo = float(final_elbo_r[0])
-                    except:
-                        pass
-                    
-                    if final_converged is not None:
-                        logger.info(f"[DEBUG] Final SuSiE - converged={final_converged}, ELBO={final_elbo:.6f}")
-                    else:
-                        logger.warning(f"[DEBUG] Could not extract final convergence info")
-                except Exception as conv_e:
-                    logger.warning(f"[DEBUG] Error in final convergence check: {conv_e}")
-                    
             except Exception as e:
-                logger.error(f"[DEBUG] Final SuSiE execution failed: {str(e)}")
+                logger.error(f"[FINEMAP] SuSiE execution failed: {str(e)}")
                 return None
             
             # Extract credible sets and PIPs
-            logger.info(f"[DEBUG] Extracting credible sets and PIPs...")
+            logger.info(f"[FINEMAP] Extracting credible sets and PIPs...")
             
             # Step 1: Extract credible sets
             try:
-                logger.info(f"[DEBUG] Calling susie_get_cs...")
                 credible_sets = local_susieR.susie_get_cs(susie_fit, coverage=coverage, min_abs_corr=min_abs_corr, Xcorr=R_r)
-                logger.info(f"[DEBUG] susie_get_cs completed successfully")
             except Exception as e:
                 logger.error(f"[FINEMAP] Error extracting credible sets: {str(e)}")
                 credible_sets = None
 
             # Step 2: Extract PIPs
-            pips = None
-            
-            # Method 1: Try susie_get_pip
             try:
-                logger.info(f"[DEBUG] Method 1: Trying susieR.susie_get_pip...")
+                # Primary method: susie_get_pip
                 pips = local_susieR.susie_get_pip(susie_fit)
                 pips = np.array(pips, dtype=np.float64)
-                logger.info(f"[DEBUG] Method 1 SUCCESS: susie_get_pip worked!")
-            except Exception as e:
-                logger.warning(f"[DEBUG]  Method 1 FAILED: {str(e)}")
-                pips = None
-            
-            # Method 2: Manual alpha calculation
-            if pips is None:
-                try:
-                    logger.info(f"[DEBUG] Method 2: Using PROVEN manual alpha calculation")
-                    ro.globalenv['susie_fit'] = susie_fit
+            except Exception:
+                # Fallback: manual alpha calculation
+                ro.globalenv['susie_fit'] = susie_fit
+                r_pip_code = """
+                tryCatch({
+                    fit <- susie_fit
+                    if (!is.null(fit$alpha) && is.matrix(fit$alpha)) {
+                        alpha_matrix <- fit$alpha
+                        pip_vals <- 1 - apply(1 - alpha_matrix, 2, prod)
+                    } else if (!is.null(fit$pip)) {
+                        pip_vals <- as.numeric(fit$pip)
+                    } else {
+                        stop("No alpha matrix or pip found")
+                    }
                     
-                    r_pip_code = """
-                    tryCatch({
-                        fit <- susie_fit
-                        
-                        if (!is.null(fit$alpha) && is.matrix(fit$alpha)) {
-                            # PIPs = 1 - product of (1 - alpha) across all L components
-                            alpha_matrix <- fit$alpha
-                            pip_vals <- 1 - apply(1 - alpha_matrix, 2, prod)
-                            cat("PIPs calculated from alpha matrix\\n")
-                        } else if (!is.null(fit$pip)) {
-                            pip_vals <- as.numeric(fit$pip)
-                            cat("PIPs extracted from fit$pip\\n")
-                        } else {
-                            pip_vals <- rep(0.01, 1000)
-                            cat("Using fallback PIPs\\n")
-                        }
-                        
-                        # Ensure valid PIPs
-                        pip_vals <- as.numeric(pip_vals)
-                        pip_vals[is.na(pip_vals)] <- 0.0
-                        pip_vals[pip_vals < 0] <- 0.0
-                        pip_vals[pip_vals > 1] <- 1.0
-                        
-                        pip_vals
-                        
-                    }, error = function(e) {
-                        cat(" Error in manual alpha calculation:", conditionMessage(e), "\\n")
-                        rep(0.01, 1000)
-                    })
-                    """
-                    
-                    r_pip_result = ro.r(r_pip_code)
-                    ro.r('rm(susie_fit)')
-                    pips = np.array(r_pip_result, dtype=np.float64)
-                    
-                    # Adjust length if needed
-                    if len(pips) != len(sub_region_sumstats_ld):
-                        if len(pips) < len(sub_region_sumstats_ld):
-                            pips = np.pad(pips, (0, len(sub_region_sumstats_ld) - len(pips)), constant_values=0.01)
-                        else:
-                            pips = pips[:len(sub_region_sumstats_ld)]
-                    
-                    logger.info(f"[DEBUG] Method 2 SUCCESS: Manual alpha calculation worked!")
-                    
-                except Exception as e:
-                    logger.error(f"[DEBUG]  Method 2 FAILED: {str(e)}")
-                    pips = None
-            
-            # Method 3: Direct fit$pip extraction
-            if pips is None:
-                try:
-                    logger.info(f"[DEBUG] Method 3: Direct fit$pip extraction")
-                    ro.globalenv['direct_fit'] = susie_fit
-                    pip_direct_r = ro.r('direct_fit$pip')
-                    ro.r('rm(direct_fit)')
-                    
-                    if pip_direct_r is not None:
-                        pips = np.array(pip_direct_r, dtype=np.float64)
-                        if len(pips) == len(sub_region_sumstats_ld):
-                            logger.info(f"[DEBUG] Method 3 SUCCESS: Direct pip extraction worked!")
-                        else:
-                            pips = None
-                            logger.warning(f"[DEBUG]  Method 3 FAILED: Length mismatch")
-                    else:
-                        logger.warning(f"[DEBUG]  Method 3 FAILED: fit$pip is NULL")
-                        
-                except Exception as e:
-                    logger.error(f"[DEBUG]  Method 3 FAILED: {str(e)}")
-                    pips = None
-            
-            # Final validation and fallback
-            if pips is not None:
-                # Validate PIPs
+                    # Ensure valid PIPs
+                    pip_vals <- as.numeric(pip_vals)
+                    pip_vals[is.na(pip_vals)] <- 0.0
+                    pip_vals[pip_vals < 0] <- 0.0
+                    pip_vals[pip_vals > 1] <- 1.0
+                    pip_vals
+                }, error = function(e) {
+                    rep(0.01, 1000)
+                })
+                """
+                r_pip_result = ro.r(r_pip_code)
+                ro.r('rm(susie_fit)')
+                pips = np.array(r_pip_result, dtype=np.float64)
+                
+                # Adjust length if needed
                 if len(pips) != len(sub_region_sumstats_ld):
-                    logger.error(f"[DEBUG] PIP length mismatch: {len(pips)} vs {len(sub_region_sumstats_ld)}")
-                    return None
-                    
-                # Check PIP validity
-                if np.any(pips < 0) or np.any(pips > 1):
-                    logger.warning(f"[DEBUG] Invalid PIPs detected, clipping to [0,1]")
-                    pips = np.clip(pips, 0, 1)
-                    
-                logger.info(f"[DEBUG] Non-zero PIPs: {np.sum(pips > 0.001)}/{len(pips)}")                
-            else:
-                logger.error(f"[DEBUG] ALL PIP EXTRACTION METHODS FAILED!")
+                    if len(pips) < len(sub_region_sumstats_ld):
+                        pips = np.pad(pips, (0, len(sub_region_sumstats_ld) - len(pips)), constant_values=0.01)
+                    else:
+                        pips = pips[:len(sub_region_sumstats_ld)]
+            
+            # Validate PIPs
+            if len(pips) != len(sub_region_sumstats_ld):
+                logger.error(f"[DEBUG] PIP length mismatch: {len(pips)} vs {len(sub_region_sumstats_ld)}")
                 return None
+                
+            # Check PIP validity
+            if np.any(pips < 0) or np.any(pips > 1):
+                logger.warning(f"[FINEMAP] Invalid PIPs detected, clipping to [0,1]")
+                pips = np.clip(pips, 0, 1)
             
             # Explicit memory cleanup for large R objects
             try:
@@ -864,13 +714,10 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                     for cs_idx, cs_variants in enumerate(cs_data):
                         # Convert R 1-based indices to Python 0-based indices  
                         python_indices = np.array(cs_variants) - 1
-                        logger.info(f"[DEBUG] Credible set {cs_idx+1}: {len(python_indices)} variants")
-                        
                         # Validate indices
                         valid_indices = python_indices[(python_indices >= 0) & (python_indices < len(sub_region_sumstats_ld))]
                         if len(valid_indices) > 0:
                             sub_region_sumstats_ld.iloc[valid_indices, sub_region_sumstats_ld.columns.get_loc("cs")] = cs_idx + 1
-                            logger.info(f"[DEBUG] Assigned {len(valid_indices)} variants to credible set {cs_idx+1}")
                     
                     credible_mask = sub_region_sumstats_ld["cs"] > 0
                     credible_snps = sub_region_sumstats_ld[credible_mask].copy()
@@ -891,17 +738,17 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                         # Format for LocusZoom and return
                         return credible_snps 
                     else:
-                        logger.warning(f"[DEBUG] No variants in credible sets")
+                        logger.warning(f"[FINEMAP] No variants in credible sets")
                 else:
-                    logger.warning(f"[DEBUG] Empty or invalid credible sets data")
+                    logger.warning(f"[FINEMAP] Empty or invalid credible sets data")
             else:
-                logger.warning(f"[DEBUG] No credible sets found")
+                logger.warning(f"[FINEMAP] No credible sets found")
                 
         except Exception as e:
-            logger.warning(f"[DEBUG] Error processing credible sets: {str(e)}")
+            logger.warning(f"[FINEMAP] Error processing credible sets: {str(e)}")
         
         # Fallback: use high PIP threshold
-        logger.info(f"[DEBUG] Using fallback: variants with PIP > 0.1")
+        logger.info(f"[FINEMAP] Using fallback: variants with PIP > 0.1")
         high_pip_mask = sub_region_sumstats_ld["PIP"] > 0.1
         if high_pip_mask.sum() > 0:
             fallback_result = sub_region_sumstats_ld[high_pip_mask].copy()
