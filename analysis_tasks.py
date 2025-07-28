@@ -957,7 +957,7 @@ def finemap_region_batch_worker(batch_data):
                             metadata = {
                                 "chr": region['chr'],
                                 "position": region['position'],
-                                "window_kb": window,
+                                "finemap_window_kb": window,
                                 "population": population,
                                 "seed": seed,
                                 "L": L,

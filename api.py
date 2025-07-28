@@ -653,7 +653,6 @@ class AnalysisPipelineAPI(Resource):
             project_name = request.form.get('project_name')
             ref_genome = request.form.get('ref_genome', 'GRCh37')
             population = request.form.get('population', 'EUR')
-            window_kb = int(request.form.get('window_kb', 500))
             max_workers = int(request.form.get('max_workers', 3))
             
             # Fine-mapping parameters with defaults
@@ -693,9 +692,6 @@ class AnalysisPipelineAPI(Resource):
             
             if population not in ["EUR", "AFR", "AMR", "EAS", "SAS"]:
                 return {"error": "Population must be one of: EUR, AFR, AMR, EAS, SAS"}, 400
-            
-            if window_kb < 500 or window_kb > 5000:
-                return {"error": "Window size must be between 500-5000 kb"}, 400
             
             if max_workers < 1 or max_workers > 16:
                 return {"error": "Max workers must be between 1-16"}, 400
@@ -797,7 +793,6 @@ class AnalysisPipelineAPI(Resource):
                         gwas_file_path=file_path,
                         ref_genome=ref_genome,
                         population=population,
-                        window_kb=window_kb,
                         batch_size=batch_size,
                         max_workers=max_workers,
                         maf_threshold=maf_threshold,
