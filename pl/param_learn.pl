@@ -68,11 +68,6 @@ read_models(Stream, [Model|Models]) :-
     ;   read_models(Stream, Models)
     ).
 
-% fold(all, F) :-
-%     fold(train, FTr),
-%     fold(test, FTe),
-%     append(FTr, FTe, F).
-
 load_train_fold(Dir, Fold, Train) :-
   format(atom(DirectoryPath), '~w/fold_~w/train_models.txt', [Dir, Fold]),
   read_partition_file(DirectoryPath, Train).
@@ -113,15 +108,15 @@ run_param(Dir, Program, [Fold|RestFold], [LPH|LPT],
   findall(relevant_gene(I, G, S), (fold(test, Test), relevant_gene(I, G, S), member(I, Test)), TePos),
   findall(relevant_gene(I, G, S), (fold(train, Train), neg(relevant_gene(I, G, S)), member(I, Train)), TrNeg),
   findall(relevant_gene(I, G, S), (fold(test, Test), neg(relevant_gene(I, G, S)), member(I, Test)), TeNeg),
-  length(TrainFold, NTrain),
-  length(TestFold, NTest),
-  length(TrPos, TrNPos),
-  length(TePos, TeNPos),
-  length(TrNeg, TrNNeg),
-  length(TeNeg, TeNNeg),
-  format('Fold ~w: Train size: ~w, Test size: ~w~n', [Fold, NTrain, NTest]),
-  format('Fold ~w: Train Pos examples: ~w, Neg examples: ~w~n', [Fold, TrNPos, TrNNeg]),
-  format('Fold ~w: Test Pos examples: ~w, Neg examples: ~w~n', [Fold, TeNPos, TeNNeg]),
+  % length(TrainFold, NTrain),
+  % length(TestFold, NTest),
+  % length(TrPos, TrNPos),
+  % length(TePos, TeNPos),
+  % length(TrNeg, TrNNeg),
+  % length(TeNeg, TeNNeg),
+  % format('Fold ~w: Train size: ~w, Test size: ~w~n', [Fold, NTrain, NTest]),
+  % format('Fold ~w: Train Pos examples: ~w, Neg examples: ~w~n', [Fold, TrNPos, TrNNeg]),
+  % format('Fold ~w: Test Pos examples: ~w, Neg examples: ~w~n', [Fold, TeNPos, TeNNeg]),
   assertz(in(Program), ProgRef),
   induce_par_lift([train], LPH),
   test_lift(LPH, [test], LL, AROCH, _, APRH, _), 
@@ -194,66 +189,3 @@ input(alt/2).
 input(ref/2).
 
 input(gene_name/2).
-
-% Mode declarations for head predicates
-%modeh(*, in_tad_with(+snp, -gene)).
-%modeh(*, regulatary_effect(+snp, -gene)).
-%modeh(*, relevant_gene(#gene, #snp)).
-
-% Mode declarations for body predicates
-%modeb(*, closest_gene(+snp, -gene)).
-%modeb(*, in_tad_region(+gene, -tad)).
-%modeb(*, in_regulatory_region(+snp, -enhancer)).
-%modeb(*, alters_tfbs(+snp, -tf, +gene)).
-%modeb(*, find_and_rank_tfs(+snp, -tf, +gene)).
-%modeb(*, overlaps_with(+tfbs, +enhancer)).
-%modeb(*, within_k_distance(+enhancer, +snp, #int)).
-%modeb(*, chr(+enhancer, -chr)).
-%modeb(*, start(+enhancer, -pos)).
-%modeb(*, end(+enhancer, -pos)).
-%modeb(*, load_tfbs_data(+chr, +start, +end, -tf)).
-%
-%
-%:- determination(in_tad_with/2, closest_gene/2).
-%:- determination(in_tad_with/2, in_tad_region/2).
-%:- determination(regulatary_effect/2, in_regulatory_region/2).
-%:- determination(regulatary_effect/2, alters_tfbs/3).
-%:- determination(regulatary_effect/2, overlaps_with/2).
-
-% lift_expansion(begin(model(I)), []) :-
-%   prolog_load_context(module, M),
-%   % lift_input_mod(M),!,
-%   retractall(M:model(_)),
-%   assert(M:model(I)),
-%   assert(M:int(I)).
-
-% lift_expansion(end(model(_I)), []) :-
-%   prolog_load_context(module, M),
-%   % lift_input_mod(M),!,
-%   retractall(M:model(_)).
-
-% lift_expansion(At, A) :-
-%   prolog_load_context(module, M),
-%   % lift_input_mod(M),
-%   M:model(Name),
-%   At \= (_ :- _),
-%   At \= end_of_file,
-%   (At=neg(Atom)->
-%     Atom=..[Pred|Args],
-%     Atom1=..[Pred,Name|Args],
-%     A=neg(Atom1)
-%   ;
-%     (At=prob(Pr)->
-%       A='$prob'(Name,Pr)
-%     ;
-%       At=..[Pred|Args],
-%       Atom1=..[Pred,Name|Args],
-%       A=Atom1
-%     )
-%   ).
-
-% term_expansion(In, Out) :-
-%   \+ current_prolog_flag(xref, true),
-%   % lift_file(Source),
-%   prolog_load_context(source, Source),
-%   lift_expansion(In, Out).

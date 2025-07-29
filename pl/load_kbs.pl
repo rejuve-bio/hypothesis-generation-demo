@@ -62,6 +62,7 @@
 :- multifile in_dnase_I_hotspot/2.
 :- multifile histone_modification/2.
 :- multifile regulates/2.
+:- multifile distance/2.
 
 % Properties
 :- multifile chr/2.
@@ -92,6 +93,7 @@
 :- multifile slope/2.
 :- multifile maf/2.
 :- multifile p_value/2.
+:- multifile accession_d/2.
 
 % Additional binary predicates
 :- multifile synonyms/2.
@@ -104,7 +106,7 @@ load_with_time(Files, FileName) :-
     format("Loaded ~w!~n", [FileName]).
 
 
-% user:file_search_path(prolog_out_v2,'/mnt/hdd_1/abdu/prolog_out_v2').
+user:file_search_path(prolog_out_v2,'/mnt/hdd_1/abdu/prolog_out_v2').
 user:file_search_path(prolog_out,'/mnt/hdd_1/abdu/prolog_out_v3').
 % user:file_search_path(prolog_out,'/mnt/hdd_2/abdu/prolog_out_v4').
 % user:file_search_path(prolog_out,'/mnt/hdd_2/abdu/prolog_out').
@@ -161,19 +163,19 @@ load_atomspace :-
     % load_with_time([cadd(nodes)], "cadd"),
     load_with_time([dbsnp(nodes)], "dbsnp"),
     load_with_time([dbsuper(nodes), dbsuper(edges)], "dbsuper"),
-    load_with_time([enhancer_ccre(nodes), enhancer_ccre(edges)], "enhancer ccre"),
-    load_with_time([promoter_ccre(nodes), promoter_ccre(edges)], "promoter ccre"),
+    % load_with_time([enhancer_ccre(nodes), enhancer_ccre(edges)], "enhancer ccre"),
+    % load_with_time([promoter_ccre(nodes), promoter_ccre(edges)], "promoter ccre"),
     load_with_time([enhancer_atlas(nodes), enhancer_atlas(edges)], "enhancer atlas"),
     %load_with_time([roadmap_chromatin_state(edges)], "roadmap chromatin state"),
     %load_with_time([roadmap_dhs(edges)], "roadmap dhs"),
     %load_with_time([roadmap_h3_mark(edges)], "roadmap h3 mark"),
     % load_with_time([epd(nodes), epd(edges)], "epd"),
-    load_with_time([tflink(edges)], "tflink").
-    % load_with_time([peregrine(nodes), peregrine(edges)], "peregrine")
+    load_with_time([tflink(edges)], "tflink"),
+    load_with_time([peregrine(nodes), peregrine(edges)], "peregrine"),
     %load_with_time([fabian(edges)], "fabian"),
     %load_with_time([top_ld_eur(edges)], "top_ld"),
-    % load_with_time([tfbs(nodes), tfbs(edges)], "tfbs"),
-    % load_with_time([tf_snp(edges)], "tf_snp").
+    load_with_time([tfbs(nodes), tfbs(edges)], "tfbs"),
+    load_with_time([tf_snp(edges)], "tf_snp").
 
 % bgc declarations for parameter learning with cplint
 % Node predicates

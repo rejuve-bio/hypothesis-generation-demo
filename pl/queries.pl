@@ -74,9 +74,7 @@ load_motif_effects(SNP) :-
     py_call(inference_util:get_motif_effect_data(
         CHR, POS, ID, REF, ALT), Results),
     maplist(assert_motif_data, Results)).
-
-% :- table load_tfbs_data/2.
-
+    
 load_tfbs_data(Chr, Start, End, Tf) :- 
   init_py,
   gene_name(Tf, TfName),
@@ -116,26 +114,12 @@ assert_tfbs_data(Data) :-
   ; true %skip if gene is not found in the kb.
   ).
 
-%has_coding_effect(G, Chr, Pos, Ref, Alt) :-
-%    init_py,
-%    py_call(inference_util:analyze_coding_effect(Chr, Pos, Ref, Alt), Results),
-%    Results = [Data],
-%    Status = Data.status,
-%    Status = coding,
-%    Hugo = Data.effect.hugo,
-    %    gene_name(G, Hugo).
-
-% Define the server endpoint
+%Define the server endpoint
 cravat_server('http://localhost:5060').
 
-% Main predicate to analyze variants
 has_coding_effect(G, Chr, Pos, Ref, Alt) :-
     cravat_server(Server),
-    % format(atom(URL), '~w/analyze?chr=~w&pos=~w&ref=~w&alt=~w', 
-    %        [Server, Chr, Pos, Ref, Alt]),
-    % Make GET request and handle JSON properly
     http_get(URL, [Response], []),
-    % format("Response: ~w~n", [Response]),S
     Response = json(List),
     member(status=Status, List),
     member(effect=json(EffectList), List),

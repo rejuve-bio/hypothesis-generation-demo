@@ -18,26 +18,13 @@ relevant_gene(Gene, Snp):0.021 :-
 % relevant_gene(Gene, Snp) :- activity_by_contact(Snp, Gene), sample_head([0.021, 0.979], 3, [Gene, Snp], NH), NH=1.
 
 regulatory_effect(S, G) :- 
-    % format('Checking regulatory effect: S: ~w, G: ~w~n', [S, G]),
     in_regulatory_region(S, Enh),
     associated_with(Enh, G).
-    % format('Associated with enhancer: S: ~w, G: ~w, Enh: ~w~n', [S, G, Enh]),
     % tf_snp(Tf, S),
     % regulates(Tf, G),
     % binds_to(Tf, Tfbs),
-    % format('Regulatory effect: S: ~w, G: ~w, Enh: ~w, Tfbs: ~w~n', [S, G, Enh, Tfbs]),
-    % overlaps_with(Tfbs, Enh), 
-    % format('Overlaps with TFBS: S: ~w, G: ~w, Enh: ~w, Tfbs: ~w~n', [S, G, Enh, Tfbs]),
-    % !.
+    % overlaps_with(Tfbs, Enh), !.
 
-% overlaps_with_tf_enh(Enh, Tf) :-
-%   format('Checking overlaps with TFBS: Enh: ~w, Tf: ~w~n', [Enh, Tf]),
-%   chr(Enh, Chr),
-%   start(Enh, Start),
-%   end(Enh, End),
-%   format('Enh: ~w, Start: ~w, End: ~w, Tf: ~w~n', [Enh, Start, End, Tf]).
-%   % load_tfbs_data(Chr, Start, End, Tf),
-  % format('Overlaps with TFBS: Enh: ~w, Tf: ~w~n', [Enh, Tf]).
 
 coding_effect(S, G) :- 
   hideme([
@@ -49,10 +36,10 @@ coding_effect(S, G) :-
   ]).
 
 in_regulatory_region(S, Enh) :-
-    S = snp(_),
+    hideme([S = snp(_),
     (Enh = super_enhancer(E)
     ;Enh = enhancer(E)),
-    within_k_distance(Enh, S, 50000). %50,000kb obtained from dbsup
+    within_k_distance(Enh, S, 50000)]). %50,000kb obtained from dbsup
 
 alters_tfbs(S, Tf, G) :-
     find_and_rank_tfs(S, Tf, G).
