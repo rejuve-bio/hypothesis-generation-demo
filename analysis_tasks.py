@@ -838,9 +838,8 @@ def finemap_region_batch_worker(batch_data):
         coverage = finemap_params['coverage']
         min_abs_corr = finemap_params['min_abs_corr']
         population = finemap_params['population']
-    else:
-        raise ValueError("No additional_params provided to worker - this should not happen")
         
+        # Recreate database connection in worker process
         if db_params:
             try:
                 # Import Database locally to avoid circular imports in multiprocessing
@@ -850,6 +849,8 @@ def finemap_region_batch_worker(batch_data):
             except Exception as db_e:
                 logger.error(f"[BATCH-{batch_id}] Error recreating database connection: {db_e}")
                 db = None
+    else:
+        raise ValueError("No additional_params provided to worker - this should not happen")
     
     batch_results = []
     successful_regions = 0

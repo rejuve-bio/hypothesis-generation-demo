@@ -65,25 +65,18 @@ class EnrichAPI(Resource):
     @token_required
     def post(self, current_user_id):
         args = request.args
-        phenotype, variant = args['phenotype'], args['variant']
+        variant = args['variant']
         project_id = args.get('project_id')
-        lead_variant_id = args.get('lead_variant_id')
         
         if not project_id:
             return {"error": "project_id is required"}, 400
         
-        if not lead_variant_id:
-            return {"error": "lead_variant_id is required"}, 400
-        
-        # Validate project exists
+        # Validate project exists and get phenotype from project
         project = self.db.get_projects(current_user_id, project_id)
         if not project:
             return {"error": "Project not found or access denied"}, 404
         
-        # Validate lead variant exists
-        lead_variant = self.db.get_lead_variant_credible_sets(current_user_id, project_id, lead_variant_id)
-        if not lead_variant:
-            return {"error": "Lead variant not found"}, 404
+        phenotype = project['phenotype']
         
         logger.info(f"Project-based enrichment request for project {project_id}")
         
@@ -100,8 +93,7 @@ class EnrichAPI(Resource):
                 phenotype=phenotype, 
                 variant=variant, 
                 hypothesis_id=existing_hypothesis['id'],
-                project_id=project_id,
-                lead_variant_id=lead_variant_id
+                project_id=project_id
             )
             return {"hypothesis_id": existing_hypothesis['id'], "project_id": project_id}, 202
         
@@ -124,8 +116,7 @@ class EnrichAPI(Resource):
             phenotype=phenotype, 
             variant=variant, 
             hypothesis_id=hypothesis_id,
-            project_id=project_id,
-            lead_variant_id=lead_variant_id
+            project_id=project_id
         )
         
         return {"hypothesis_id": hypothesis_id}, 201
@@ -504,35 +495,106 @@ class ProjectsAPI(Resource):
     
     @token_required
     def get(self, current_user_id):
-        """Get all projects for a user"""
+        """Get all projects for a user or comprehensive data for a specific project"""
         project_id = request.args.get('id')
         
         if project_id:
-            project = self.db.get_projects(current_user_id, project_id)
-            if not project:
-                return {"error": "Project not found"}, 404
-            # Serialize datetime objects before returning
-            project = serialize_datetime_fields(project)
-            return project, 200
+            return self._get_project_with_full_data(current_user_id, project_id)
         
         projects = self.db.get_projects(current_user_id)
         # Serialize datetime objects in all projects
         projects = serialize_datetime_fields(projects)
         return {"projects": projects}, 200
     
+    def _get_project_with_full_data(self, current_user_id, project_id):
+        """Get comprehensive project data including state, hypotheses, and credible sets"""
+        try:
+            # Get basic project info
+            project = self.db.get_projects(current_user_id, project_id)
+            if not project:
+                return {"error": "Project not found"}, 404
+            
+            # Get analysis state (may be None for new projects)
+            analysis_state = self.db.load_analysis_state(current_user_id, project_id)
+            if not analysis_state:
+                analysis_state = {"status": "not_started"}
+            
+            # Get credible sets (may be empty during processing)
+            credible_sets_data = []
+            try:
+                credible_sets_raw = self.db.get_lead_variant_credible_sets(current_user_id, project_id)
+                if credible_sets_raw:
+                    if isinstance(credible_sets_raw, list):
+                        credible_sets_data = [
+                            {
+                                "lead_variant_id": cs["lead_variant_id"],
+                                "credible_sets": cs["data"].get("credible_sets", []),
+                                "metadata": cs["data"].get("metadata", {})
+                            }
+                            for cs in credible_sets_raw
+                        ]
+                    else:
+                        # Single result
+                        credible_sets_data = [{
+                            "lead_variant_id": credible_sets_raw["lead_variant_id"],
+                            "credible_sets": credible_sets_raw["data"].get("credible_sets", []),
+                            "metadata": credible_sets_raw["data"].get("metadata", {})
+                        }]
+            except Exception as cs_e:
+                logger.warning(f"Could not load credible sets for project {project_id}: {cs_e}")
+                credible_sets_data = []
+            
+            # Get hypotheses for this project (id + variant only)
+            project_hypotheses = []
+            try:
+                all_hypotheses = self.db.get_hypotheses(current_user_id)
+                if isinstance(all_hypotheses, list):
+                    project_hypotheses = [
+                        {
+                            "id": h["id"], 
+                            "variant": h.get("variant") or h.get("variant_id")
+                        }
+                        for h in all_hypotheses 
+                        if h.get('project_id') == project_id
+                    ]
+            except Exception as hyp_e:
+                logger.warning(f"Could not load hypotheses for project {project_id}: {hyp_e}")
+                project_hypotheses = []
+            
+            # Build comprehensive response
+            response = {
+                "id": project["id"],
+                "name": project["name"],
+                "phenotype": project.get("phenotype", ""),
+                "gwas_file_id": project["gwas_file_id"],
+                "created_at": project.get("created_at"),
+                "state": analysis_state,
+                "hypotheses": project_hypotheses,
+                "credible_sets": credible_sets_data
+            }
+            
+            # Serialize datetime objects before returning
+            response = serialize_datetime_fields(response)
+            return response, 200
+            
+        except Exception as e:
+            logger.error(f"Error getting comprehensive project data for {project_id}: {str(e)}")
+            return {"error": f"Error retrieving project data: {str(e)}"}, 500
+    
     @token_required
     def post(self, current_user_id):
         """Create a new project"""
         data = request.get_json()
         
-        if not data or 'name' not in data or 'gwas_file_id' not in data:
-            return {"error": "Missing required fields: name, gwas_file_id"}, 400
+        if not data or 'name' not in data or 'gwas_file_id' not in data or 'phenotype' not in data:
+            return {"error": "Missing required fields: name, gwas_file_id, phenotype"}, 400
         
         try:
             project_id = self.db.create_project(
                 current_user_id, 
                 data['name'], 
-                data['gwas_file_id']
+                data['gwas_file_id'],
+                data['phenotype']
             )
             
             project = self.db.get_projects(current_user_id, project_id)
@@ -554,93 +616,7 @@ class ProjectsAPI(Resource):
             return {"message": "Project deleted successfully"}, 200
         return {"error": "Project not found or access denied"}, 404
 
-class ProjectCredibleSetsAPI(Resource):
-    """API endpoint for getting credible sets for a project"""
-    def __init__(self, db):
-        self.db = db
-    
-    @token_required
-    def get(self, current_user_id, project_id):
-        """Get credible sets for a project, optionally filtered by lead variant"""
-        
-        # Verify project exists and belongs to user
-        project = self.db.get_projects(current_user_id, project_id)
-        if not project:
-            return {"error": "Project not found or access denied"}, 404
-        
-        # Check for lead_variant_id query parameter
-        lead_variant_id = request.args.get('lead_variant_id')
-        
-        try:
-            # First try to get incremental results (organized by lead variant)
-            lead_variant_results = self.db.get_lead_variant_credible_sets(
-                current_user_id, project_id, lead_variant_id
-            )
-            
-            if lead_variant_results:
-                if lead_variant_id:
-                    # Return single lead variant result
-                    if lead_variant_results and 'data' in lead_variant_results:
-                        return lead_variant_results['data'], 200
-                    else:
-                        return {"error": "Lead variant not found"}, 404
-                else:
-                    # Return all lead variants organized by lead variant ID
-                    organized_results = {}
-                    for result in lead_variant_results:
-                        lead_var_id = result['lead_variant_id']
-                        organized_results[lead_var_id] = result['data']
-                    
-                    return {
-                        "data": organized_results,
-                        "structure": "by_lead_variant",
-                        "total_lead_variants": len(organized_results)
-                    }, 200
-            
-            # No results found - return empty structure
-            return {
-                "data": {},
-                "structure": "by_lead_variant", 
-                "total_lead_variants": 0,
-                "message": "No credible sets found - analysis may still be running"
-            }, 200
-            
-        except Exception as e:
-            logger.error(f"Error getting credible sets for project {project_id}: {str(e)}")
-            return {"error": f"Error retrieving credible sets: {str(e)}"}, 500
 
-class ProjectAnalysisStateAPI(Resource):
-    """API endpoint for getting analysis state for a project"""
-    def __init__(self, db):
-        self.db = db
-    
-    @token_required
-    def get(self, current_user_id, project_id):
-        """Get analysis state for a project"""
-        # Verify project exists and belongs to user
-        project = self.db.get_projects(current_user_id, project_id)
-        if not project:
-            return {"error": "Project not found or access denied"}, 404
-        
-        try:
-            # Get analysis state
-            analysis_state = self.db.load_analysis_state(current_user_id, project_id)
-            
-            if not analysis_state:
-                return {
-                    "project_id": project_id,
-                    "status": "not_started",
-                    "message": "No analysis state found"
-                }, 200
-            
-            return {
-                "project_id": project_id,
-                "analysis_state": analysis_state
-            }, 200
-            
-        except Exception as e:
-            logger.error(f"Error getting analysis state for project {project_id}: {str(e)}")
-            return {"error": f"Error retrieving analysis state: {str(e)}"}, 500
 
 class AnalysisPipelineAPI(Resource):
     def __init__(self, db):
@@ -651,6 +627,7 @@ class AnalysisPipelineAPI(Resource):
         try:
             # Get form data and file
             project_name = request.form.get('project_name')
+            phenotype = request.form.get('phenotype')
             ref_genome = request.form.get('ref_genome', 'GRCh37')
             population = request.form.get('population', 'EUR')
             max_workers = int(request.form.get('max_workers', 3))
@@ -667,6 +644,9 @@ class AnalysisPipelineAPI(Resource):
             # Validate required fields
             if not project_name:
                 return {"error": "project_name is required"}, 400
+            
+            if not phenotype:
+                return {"error": "phenotype is required"}, 400
             
             # Get uploaded file
             if 'gwas_file' not in request.files:
@@ -751,7 +731,8 @@ class AnalysisPipelineAPI(Resource):
             project_id = self.db.create_project(
                 user_id=current_user_id,
                 name=project_name,
-                gwas_file_id=file_metadata_id
+                gwas_file_id=file_metadata_id,
+                phenotype=phenotype
             )
             
             # Save metadata to file system

@@ -46,11 +46,12 @@ class Database:
         return {'message': 'Invalid credentials'}, 401
 
     # ==================== PROJECT METHODS ====================
-    def create_project(self, user_id, name, gwas_file_id):
+    def create_project(self, user_id, name, gwas_file_id, phenotype):
         """Create a new project"""
         project_data = {
             'user_id': user_id,
             'name': name,
+            'phenotype': phenotype,
             'created_at': datetime.now(timezone.utc),
             'updated_at': datetime.now(timezone.utc),
             'status': 'active',
@@ -66,12 +67,14 @@ class Database:
             query['_id'] = ObjectId(project_id)
             project = self.projects_collection.find_one(query)
             if project:
-                project['_id'] = str(project['_id'])
+                project['id'] = str(project['_id'])
+                del project['_id']  
             return project
         
         projects = list(self.projects_collection.find(query))
         for project in projects:
-            project['_id'] = str(project['_id'])
+            project['id'] = str(project['_id'])
+            del project['_id']
         return projects
 
     def update_project(self, project_id, data):
@@ -241,13 +244,12 @@ class Database:
             logger.error(f"Error getting lead variant credible sets: {str(e)}")
             raise
 
-    def create_enrich(self, user_id, project_id, lead_variant_id, variant, phenotype, causal_gene, go_terms, causal_graph):
-        """Create enrichment entry with project and lead variant references"""
+    def create_enrich(self, user_id, project_id, variant, phenotype, causal_gene, go_terms, causal_graph):
+        """Create enrichment entry with project references"""
         enrich_data = {
             'id': str(uuid4()),
             'user_id': user_id,
             'project_id': project_id,
-            'lead_variant_id': lead_variant_id,
             'variant': variant,
             'phenotype': phenotype,
             'causal_gene': causal_gene,
