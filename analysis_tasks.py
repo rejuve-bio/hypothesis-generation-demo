@@ -169,6 +169,18 @@ def munge_sumstats_preprocessing(gwas_file_path, output_dir, ref_genome="GRCh37"
         logger.info("[MUNGE] Loading and post-processing munged data")
         munged_df = pd.read_csv(formatted_file_path, sep='\t', low_memory=False)
         logger.info(f"[MUNGE] Loaded {munged_df.shape[0]} variants with {munged_df.shape[1]} columns")
+        logger.info(f"[MUNGE] Available columns: {list(munged_df.columns)}")
+        
+        # Preserve rs_id information if available
+        if 'SNP' in munged_df.columns:
+            logger.info(f"[MUNGE] Found SNP column with rs_ids, preserving as RS_ID")
+            munged_df['RS_ID'] = munged_df['SNP']
+        elif 'RSID' in munged_df.columns:
+            logger.info(f"[MUNGE] Found RSID column, preserving as RS_ID")
+            munged_df['RS_ID'] = munged_df['RSID']
+        else:
+            logger.info(f"[MUNGE] No rs_id column found, will use positional ID only")
+            munged_df['RS_ID'] = None
         
         # Create CHR:BP:A2:A1 ID format
         munged_df["ID"] = (munged_df["CHR"].astype(str) + ":" + 
@@ -176,7 +188,7 @@ def munge_sumstats_preprocessing(gwas_file_path, output_dir, ref_genome="GRCh37"
                           munged_df["A2"] + ":" + 
                           munged_df["A1"])
         
-        # Set ID as index 
+        # Set ID as index but keep RS_ID as a column
         munged_df.reset_index(drop=True, inplace=True)
         munged_df.set_index(["ID"], inplace=True)
         
