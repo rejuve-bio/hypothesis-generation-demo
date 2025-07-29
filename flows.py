@@ -33,7 +33,7 @@ from config import Config, create_dependencies
 
 ### Enrichment Flow
 @flow(log_prints=True, persist_result=False, task_runner=ThreadPoolTaskRunner(max_workers=4))
-def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id, lead_variant_id):
+def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id):
     """
     Fully project-based enrichment flow that initializes dependencies from centralized config
     """
@@ -47,7 +47,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     db = deps['db']
     
     try:
-        logger.info(f"Running project-based enrichment for project {project_id}, lead variant {lead_variant_id}")
+        logger.info(f"Running project-based enrichment for project {project_id}, variant {variant}")
         
         # Check for existing enrichment data
         enrich = check_enrich.submit(db, current_user_id, variant, phenotype, hypothesis_id).result()
@@ -72,7 +72,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
 
         # Create enrichment data with project context
         enrich_id = create_enrich_data.submit(
-            db, current_user_id, project_id, lead_variant_id, variant, 
+            db, current_user_id, project_id, variant, 
             phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id
         ).result()
 

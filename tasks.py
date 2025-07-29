@@ -199,8 +199,8 @@ def retry_get_relevant_gene_proof(prolog_query, variant, causal_gene, hypothesis
         raise
         
 @task(cache_policy=None)
-def create_enrich_data(db, user_id, project_id, lead_variant_id, variant, phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id):
-    """Create enrichment data with project and lead variant references"""
+def create_enrich_data(db, user_id, project_id, variant, phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id):
+    """Create enrichment data with project references"""
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -210,7 +210,7 @@ def create_enrich_data(db, user_id, project_id, lead_variant_id, variant, phenot
 
         logger.info("Creating enrich data in the database with project context")
         enrich_id = db.create_enrich(
-            user_id, project_id, lead_variant_id, variant,
+            user_id, project_id, variant,
             phenotype, causal_gene, relevant_gos, causal_graph
         )
 
