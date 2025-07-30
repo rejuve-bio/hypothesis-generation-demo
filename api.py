@@ -683,8 +683,8 @@ class AnalysisPipelineAPI(Resource):
             if seed < 1 or seed > 999999:
                 return {"error": "Seed must be between 1-999999"}, 400
             
-            if window < 500 or window > 10000:
-                return {"error": "Fine-mapping window must be between 500-10000 kb"}, 400
+            if window > 10000:
+                return {"error": "Fine-mapping window shouldn't be greater than 10000 kb"}, 400
             
             if L != -1 and (L < 1 or L > 50):
                 return {"error": "L must be -1 (auto) or between 1-50"}, 400
