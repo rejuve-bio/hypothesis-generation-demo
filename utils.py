@@ -162,7 +162,7 @@ def transform_credible_sets_to_locuszoom(credible_sets_data):
     if len(df) == 0:
         return {"data": {"beta": [], "chromosome": [], "log_pvalue": [], "position": [], 
                         "ref_allele": [], "ref_allele_freq": [], "variant": [], 
-                        "posterior_prob": [], "is_member": []}, "lastPage": None}
+                        "posterior_prob": [], "is_member": [], "rs_id": []}, "lastPage": None}
     
     # Create LocusZoom format
     return {
@@ -176,7 +176,8 @@ def transform_credible_sets_to_locuszoom(credible_sets_data):
             "ref_allele_freq": df['FRQ'].astype(float).tolist(),
             "variant": [f"{row['CHR']}:{row['BP']}:{row['A2']}:{row['A1']}" for _, row in df.iterrows()],
             "posterior_prob": df['PIP'].astype(float).tolist() if 'PIP' in df.columns else [0.0] * len(df),
-            "is_member": (df.get('cs', 0) != 0).tolist()
+            "is_member": (df.get('cs', 0) != 0).tolist(),
+            "rs_id": df['RS_ID'].fillna('').astype(str).tolist() if 'RS_ID' in df.columns else [''] * len(df)
         },
         "lastPage": None
     }
