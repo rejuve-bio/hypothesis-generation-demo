@@ -377,7 +377,7 @@ def check_ld_semidefiniteness(R_df):
     eigvals = np.linalg.eigvalsh(R_df)
     min_eigval = eigvals.min()
     if min_eigval < 0:
-        eps = 0.1
+        eps = 1e-6 
         R_df += np.eye(R_df.shape[0]) * eps
     
     return R_df
@@ -517,10 +517,10 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
 
         # Get Z-scores after LD filtering - calculate if not available
         if "Z" in sub_region_sumstats_ld.columns:
-            zhat = sub_region_sumstats_ld["Z"].values.flatten()
+            zhat = sub_region_sumstats_ld["Z"].values.reshape(len(sub_region_sumstats_ld), 1)
         elif "BETA" in sub_region_sumstats_ld.columns and "SE" in sub_region_sumstats_ld.columns:
             logger.info(f"[FINEMAP] Z-scores not available, calculating from BETA/SE")
-            zhat = (sub_region_sumstats_ld["BETA"] / sub_region_sumstats_ld["SE"]).values.flatten()
+            zhat = (sub_region_sumstats_ld["BETA"] / sub_region_sumstats_ld["SE"]).values.reshape(len(sub_region_sumstats_ld), 1)
         else:
             logger.error(f"[FINEMAP] Neither Z-scores nor BETA/SE available for Z-score calculation")
             return None
@@ -544,40 +544,26 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             logger.error(f"[DEBUG] Invalid Z-scores detected - contains NaN or inf values")
             return None
         
-        # Check if susieR is available
-        local_susieR = None
-        local_has_susie = False
-        
-        # Using global variables (main process)
-        if 'HAS_SUSIE' in globals() and HAS_SUSIE and 'susieR' in globals() and susieR is not None:
-            local_susieR = susieR
-            local_has_susie = True
-            logger.info(f"[FINEMAP] Using global susieR for chr{chr_num}:{lead_variant_position}")
-        else:
-            try:
-                # Check if susieR is available in this R session
-                if check_r_package_available('susieR'):
-                    local_susieR = importr('susieR')
-                    local_has_susie = True
-                    logger.info(f"[FINEMAP] Imported susieR locally in worker for chr{chr_num}:{lead_variant_position}")
-                else:
-                    logger.error(f"[FINEMAP] susieR package not available in worker process for chr{chr_num}:{lead_variant_position}")
-                    
-            except Exception as e:
-                logger.error(f"[FINEMAP] Error importing susieR in worker process for chr{chr_num}:{lead_variant_position}: {e}")
-        
-        if not local_has_susie or local_susieR is None:
-            logger.error(f"[FINEMAP] susieR not available for chr{chr_num}:{lead_variant_position}")
+        # Simplified susieR availability check
+        try:
+            # Quick check if susieR is available
+            if not check_r_package_available('susieR'):
+                logger.error(f"[FINEMAP] susieR package not available for chr{chr_num}:{lead_variant_position}")
+                return None
+            logger.info(f"[FINEMAP] susieR package available for chr{chr_num}:{lead_variant_position}")
+        except Exception as e:
+            logger.error(f"[FINEMAP] Error checking susieR availability: {e}")
             return None
         
         # Set up R conversions properly for multithreading
-        with localconverter(default_converter + pandas2ri.converter + numpy2ri.converter):
-            try:
-                ro.r(f'set.seed({seed})')
-            except Exception as e:
-                logger.error(f"[FINEMAP] Error setting R seed: {str(e)}")
-                return None
-            
+        try:
+            ro.r(f'set.seed({seed})')
+        except Exception as e:
+            logger.error(f"[FINEMAP] Error setting R seed: {str(e)}")
+            return None
+        
+        # Convert data within context, then exit context
+        with (ro.default_converter + numpy2ri.converter).context():
             try:
                 zhat_r = ro.conversion.get_conversion().py2rpy(zhat)
                 R_r = ro.conversion.get_conversion().py2rpy(LD_mat)
@@ -585,83 +571,102 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             except Exception as e:
                 logger.error(f"[FINEMAP] Error converting data to R objects: {str(e)}")
                 return None
-            
-            # Optuna hyperparameter optimization
-            if L <= 0:
-                def objective_susie(trial):
-                    L_trial = trial.suggest_int("L", 1, 20)
-                    logger.info(f"[DEBUG] Starting SuSiE trial with L={L_trial}")                
-                    
-                    try:
-                        susie_fit = local_susieR.susie_rss(z=zhat_r, R=R_r, L=L_trial, n=num_samples)
-                        logger.info(f"[DEBUG] SuSiE execution completed for L={L_trial}")
-                    except Exception as e:
-                        logger.error(f"[DEBUG] SuSiE execution failed for L={L_trial}: {str(e)}")
-                        return -np.inf
-                    
-                    # Extract ELBO and convergence
-                    try:
-                        # Primary method: ListVector conversion (known to work reliably)
-                        try:
-                            susie_fit_r = ListVector(susie_fit)
-                            elbo = susie_fit_r.rx2('elbo')[-1]
-                            converged = susie_fit_r.rx2('converged')[0]
-                        except Exception:
-                            # Fallback: R-based extraction
-                            ro.globalenv['temp_fit'] = susie_fit
-                            elbo_r = ro.r('tail(temp_fit$elbo, 1)')
-                            converged_r = ro.r('temp_fit$converged')
-                            ro.r('rm(temp_fit)')
-                            elbo = float(elbo_r[0])
-                            converged = int(converged_r[0])
-                        
-                        # Validate ELBO is reasonable
-                        if np.isnan(elbo) or np.isinf(elbo) or elbo > 0:
-                            logger.warning(f"[DEBUG] L={L_trial} invalid ELBO: {elbo}")
-                            return -np.inf
-                        
-                        # Check convergence
-                        if converged == 1:
-                            logger.info(f"[DEBUG] L={L_trial} converged with ELBO {elbo:.6f}")
-                            return elbo
-                        else:
-                            logger.warning(f"[DEBUG] L={L_trial} did not converge")
-                            return -np.inf
-                            
-                    except Exception as e:
-                        logger.error(f"[DEBUG] Error extracting results for L={L_trial}: {str(e)}")
-                        return -np.inf
+        
+        # All SuSiE operations happen outside conversion context (like simplified_finemapping.py)
+        
+        # Import susieR once for all operations
+        try:
+            local_susieR = importr('susieR')
+            logger.info(f"[FINEMAP] susieR imported for chr{chr_num}:{lead_variant_position}")
+        except Exception as e:
+            logger.error(f"[FINEMAP] Error importing susieR: {e}")
+            return None
+        
+        # Optuna hyperparameter optimization
+        if L <= 0:
+            def objective_susie(trial):
+                L_trial = trial.suggest_int("L", 1, 20)
+                logger.info(f"[DEBUG] Starting SuSiE trial with L={L_trial}")                
                 
-                study = optuna.create_study(direction="maximize")
-                study.optimize(objective_susie, n_trials=10)
-                L = study.best_params["L"]
-                logger.info(f"[FINEMAP] Best L found: {L} with ELBO {study.best_value}")
+                try:
+                    # Use the local susieR instance
+                    susie_fit = local_susieR.susie_rss(z=zhat_r, R=R_r, L=L_trial, n=num_samples)
+                    logger.info(f"[DEBUG] SuSiE execution completed for L={L_trial}")
+                except Exception as e:
+                    logger.error(f"[DEBUG] SuSiE execution failed for L={L_trial}: {str(e)}")
+                    return -np.inf
+                
+                # Extract ELBO and convergence
+                try:
+                    # Primary method: ListVector conversion (known to work reliably)
+                    try:
+                        susie_fit_r = ListVector(susie_fit)
+                        elbo = susie_fit_r.rx2('elbo')[-1]
+                        converged = susie_fit_r.rx2('converged')[0]
+                    except Exception:
+                        # Fallback: R-based extraction
+                        ro.globalenv['temp_fit'] = susie_fit
+                        elbo_r = ro.r('tail(temp_fit$elbo, 1)')
+                        converged_r = ro.r('temp_fit$converged')
+                        ro.r('rm(temp_fit)')
+                        elbo = float(elbo_r[0])
+                        converged = int(converged_r[0])
+                    
+                    # Validate ELBO is reasonable
+                    if np.isnan(elbo) or np.isinf(elbo) or elbo > 0:
+                        logger.warning(f"[DEBUG] L={L_trial} invalid ELBO: {elbo}")
+                        return -np.inf
+                    
+                    # Check convergence
+                    if converged == 1:
+                        logger.info(f"[DEBUG] L={L_trial} converged with ELBO {elbo:.6f}")
+                        return elbo
+                    else:
+                        logger.warning(f"[DEBUG] L={L_trial} did not converge")
+                        return -np.inf
+                        
+                except Exception as e:
+                    logger.error(f"[DEBUG] Error extracting results for L={L_trial}: {str(e)}")
+                    return -np.inf
             
-            # Run SuSiE with final L
-            logger.info(f"[FINEMAP] Running SuSiE with L={L}")
-            try:
-                susie_fit = local_susieR.susie_rss(z=zhat_r, R=R_r, L=L, n=num_samples)
-            except Exception as e:
-                logger.error(f"[FINEMAP] SuSiE execution failed: {str(e)}")
-                return None
-            
-            # Extract credible sets and PIPs
-            logger.info(f"[FINEMAP] Extracting credible sets and PIPs...")
-            
-            # Step 1: Extract credible sets
-            try:
-                credible_sets = local_susieR.susie_get_cs(susie_fit, coverage=coverage, min_abs_corr=min_abs_corr, Xcorr=R_r)
-            except Exception as e:
-                logger.error(f"[FINEMAP] Error extracting credible sets: {str(e)}")
-                credible_sets = None
+            study = optuna.create_study(direction="maximize")
+            study.optimize(objective_susie, n_trials=10)
+            L = study.best_params["L"]
+            logger.info(f"[FINEMAP] Best L found: {L} with ELBO {study.best_value}")
+        
+        # Run SuSiE with final L
+        logger.info(f"[FINEMAP] Running SuSiE with L={L}")
+        try:
+            # Use the local susieR instance
+            susie_fit = local_susieR.susie_rss(z=zhat_r, R=R_r, L=L, n=num_samples)
+        except Exception as e:
+            logger.error(f"[FINEMAP] SuSiE execution failed: {str(e)}")
+            return None
+        
+        # Extract credible sets and PIPs
+        logger.info(f"[FINEMAP] Extracting credible sets and PIPs...")
+        
+        # Step 1: Extract credible sets
+        try:
+            # Use the local susieR instance
+            credible_sets = local_susieR.susie_get_cs(susie_fit, coverage=coverage, min_abs_corr=min_abs_corr, Xcorr=R_r)
+        except Exception as e:
+            logger.error(f"[FINEMAP] Error extracting credible sets: {str(e)}")
+            credible_sets = None
 
-            # Step 2: Extract PIPs
+        # Step 2: Extract PIPs - Using the local susieR instance
+        logger.info(f"[FINEMAP] Extracting PIPs using local susieR instance...")
+        try:
+            # Use the local susieR instance
+            pips = np.array(local_susieR.susie_get_pip(susie_fit), dtype=np.float64)
+            logger.info(f"[DEBUG] susie_get_pip SUCCESS: {len(pips)} PIPs")
+            
+        except Exception as e:
+            logger.warning(f"[DEBUG] susie_get_pip failed: {type(e).__name__}: {e}")
+            logger.info(f"[DEBUG] Falling back to manual alpha extraction...")
+            
+            # Fallback: manual alpha calculation
             try:
-                # Primary method: susie_get_pip
-                pips = local_susieR.susie_get_pip(susie_fit)
-                pips = np.array(pips, dtype=np.float64)
-            except Exception:
-                # Fallback: manual alpha calculation
                 ro.globalenv['susie_fit'] = susie_fit
                 r_pip_code = """
                 tryCatch({
@@ -682,35 +687,44 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                     pip_vals[pip_vals > 1] <- 1.0
                     pip_vals
                 }, error = function(e) {
-                    rep(0.01, 1000)
+                    rep(0.01, %d)
                 })
-                """
+                """ % len(sub_region_sumstats_ld)
+                
                 r_pip_result = ro.r(r_pip_code)
                 ro.r('rm(susie_fit)')
                 pips = np.array(r_pip_result, dtype=np.float64)
+                logger.info(f"[DEBUG] Manual extraction SUCCESS: {len(pips)} PIPs")
                 
-                # Adjust length if needed
-                if len(pips) != len(sub_region_sumstats_ld):
-                    if len(pips) < len(sub_region_sumstats_ld):
-                        pips = np.pad(pips, (0, len(sub_region_sumstats_ld) - len(pips)), constant_values=0.01)
-                    else:
-                        pips = pips[:len(sub_region_sumstats_ld)]
+            except Exception as fallback_e:
+                logger.error(f"[DEBUG] Manual extraction FAILED: {fallback_e}")
+                # Last resort: uniform small PIPs
+                pips = np.full(len(sub_region_sumstats_ld), 0.01, dtype=np.float64)
+                logger.warning(f"[DEBUG] Using uniform PIPs as last resort: {len(pips)} PIPs")
+        
+        # Ensure PIP array has correct length
+        if len(pips) != len(sub_region_sumstats_ld):
+            logger.warning(f"[DEBUG] Adjusting PIP length: {len(pips)} -> {len(sub_region_sumstats_ld)}")
+            if len(pips) < len(sub_region_sumstats_ld):
+                pips = np.pad(pips, (0, len(sub_region_sumstats_ld) - len(pips)), constant_values=0.01)
+            else:
+                pips = pips[:len(sub_region_sumstats_ld)]
+        
+        # Validate PIPs
+        if len(pips) != len(sub_region_sumstats_ld):
+            logger.error(f"[DEBUG] PIP length mismatch: {len(pips)} vs {len(sub_region_sumstats_ld)}")
+            return None
             
-            # Validate PIPs
-            if len(pips) != len(sub_region_sumstats_ld):
-                logger.error(f"[DEBUG] PIP length mismatch: {len(pips)} vs {len(sub_region_sumstats_ld)}")
-                return None
-                
-            # Check PIP validity
-            if np.any(pips < 0) or np.any(pips > 1):
-                logger.warning(f"[FINEMAP] Invalid PIPs detected, clipping to [0,1]")
-                pips = np.clip(pips, 0, 1)
-            
-            # Explicit memory cleanup for large R objects
-            try:
-                ro.r('gc()')  # Force R garbage collection
-            except:
-                pass
+        # Check PIP validity
+        if np.any(pips < 0) or np.any(pips > 1):
+            logger.warning(f"[FINEMAP] Invalid PIPs detected, clipping to [0,1]")
+            pips = np.clip(pips, 0, 1)
+        
+        # Explicit memory cleanup for large R objects
+        try:
+            ro.r('gc()')  # Force R garbage collection
+        except:
+            pass
         
         # Add PIPs to results and initialize cs column
         sub_region_sumstats_ld = sub_region_sumstats_ld.copy()
@@ -879,23 +893,29 @@ def finemap_region_batch_worker(batch_data):
     
     logger.info(f"[BATCH-{batch_id}] rpy2 conversion context initialized successfully")
     
-    # Now initialize susieR
+    # Now initialize susieR with clean R environment
     susieR = None
     try:
-           
-        # Use the conversion context for all R operations including imports
-        with localconverter(global_converter):
-            # Check susieR availability
-            if not check_r_package_available('susieR'):
-                logger.error(f"[BATCH-{batch_id}] susieR not available in this worker")
-                return []
-                
-            susieR = importr('susieR')
-            logger.info(f"[BATCH-{batch_id}] susieR imported successfully")
+        # Clean R environment at start of worker to prevent variable pollution
+        try:
+            ro.r('rm(list=ls(all.names=TRUE))')  # Clear any existing objects
+            ro.r('gc(verbose=FALSE, full=TRUE)')  # Full garbage collection
+            # Clear problematic environment variables
+            ro.r('Sys.unsetenv(c("LD_LIBRARY_PATH", "R_SESSION_TMPDIR"))')
+        except Exception as clean_e:
+            logger.warning(f"[BATCH-{batch_id}] Initial R cleanup warning: {clean_e}")
+        
+        # Check susieR availability and import (no conversion context needed for imports)
+        if not check_r_package_available('susieR'):
+            logger.error(f"[BATCH-{batch_id}] susieR not available in this worker")
+            return []
             
-            # Set global R options for memory management
-            ro.r('options(warn=-1)')
-            ro.r('options(scipen=999)') 
+        susieR = importr('susieR')
+        logger.info(f"[BATCH-{batch_id}] susieR imported successfully with clean environment")
+        
+        # Set global R options for memory management
+        ro.r('options(warn=-1)')
+        ro.r('options(scipen=999)') 
         
     except Exception as susie_e:
         logger.error(f"[BATCH-{batch_id}] susieR import failed: {susie_e}")
@@ -912,18 +932,9 @@ def finemap_region_batch_worker(batch_data):
             # Use the shared R session with proper context management
             logger.info(f"[BATCH-{batch_id}] Running fine-mapping for {region_id} with shared R session")
             
-            # Ensure conversion context is active before calling fine-mapping
+            # Call finemap_region directly without additional conversion context
+            # The function handles its own conversion context internally
             try:
-                # Verify conversion context is still active
-                test_val = np.array([1.0])
-                with localconverter(global_converter):
-                    test_r = ro.conversion.get_conversion().py2rpy(test_val)
-            except Exception as ctx_e:
-                logger.warning(f"[BATCH-{batch_id}] Conversion context issue before {region_id}: {ctx_e}")
-                pandas2ri.activate()
-                numpy2ri.activate()
-            
-            with localconverter(global_converter):
                 result = finemap_region(
                     seed=seed,
                     sumstats=sumstats_data,
@@ -996,6 +1007,10 @@ def finemap_region_batch_worker(batch_data):
                 else:
                     failed_regions += 1
                     logger.warning(f"[BATCH-{batch_id}] No results for {region_id}")
+                    
+            except Exception as finemap_e:
+                failed_regions += 1
+                logger.error(f"[BATCH-{batch_id}] Fine-mapping failed for {region_id}: {str(finemap_e)}")
         
         except Exception as processing_e:
             failed_regions += 1
@@ -1006,10 +1021,23 @@ def finemap_region_batch_worker(batch_data):
             # Force Python garbage collection
             collected = gc.collect()
             
-            # Lightweight R cleanup 
-            with localconverter(global_converter):
-                ro.r('rm(list=ls()[!(ls() %in% c("base", "stats", "utils", "methods"))])')
-                ro.r('gc(verbose=FALSE)')
+            # Aggressive R cleanup (no conversion context to avoid pollution)
+            try:
+                # Remove all user objects except base packages
+                ro.r('rm(list=ls()[!(ls() %in% c("base", "stats", "utils", "methods", "grDevices", "graphics"))])')
+                
+                # Clear temporary variables that might be lingering
+                ro.r('rm(list=ls(pattern="^temp_", envir=.GlobalEnv))')
+                ro.r('rm(list=ls(pattern="^susie_", envir=.GlobalEnv))')
+                
+                # Force R garbage collection
+                ro.r('gc(verbose=FALSE, full=TRUE)')
+                
+                # Clear R's internal caches
+                ro.r('if(exists(".Last.value")) rm(.Last.value)')
+                
+            except Exception as r_cleanup_e:
+                logger.warning(f"[BATCH-{batch_id}] R cleanup error after {region_id}: {r_cleanup_e}")
                 
         except Exception as cleanup_e:
             logger.warning(f"[BATCH-{batch_id}] Cleanup error after {region_id}: {cleanup_e}")
@@ -1017,9 +1045,16 @@ def finemap_region_batch_worker(batch_data):
     # Final cleanup of R session
     if r_session_initialized:
         try:
-            with localconverter(global_converter):
-                ro.r('rm(list=ls())')  # Clear everything
-                ro.r('gc(verbose=FALSE)')
+            # Comprehensive final R session cleanup (no conversion context)
+            ro.r('rm(list=ls(all.names=TRUE))')  # Clear everything including hidden objects
+            ro.r('gc(verbose=FALSE, full=TRUE)')  # Full garbage collection
+            
+            # Clear R environment variables that might cause pollution
+            ro.r('Sys.unsetenv(c("LD_LIBRARY_PATH", "R_SESSION_TMPDIR"))')
+            
+            # Reset R options to defaults
+            ro.r('options(warn=0)')  # Reset warning level
+            
             logger.info(f"[BATCH-{batch_id}] Final R session cleanup completed")
         except Exception as final_cleanup_e:
             logger.warning(f"[BATCH-{batch_id}] Final cleanup error: {final_cleanup_e}") 
