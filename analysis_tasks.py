@@ -662,45 +662,8 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             logger.info(f"[DEBUG] susie_get_pip SUCCESS: {len(pips)} PIPs")
             
         except Exception as e:
-            logger.warning(f"[DEBUG] susie_get_pip failed: {type(e).__name__}: {e}")
-            logger.info(f"[DEBUG] Falling back to manual alpha extraction...")
-            
-            # Fallback: manual alpha calculation
-            try:
-                ro.globalenv['susie_fit'] = susie_fit
-                r_pip_code = """
-                tryCatch({
-                    fit <- susie_fit
-                    if (!is.null(fit$alpha) && is.matrix(fit$alpha)) {
-                        alpha_matrix <- fit$alpha
-                        pip_vals <- 1 - apply(1 - alpha_matrix, 2, prod)
-                    } else if (!is.null(fit$pip)) {
-                        pip_vals <- as.numeric(fit$pip)
-                    } else {
-                        stop("No alpha matrix or pip found")
-                    }
-                    
-                    # Ensure valid PIPs
-                    pip_vals <- as.numeric(pip_vals)
-                    pip_vals[is.na(pip_vals)] <- 0.0
-                    pip_vals[pip_vals < 0] <- 0.0
-                    pip_vals[pip_vals > 1] <- 1.0
-                    pip_vals
-                }, error = function(e) {
-                    rep(0.01, %d)
-                })
-                """ % len(sub_region_sumstats_ld)
-                
-                r_pip_result = ro.r(r_pip_code)
-                ro.r('rm(susie_fit)')
-                pips = np.array(r_pip_result, dtype=np.float64)
-                logger.info(f"[DEBUG] Manual extraction SUCCESS: {len(pips)} PIPs")
-                
-            except Exception as fallback_e:
-                logger.error(f"[DEBUG] Manual extraction FAILED: {fallback_e}")
-                # Last resort: uniform small PIPs
-                pips = np.full(len(sub_region_sumstats_ld), 0.01, dtype=np.float64)
-                logger.warning(f"[DEBUG] Using uniform PIPs as last resort: {len(pips)} PIPs")
+            logger.error(f"[DEBUG] susie_get_pip failed: {type(e).__name__}: {e}")
+            return None
         
         # Ensure PIP array has correct length
         if len(pips) != len(sub_region_sumstats_ld):
