@@ -692,8 +692,8 @@ class AnalysisPipelineAPI(Resource):
             if coverage < 0.5 or coverage > 0.999:
                 return {"error": "Coverage must be between 0.5-0.999"}, 400
             
-            if min_abs_corr < 0.1 or min_abs_corr > 1.0:
-                return {"error": "Min absolute correlation must be between 0.1-1.0"}, 400
+            if min_abs_corr < 0.5 or min_abs_corr > 1.0:
+                return {"error": "Min absolute correlation must be between 0.5-1.0"}, 400
             
             if batch_size < 1 or batch_size > 20:
                 return {"error": "Batch size must be between 1-20"}, 400
