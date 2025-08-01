@@ -506,10 +506,6 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         else:
             logger.warning(f"[FINEMAP] BIM file not found: {bim_file_path}, skipping LD dimension check")
         
-        # Final validation after LD dimension checks
-        if len(sub_region_sumstats_ld) < 10:
-            logger.warning(f"[FINEMAP] Too few SNPs after LD filtering ({len(sub_region_sumstats_ld)}), skipping region")
-            return None
             
         # Check and fix LD matrix semi-definiteness
         LD_mat = check_ld_semidefiniteness(LD_mat)
@@ -523,11 +519,6 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             zhat = (sub_region_sumstats_ld["BETA"] / sub_region_sumstats_ld["SE"]).values.reshape(len(sub_region_sumstats_ld), 1)
         else:
             logger.error(f"[FINEMAP] Neither Z-scores nor BETA/SE available for Z-score calculation")
-            return None
-
-        # Basic validation of final data
-        if len(sub_region_sumstats_ld) < 10:
-            logger.error(f"[FINEMAP] Too few variants after all filtering: {len(sub_region_sumstats_ld)}")
             return None
         
         if LD_mat.shape[0] != len(zhat):
