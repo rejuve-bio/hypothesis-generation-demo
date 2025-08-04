@@ -186,6 +186,10 @@ fabric.properties
 
 .vscode/
 
+coordinatesUsed.bed
+
+*.db
+
 # Data
 data/susie
 data/uploads

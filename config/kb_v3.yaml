@@ -1,0 +1,190 @@
+#gencode_gene:
+#  path: gencode/gene
+#  nodes: True
+#  edges: False
+#
+#gencode_transcripts:
+#  path: gencode/transcript
+#  nodes: True
+#  edges: True
+#
+#gencode_exon:
+#  path: gencode/exon
+#  nodes: True
+#  edges: False
+#
+#uniprotkb:
+#  path: uniprot
+#  nodes: True
+#  edges: True
+#
+#pathway:
+#  path: reactome
+#  nodes: True
+#  edges: True
+#
+#gaf:
+#  path: gaf
+#  nodes: False
+#  edges: True
+#
+#coexpression:
+#  path: coxpressdb
+#  nodes: False
+#  edges: True
+#
+# tflink:
+#   path: tflink
+#   nodes: False
+#   edges: True
+
+#string:
+#  path: string
+#  nodes: False
+#  edges: True
+#
+#tadmap:
+#  path: tadmap
+#  nodes: True
+  #  edges: True
+
+# gtex_eqtl:
+#   path: gtex/eqtl
+#   nodes: False
+#   edges: True
+
+#hocomoco:
+#  path: hocomoco
+#  nodes: True
+#  edges: False
+#
+#roadmap_chromatin_state:
+#  path: roadmap/chromatin_state
+#  nodes: False
+#  edges: True
+#
+#roadmap_h3_mark:
+#  path: roadmap/h3_mark
+#  nodes: False
+#  edges: True
+#
+#roadmap_dhs:
+#  path: roadmap/dhs
+#  nodes: False
+  #  edges: True
+
+# abc:
+#   path: abc
+#   nodes: False
+#   edges: True
+
+# cadd:
+#   path: cadd
+#   nodes: True
+#   edges: False
+
+# refseq_closest_gene:
+#   path: refseq
+#   nodes: False
+#   edges: True
+
+#topld_eur:
+#  path: top_ld/EUR
+#  nodes: False
+#  edges: True
+#
+#topld_afr:
+#  path: top_ld/AFR
+#  nodes: False
+#  edges: True
+#
+#topld_eas:
+#  path: top_ld/EAS
+#  nodes: False
+#  edges: True
+#
+#topld_sas:
+#  path: top_ld/SAS
+#  nodes: False
+#  edges: True
+#
+#
+#rna_central_non_coding_rna:
+#  path: rna_central
+#  nodes: True
+#  edges: True
+#
+#dgv_variant:
+#  path: dgv
+#  nodes: True
+  #  edges: False
+
+# epd_promoter:
+#   path: epd
+#   nodes: True
+#   edges: True
+
+#dbvar_variant:
+#  path: dbvar
+#  nodes: True
+#  edges: False
+#
+# peregrine_enhancer:
+#  path: peregrine
+#  nodes: True
+#  edges: True
+
+# dbsuper_super_enhancer:
+#   path: dbsuper
+#   nodes: True
+#   edges: True
+
+# dbsnp:
+#   path: dbsnp
+#   nodes: True
+#   edges: False
+
+enhancer_atlas_enhancer:
+  path: enhancer_atlas
+  nodes: False
+  edges: True
+
+# encode_tfbs:
+#  path: tfbs
+#  nodes: True
+#  edges: True
+
+#gene_ontology:
+#  path: gene_ontology
+#  nodes: True
+#  edges: True
+#
+#uberon:
+#  path: uberon
+#  nodes: True
+#  edges: True
+#
+#cell_line_ontology:
+#  path: cell_line_ontology
+#  nodes: True
+#  edges: True
+#
+#cell_ontology:
+#  path: cell_ontology
+#  nodes: True
+#  edges: True
+#
+#fabian_tf_snp:
+#  path: fabian
+#  nodes: False
+#  edges: True
+#
+#experimental_factor_ontology:
+#  path: experimental_factor_ontology
+#  nodes: True
+#  edges: True
+#
+#brenda_tissue_ontology:
+#  path: brenda_tissue_ontology
+#  nodes: True
+  #  edges: True

@@ -4,8 +4,8 @@
 
 :- dynamic seen_predicate/3.
 
-% Define term_expansion/2 to process terms as they are read
-term_expansion(Head, [:- multifile(Declaration), Head]) :-
+%Define term_expansion/2 to process terms as they are read
+term_expansion(Head, [:- multifile(Declaration), :- discontiguous(Declaration), Head]) :-
     Head \= begin_of_file,
     Head \= end_of_file,
     Head \= :-(_),
@@ -15,4 +15,4 @@ term_expansion(Head, [:- multifile(Declaration), Head]) :-
         false
     ;   assertz(seen_predicate(Source, Name, Arity)), 
         Declaration = [Name/Arity]
-    ).
+            ).
