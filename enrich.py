@@ -2,6 +2,7 @@ from collections import namedtuple
 from typing import NamedTuple, List
 import pickle
 import gseapy as gp
+from config import Config
 
 class Enrich:
 
@@ -41,7 +42,8 @@ class Enrich:
         :return: List of genes
         """
         #TODO: Implement this using CellxGene API
-        brown_preadipocytes_top_corr_genes = pickle.load(open(f"./data/brown_preadipocytes_irx3_corr_top_500_genes.pkl", "rb"))
+        config = Config.from_env()
+        brown_preadipocytes_top_corr_genes = pickle.load(open(f"{config.data_dir}/brown_preadipocytes_irx3_corr_top_500_genes.pkl", "rb"))
         return brown_preadipocytes_top_corr_genes
 
 
@@ -52,7 +54,8 @@ class Enrich:
         library = "GO_Biological_Process_2023"
         organism = "Human"
 
-        background_genes = pickle.load(open("./data/brown_preadipocytes_irx3_corr_background_genes.pkl", "rb"))
+        config = Config.from_env()
+        background_genes = pickle.load(open(f"{config.data_dir}/brown_preadipocytes_irx3_corr_background_genes.pkl", "rb"))
         gene_list = self.get_coexpression_net(relevant_gene)
         # gene_list = self.get_hgnc_syms(gene_list)
         # background_genes = self.get_hgnc_syms(background_genes) #TODO uncomment when working with CellxGene

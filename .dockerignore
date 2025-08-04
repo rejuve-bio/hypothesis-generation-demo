@@ -1,0 +1,93 @@
+# Git and version control
+.git/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+.venv/
+[Bb]in
+[Ii]nclude
+[Ll]ib
+[Ll]ib64
+[Ll]ocal
+[Ss]cripts
+pyvenv.cfg
+pip-selfcheck.json
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Test and coverage
+.pytest_cache/
+.coverage
+.tox/
+htmlcov/
+.cache/
+nosetests.xml
+coverage.xml
+
+# Logs and temporary files
+*.log
+plink.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Environment and configuration
+.env
+.env.local
+.env.*.local
+
+# Prefect runtime directories
+.prefect/
+
+# Data directories 
+data/uploads/
+data/projects/
+data/states/
+data/susie/
+data/raw/
+logs/
+data/1000Genomes_phase3/
+*.pkl
+*.csv
+
+# Documentation and README files (optional, remove if needed in container)
+README.md
+*.md
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db 
