@@ -1,20 +1,40 @@
-FROM python:3.11-slim
-
-# Create and set the working directory
-WORKDIR /app
+# Use an official Python runtime as a parent image
+FROM python:3.10
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y build-essential curl
+
+# Install the outlines library
+RUN pip install --upgrade pip setuptools wheel
+
+# Install rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Install the Python dependencies
+COPY requirements.txt /app/requirements.txt
+RUN pip install -r requirements.txt
+
 
 # Install Prefect and other dependencies
 RUN pip install --upgrade pip \
-    && pip install -U prefect
+    && pip install -U prefect 
 
-# Expose port 4200
+# Install OpenCravat
+RUN pip install open-cravat
+
+# Install the annotators
+RUN oc module install-base && oc module install clinvar cosmic --yes
+
+# Copy application code (needed for workers to execute flows)
+COPY . /app
+
+# Expose port 4200 for Prefect server
 EXPOSE 4200
 
-# Define the entry point for your application
-CMD ["prefect", "server", "start"]
+# Default to starting Prefect server, but can be overridden for workers
+CMD ["prefect", "server", "start", "--host", "0.0.0.0"]
