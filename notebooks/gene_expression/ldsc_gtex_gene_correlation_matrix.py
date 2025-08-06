@@ -115,3 +115,73 @@ def __(mo, os):
     - **Output Prefix**: `{config['output_prefix']}`
     """)
     return config,
+
+@app.cell
+def __(config, os, subprocess):
+    def build_ldsc_command(cfg):
+        cmd = [
+            'python2', 
+            os.path.join(cfg['ldsc_dir'], cfg['ldsc_script']),
+            '--h2-cts', cfg['gwas_file'],
+            '--ref-ld-chr', cfg['baseline_ld'],
+            '--out', os.path.join(cfg['results_dir'], cfg['output_prefix']),
+            '--ref-ld-chr-cts', cfg['cts_file'],
+            '--w-ld-chr', cfg['weights_ld']
+        ]
+        return cmd
+    
+    def run_ldsc_analysis(cfg):
+        original_dir = os.getcwd()
+        os.chdir(cfg['ldsc_dir'])
+        
+        try:
+            cmd = build_ldsc_command(cfg)
+            print("Running LDSC command:")
+            print(" ".join(cmd))
+            print("Analysis in progress...")
+
+            import time
+            start_time = time.time()
+            
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=cfg['ldsc_dir'],
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            output_lines = []
+            while True:
+                output = process.stdout.readline()
+                if output == '' and process.poll() is not None:
+                    break
+                if output:
+                    print(output.strip())
+                    output_lines.append(output.strip())
+
+            rc = process.poll()
+            elapsed_time = time.time() - start_time
+            print(f"\nAnalysis completed in {elapsed_time:.2f} seconds")
+
+            if rc != 0:
+                print(f"Command failed with return code: {rc}")
+            else:
+                print("Analysis completed successfully!")
+                
+            class MockResult:
+                def __init__(self, returncode, stdout):
+                    self.returncode = returncode
+                    self.stdout = "\n".join(stdout)
+                    self.stderr = ""
+
+            return MockResult(rc, output_lines)
+        finally:
+            os.chdir(original_dir)
+
+    cmd = build_ldsc_command(config)
+    print("LDSC Command to be executed:")
+    print(" ".join(cmd))
+    return build_ldsc_command, cmd, run_ldsc_analysis
