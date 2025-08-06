@@ -93,3 +93,25 @@ def cell_copy_ldsc_script(LDSC_DIR, LDSC_REPO_DIR, subprocess):
         print("Made ldsc.py executable")
 
     return source_script,
+
+@app.cell
+def __(mo, os):
+    config = {
+        'ldsc_dir': '/mnt/hdd_1/rediet/hypothesis-generation-demo/ldsc_ph/ldsc',
+        'results_dir': '/mnt/hdd_1/rediet/hypothesis-generation-demo/ldsc_ph/results',
+        'gwas_file': '21001_munged.gwas.imputed_v3.both_sexes.tsv',
+        'baseline_ld': '1000G_Phase3_baselineLD_ldscores/baselineLD.',
+        'weights_ld': '1000G_Phase3_weights_hm3_no_MHC/weights.hm3_noMHC.',
+        'cts_file': 'Multi_tissue_gene_expr_gtex.ldcts',
+        'output_prefix': 'current_Mock_BMI_Multi_tissue_gtex',
+        'ldsc_script': 'source/ldsc.py'
+    }
+
+    mo.md(f"""
+    ## Current Configuration:
+    - **LDSC Directory**: `{config['ldsc_dir']}`
+    - **Results Directory**: `{config['results_dir']}`
+    - **GWAS File**: `{config['gwas_file']}`
+    - **Output Prefix**: `{config['output_prefix']}`
+    """)
+    return config,
