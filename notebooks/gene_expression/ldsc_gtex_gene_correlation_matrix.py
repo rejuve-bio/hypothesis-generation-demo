@@ -228,3 +228,6 @@ def __(os, pd, config):
         print(f"Top 10 significant tissues saved to '{OUTPUT_FILE}'")
 
     return OUTPUT_FILE
+
+if __name__ == "__main__":
+    app.run()
