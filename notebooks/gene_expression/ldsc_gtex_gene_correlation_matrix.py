@@ -185,3 +185,28 @@ def __(config, os, subprocess):
     print("LDSC Command to be executed:")
     print(" ".join(cmd))
     return build_ldsc_command, cmd, run_ldsc_analysis
+
+@app.cell
+def __(config, os, run_ldsc_analysis):
+    analysis_result = None
+
+    required_files = [
+        config['gwas_file'],
+        config['cts_file']
+    ]
+    
+    missing_files = []
+    for file in required_files:
+        if not os.path.exists(os.path.join(config['ldsc_dir'], file)):
+            missing_files.append(file)
+    
+    if missing_files:
+        print("Missing required files:")
+        for file in missing_files:
+            print(f"  - {file}")
+    else:
+        print("Starting LDSC analysis automatically...")
+        analysis_result = run_ldsc_analysis(config)
+    
+    analysis_result
+    return analysis_result, missing_files, required_files
