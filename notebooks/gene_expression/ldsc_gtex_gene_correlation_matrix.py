@@ -122,5 +122,21 @@ def __(mo, os):
     """)
     return config,
 
+@app.cell
+def __(config, os, subprocess):
+    def build_ldsc_command(cfg):
+        """Build the LDSC command with all parameters"""
+        cmd = [
+            'python2', 
+            os.path.join(cfg['ldsc_dir'], cfg['ldsc_script']),
+            '--h2-cts', cfg['gwas_file'],
+            '--ref-ld-chr', cfg['baseline_ld'],
+            '--out', os.path.join(cfg['results_dir'], cfg['output_prefix']),
+            '--ref-ld-chr-cts', cfg['cts_file'],
+            '--w-ld-chr', cfg['weights_ld']
+        ]
+        return cmd
+    
+
 if __name__ == "__main__":
     app.run()
