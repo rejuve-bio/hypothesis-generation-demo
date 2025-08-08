@@ -68,6 +68,34 @@ def cell_setup_dirs(Path, subprocess):
         ldsc_script,
     )
 
+@app.cell
+def cell_copy_ldsc_script(LDSC_DIR, LDSC_REPO_DIR, subprocess):
+    source_dir = LDSC_DIR / "source"
+    source_dir.mkdir(exist_ok=True)
+    source_script = source_dir / "ldsc.py"
+    cloned_script = LDSC_REPO_DIR / "ldsc.py"
+    
+    if not source_script.exists() and cloned_script.exists():
+        subprocess.run([
+            "cp", str(cloned_script), str(source_script)
+        ], check=True)
+        print(f"Copied ldsc.py to {source_script}")
+    
+ 
+    source_ldscore = source_dir / "ldscore"
+    cloned_ldscore = LDSC_REPO_DIR / "ldscore"
+    
+    if not source_ldscore.exists() and cloned_ldscore.exists():
+        subprocess.run([
+            "cp", "-r", str(cloned_ldscore), str(source_ldscore)
+        ], check=True)
+        print(f"Copied ldscore module to {source_ldscore}")
+    if source_script.exists():
+        subprocess.run(["chmod", "+x", str(source_script)], check=True)
+        print("Made ldsc.py executable")
+    
+    return source_script,
+
 
 
 if __name__ == "__main__":
