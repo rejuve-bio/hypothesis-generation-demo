@@ -228,6 +228,25 @@ def __(config, os, run_ldsc_analysis):
     analysis_result
     return analysis_result, missing_files, required_files
 
+@app.cell
+def __(os, pd, config):
+    RESULT_FILE = os.path.join(config["results_dir"], "current_Mock_BMI_Multi_tissue_gtex.cell_type_results.txt")
+    OUTPUT_FILE = os.path.join(config["results_dir"], "top10_gtex_current_mock_bmi_significant_tissues.tsv")
+
+    if not os.path.exists(RESULT_FILE):
+        print(f"Error: File '{RESULT_FILE}' not found.")
+        ldsc_output_file = None
+    else:
+        df = pd.read_csv(RESULT_FILE, sep="\t")
+        df_filtered = df[df.iloc[:, 3] < 0.01]
+        df_sorted = df_filtered.sort_values(by=df.columns[1], ascending=False)
+        top10_df = df_sorted.head(10)
+        top10_df.to_csv(OUTPUT_FILE, sep="\t", index=False)
+        print(f"Top 10 significant tissues saved to '{OUTPUT_FILE}'")
+        ldsc_output_file = OUTPUT_FILE
+
+    return ldsc_output_file, RESULT_FILE, OUTPUT_FILE
+
 
 
 if __name__ == "__main__":
