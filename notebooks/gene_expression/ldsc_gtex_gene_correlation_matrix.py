@@ -574,6 +574,36 @@ def __(cellxgene_census, np, pd, pearsonr):
 
     return CellxgeneMock,
 
+@app.cell
+def __(CellxgeneMock, json, ontology_mapping_results):
+    # CellxGene analysis configuration and execution
+    gene_of_interest = 'ENSG00000140718'
+    # gene_of_interest = 'ENSG00000177508'  # IRX3
+    cell_type = 'preadipocyte'
+
+    # Use the mapping results from the ontology mapping step
+    cellxgene_analysis_mock = CellxgeneMock()
+    cellxgene_coexp_results = {}
+    
+    for tissue_key, tissue_value in ontology_mapping_results.items():
+        target_tissue = tissue_value["cellxgene_descendant_ontology_name"]
+        if target_tissue:
+            print(f"\nProcessing tissue: {target_tissue}")
+            top_pos, top_neg, all_gene_ids = cellxgene_analysis_mock.get_coexpression_matrix(
+                gene=gene_of_interest,
+                tissue=target_tissue,
+                cell_type=cell_type
+            )
+            
+            cellxgene_coexp_results[target_tissue] = {
+                'top_positive': top_pos,
+                'top_negative': top_neg,
+                'all_genes': all_gene_ids
+            }
+        else:
+            print(f"No target tissue found for {tissue_key}")
+
+    return cellxgene_coexp_results, gene_of_interest, cell_type, cellxgene_analysis_mock
 
 
 if __name__ == "__main__":
