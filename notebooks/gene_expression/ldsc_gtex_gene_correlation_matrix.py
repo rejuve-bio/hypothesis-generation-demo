@@ -228,66 +228,23 @@ def __(config, os, run_ldsc_analysis):
     return analysis_result, missing_files, required_files
 
 @app.cell
-def __(analysis_result, pd):
-    import io
+def __(os, pd, config):
+    RESULT_FILE = os.path.join(config["results_dir"], "current_Mock_BMI_Multi_tissue_gtex.cell.type_results.txt")
+    OUTPUT_FILE = os.path.join(config["results_dir"], "top10_gtex_current_mock_bmi_significant_tissues.tsv")
 
-    def parse_ldsc_output_to_df(output_text):
-        """Parse LDSC stdout to extract the result table as a DataFrame."""
-        lines = output_text.splitlines()
-        table_lines = []
-        table_started = False
-        for line in lines:
-            # Adjust the header check as needed for your LDSC output
-            if line.startswith("Category") or line.startswith("Tissue"):
-                table_started = True
-            if table_started:
-                table_lines.append(line)
-        if not table_lines:
-            print("No result table found in LDSC output.")
-            return None
-        table_str = "\n".join(table_lines)
-        df = pd.read_csv(io.StringIO(table_str), sep="\t")
-        return df
-
-    if analysis_result is None or analysis_result.returncode != 0:
-        print("LDSC analysis did not complete successfully.")
-        top_tissues = []
-        ldsc_df = None
+    if not os.path.exists(RESULT_FILE):
+        print(f"Error: File '{RESULT_FILE}' not found.")
+        ldsc_output_file = None
     else:
-        ldsc_df = parse_ldsc_output_to_df(analysis_result.stdout)
-        if ldsc_df is not None:
-            # Adjust column names as needed for your LDSC output
-            pval_col = [col for col in ldsc_df.columns if "p" in col.lower()][0]
-            effect_col = ldsc_df.columns[1]
-            tissue_col = ldsc_df.columns[0]
-            df_filtered = ldsc_df[ldsc_df[pval_col] < 0.01]
-            df_sorted = df_filtered.sort_values(by=effect_col, ascending=False)
-            top_tissues = df_sorted[tissue_col].head(10).tolist()
-            print("Top 10 significant tissues based on LDSC analysis:")
-            print("Top 10 significant tissues:", top_tissues)
-        else:
-            top_tissues = []
+        df = pd.read_csv(RESULT_FILE, sep="\t")
+        df_filtered = df[df.iloc[:, 3] < 0.01]
+        df_sorted = df_filtered.sort_values(by=df.columns[1], ascending=False)
+        top10_df = df_sorted.head(10)
+        top10_df.to_csv(OUTPUT_FILE, sep="\t", index=False)
+        print(f"Top 10 significant tissues saved to '{OUTPUT_FILE}'")
+        ldsc_output_file = OUTPUT_FILE
 
-    return top_tissues, ldsc_df
-
-# @app.cell
-# def __(os, pd, config):
-#     RESULT_FILE = os.path.join(config["results_dir"], "current_Mock_BMI_Multi_tissue_gtex.cell.type_results.txt")
-#     OUTPUT_FILE = os.path.join(config["results_dir"], "top10_gtex_current_mock_bmi_significant_tissues.tsv")
-
-#     if not os.path.exists(RESULT_FILE):
-#         print(f"Error: File '{RESULT_FILE}' not found.")
-#         ldsc_output_file = None
-#     else:
-#         df = pd.read_csv(RESULT_FILE, sep="\t")
-#         df_filtered = df[df.iloc[:, 3] < 0.01]
-#         df_sorted = df_filtered.sort_values(by=df.columns[1], ascending=False)
-#         top10_df = df_sorted.head(10)
-#         top10_df.to_csv(OUTPUT_FILE, sep="\t", index=False)
-#         print(f"Top 10 significant tissues saved to '{OUTPUT_FILE}'")
-#         ldsc_output_file = OUTPUT_FILE
-
-#     return ldsc_output_file, RESULT_FILE, OUTPUT_FILE
+    return ldsc_output_file, RESULT_FILE, OUTPUT_FILE
 
 @app.cell
 def __():
@@ -297,8 +254,6 @@ def __():
     warnings.filterwarnings("ignore", category=SyntaxWarning, module=r"pronto(\.|$)")
     from pronto import Ontology
     import warnings
-    
-    # Suppress SyntaxWarnings from pronto library
     warnings.filterwarnings("ignore", category=SyntaxWarning, module="pronto")
     
     return json, requests, Ontology
@@ -469,20 +424,28 @@ def __(
     map_gtex_to_cellxgene_tissue,
     os,
     top_tissues,
-    warnings
+    warnings,
+    pd, 
+    OUTPUT_FILE="top10_gtex_current_mock_bmi_significant_tissues.tsv"
 ):
     print("Starting the main execution")
     uberon_url = "http://purl.obolibrary.org/obo/uberon.owl"
     uberon_filename = "uberon.owl"
     tissue_descendants_url = "https://raw.githubusercontent.com/chanzuckerberg/cellxgene-ontology-guide/latest/ontology-assets/tissue_descendants.json"
     tissue_descendants_filename = "tissue_descendants.json"
+    gtex_uberon_mapping="gtex_uberon_mapping.txt"
 
     download_file(uberon_url, uberon_filename)
     tissue_descendants_data = download_json_file(tissue_descendants_url, tissue_descendants_filename)
 
-    gtex_uberon_mapping = {
-        'Brain_Putamen_basal_ganglia': 'UBERON:0001874'
-    }
+
+    mapping = {}
+    with open(gtex_uberon_mapping) as f:
+        content = f.read().lstrip()  
+        exec(content, {}, mapping)
+
+    gtex_uberon_mapping = mapping['gtex_uberon_mapping']
+
 
     cellxgene_uberon_mapping = create_cellxgene_mapping_from_tissue_descendants(tissue_descendants_data)
 
@@ -501,23 +464,16 @@ def __(
     else:
         print(f"UBERON ontology file '{uberon_filename}' not found. Only direct matches will be found.")
 
-    print(f"DEBUG: top_tissues contains: {top_tissues}")
-    print(f"DEBUG: Number of tissues to process: {len(top_tissues)}")
-    
-    if not top_tissues:
-        print("WARNING: No tissues found from LDSC analysis. Check LDSC output parsing.")
-        print("Using mock tissue data for testing...")
-        top_tissues_to_use = ['Brain_Putamen_basal_ganglia']
-    else:
-        top_tissues_to_use = top_tissues
-
     ontology_mapping_results = {}
 
-    for gtex_tissue_to_map in top_tissues_to_use:
+
+
+    top10 = pd.read_csv(OUTPUT_FILE, sep="\t")
+    import re
+    top10_tissues = [re.sub(r"_\(", "_", name).replace(")", "")for name in top10['Name'].tolist()]
+
+    for gtex_tissue_to_map in top10_tissues:
         print(f"\nProcessing GTEx tissue: {gtex_tissue_to_map}") 
-        with open("new_top_10.txt", "w") as f:
-            for tissue in top_tissues_to_use:
-                f.write(f"{tissue}\n")
         
         gtex_uberon_id = gtex_uberon_mapping.get(gtex_tissue_to_map)
         gtex_ontology_name = get_tissue_name_from_ontology(gtex_uberon_id, uberon_ontology) if gtex_uberon_id else None
