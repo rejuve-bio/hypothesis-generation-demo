@@ -605,6 +605,42 @@ def __(CellxgeneMock, json, ontology_mapping_results):
 
     return cellxgene_coexp_results, gene_of_interest, cell_type, cellxgene_analysis_mock
 
+@app.cell
+def __(cellxgene_coexp_results, pickle, os):
+    # Convert Ensembl IDs to HGNC symbols and prepare for pathway analysis
+    hgnc_converted_results = {}
+    
+    try:
+        ensembl_to_hgnc_map = pickle.load(open("../data/ensembl_to_hgnc.pkl", "rb"))
+        
+        # Process results for each tissue
+        for tissue_name, coexp_results in cellxgene_coexp_results.items():
+            top_positive_hgnc = [(ensembl_to_hgnc_map.get(gene_id, gene_id), corr) for gene_id, corr in coexp_results['top_positive']]
+            top_negative_hgnc = [(ensembl_to_hgnc_map.get(gene_id, gene_id), corr) for gene_id, corr in coexp_results['top_negative']]
+            all_genes_hgnc = [ensembl_to_hgnc_map.get(gene_id, gene_id) for gene_id in coexp_results['all_genes']]
+            
+            # Save positive correlations to file
+            hgnc_output_filename = f"top_positive_hgnc_{tissue_name.replace(' ', '_').replace('/', '_')}.txt"
+            with open(hgnc_output_filename, "w") as hgnc_file: 
+                hgnc_file.writelines([f"{gene_symbol}\t{corr:.4f}\n" for gene_symbol, corr in top_positive_hgnc])
+            
+            hgnc_converted_results[tissue_name] = {
+                'top_positive_hgnc': top_positive_hgnc,
+                'top_negative_hgnc': top_negative_hgnc,
+                'all_genes_hgnc': all_genes_hgnc
+            }
+        
+        print("Successfully converted Ensembl IDs to HGNC symbols")
+        conversion_successful = True
+        
+    except FileNotFoundError:
+        print("Warning: ensembl_to_hgnc.pkl file not found. Using original Ensembl IDs.")
+        hgnc_converted_results = cellxgene_coexp_results
+        conversion_successful = False
+
+    return hgnc_converted_results, conversion_successful
+
+
 
 if __name__ == "__main__":
     app.run()
