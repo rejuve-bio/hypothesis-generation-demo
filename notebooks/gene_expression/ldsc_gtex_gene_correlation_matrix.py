@@ -247,6 +247,51 @@ def __(os, pd, config):
 
     return ldsc_output_file, RESULT_FILE, OUTPUT_FILE
 
+@app.cell
+def __():
+    import requests
+    import json
+    from pronto import Ontology
+    import warnings
+    
+    # Suppress SyntaxWarnings from pronto library
+    warnings.filterwarnings("ignore", category=SyntaxWarning, module="pronto")
+    
+    return json, requests, Ontology
+
+@app.cell
+def __(json, os, requests):
+    def download_file(url, filename):
+        """Download file only if it doesn't exist locally"""
+        if os.path.exists(filename):
+            print(f"{filename} already exists, skipping download")
+            return
+        
+        print(f"Downloading {filename}...")
+        response = requests.get(url)
+        response.raise_for_status()
+        with open(filename, 'wb') as file_handle:
+            file_handle.write(response.content)
+        print(f"Downloaded {filename}")
+
+    def download_json_file(url, filename):
+        """Download JSON file only if it doesn't exist locally"""
+        if os.path.exists(filename):
+            print(f"{filename} already exists, loading from local file")
+            with open(filename, 'r') as file_handle:
+                data = json.load(file_handle)
+            return data
+        
+        print(f"Downloading {filename}...")
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        with open(filename, 'w') as file_handle:
+            json.dump(data, file_handle, indent=4)
+        print(f"Downloaded {filename}")
+        return data
+    return download_file, download_json_file
+
 
 
 if __name__ == "__main__":
