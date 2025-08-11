@@ -229,23 +229,65 @@ def __(config, os, run_ldsc_analysis):
     return analysis_result, missing_files, required_files
 
 @app.cell
-def __(os, pd, config):
-    RESULT_FILE = os.path.join(config["results_dir"], "current_Mock_BMI_Multi_tissue_gtex.cell_type_results.txt")
-    OUTPUT_FILE = os.path.join(config["results_dir"], "top10_gtex_current_mock_bmi_significant_tissues.tsv")
+def __(analysis_result, pd):
+    import io
 
-    if not os.path.exists(RESULT_FILE):
-        print(f"Error: File '{RESULT_FILE}' not found.")
-        ldsc_output_file = None
+    def parse_ldsc_output_to_df(output_text):
+        """Parse LDSC stdout to extract the result table as a DataFrame."""
+        lines = output_text.splitlines()
+        table_lines = []
+        table_started = False
+        for line in lines:
+            # Adjust the header check as needed for your LDSC output
+            if line.startswith("Category") or line.startswith("Tissue"):
+                table_started = True
+            if table_started:
+                table_lines.append(line)
+        if not table_lines:
+            print("No result table found in LDSC output.")
+            return None
+        table_str = "\n".join(table_lines)
+        df = pd.read_csv(io.StringIO(table_str), sep="\t")
+        return df
+
+    if analysis_result is None or analysis_result.returncode != 0:
+        print("LDSC analysis did not complete successfully.")
+        top_tissues = []
+        ldsc_df = None
     else:
-        df = pd.read_csv(RESULT_FILE, sep="\t")
-        df_filtered = df[df.iloc[:, 3] < 0.01]
-        df_sorted = df_filtered.sort_values(by=df.columns[1], ascending=False)
-        top10_df = df_sorted.head(10)
-        top10_df.to_csv(OUTPUT_FILE, sep="\t", index=False)
-        print(f"Top 10 significant tissues saved to '{OUTPUT_FILE}'")
-        ldsc_output_file = OUTPUT_FILE
+        ldsc_df = parse_ldsc_output_to_df(analysis_result.stdout)
+        if ldsc_df is not None:
+            # Adjust column names as needed for your LDSC output
+            pval_col = [col for col in ldsc_df.columns if "p" in col.lower()][0]
+            effect_col = ldsc_df.columns[1]
+            tissue_col = ldsc_df.columns[0]
+            df_filtered = ldsc_df[ldsc_df[pval_col] < 0.01]
+            df_sorted = df_filtered.sort_values(by=effect_col, ascending=False)
+            top_tissues = df_sorted[tissue_col].head(10).tolist()
+            print("Top 10 significant tissues:", top_tissues)
+        else:
+            top_tissues = []
 
-    return ldsc_output_file, RESULT_FILE, OUTPUT_FILE
+    return top_tissues, ldsc_df
+
+# @app.cell
+# def __(os, pd, config):
+#     RESULT_FILE = os.path.join(config["results_dir"], "current_Mock_BMI_Multi_tissue_gtex.cell.type_results.txt")
+#     OUTPUT_FILE = os.path.join(config["results_dir"], "top10_gtex_current_mock_bmi_significant_tissues.tsv")
+
+#     if not os.path.exists(RESULT_FILE):
+#         print(f"Error: File '{RESULT_FILE}' not found.")
+#         ldsc_output_file = None
+#     else:
+#         df = pd.read_csv(RESULT_FILE, sep="\t")
+#         df_filtered = df[df.iloc[:, 3] < 0.01]
+#         df_sorted = df_filtered.sort_values(by=df.columns[1], ascending=False)
+#         top10_df = df_sorted.head(10)
+#         top10_df.to_csv(OUTPUT_FILE, sep="\t", index=False)
+#         print(f"Top 10 significant tissues saved to '{OUTPUT_FILE}'")
+#         ldsc_output_file = OUTPUT_FILE
+
+#     return ldsc_output_file, RESULT_FILE, OUTPUT_FILE
 
 @app.cell
 def __():
@@ -424,6 +466,7 @@ def __(
     json,
     map_gtex_to_cellxgene_tissue,
     os,
+    top_tissues
 ):
     print("Starting the main execution")
     uberon_url = "http://purl.obolibrary.org/obo/uberon.owl"
@@ -456,7 +499,7 @@ def __(
 
     ontology_mapping_results = {}
 
-    for gtex_tissue_to_map in ['Brain_Putamen_basal_ganglia']:
+    for gtex_tissue_to_map in top_tissues:
        
         gtex_uberon_id = gtex_uberon_mapping.get(gtex_tissue_to_map)
         gtex_ontology_name = get_tissue_name_from_ontology(gtex_uberon_id, uberon_ontology) if gtex_uberon_id else None
