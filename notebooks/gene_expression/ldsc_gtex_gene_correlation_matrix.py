@@ -525,7 +525,6 @@ def __(
 
 @app.cell
 def __():
-    # Import additional packages for CellxGene analysis
     import cellxgene_census
     import pickle
     from scipy.stats import pearsonr
@@ -555,7 +554,7 @@ def __(cellxgene_census, np, pd, pearsonr):
                 gene_expression_sum = np.array((adata.X > 0).sum(axis=0)).flatten()
                 adata_filtered = adata[:, gene_expression_sum > 0]
                 genes = adata_filtered.var['feature_id']
-                df_expression = pd.DataFrame(adata_filtered.X.toarray(), columns=genes)
+                df_expression = pd.DataFrame(adata_filtered.X, columns=genes)
 
                 if gene in df_expression.columns:
                     non_zero_samples = df_expression[df_expression[gene] > 0]
@@ -577,7 +576,6 @@ def __(cellxgene_census, np, pd, pearsonr):
                     top_positive = sorted_correlations[:k]
                     top_negative = sorted_correlations[-k:]
                     
-                    # Save to file with unique tissue name
                     output_filename = f"top_positive_{tissue.replace(' ', '_').replace('/', '_')}.txt"
                     with open(output_filename, "w") as output_file: 
                         output_file.writelines([f"{gene_id}\t{corr:.4f}\n" for gene_id, corr in top_positive])
@@ -591,20 +589,17 @@ def __(cellxgene_census, np, pd, pearsonr):
 
 @app.cell
 def __(CellxgeneMock, json, ontology_mapping_results):
-    # CellxGene analysis configuration and execution
     gene_of_interest = 'ENSG00000140718'
     # gene_of_interest = 'ENSG00000177508'  # IRX3
     cell_type = 'preadipocyte'
-
-    # Use the mapping results from the ontology mapping step
-    cellxgene_analysis_mock = CellxgeneMock()
+    cellxgene_analysis = CellxgeneMock()
     cellxgene_coexp_results = {}
     
     for tissue_key, tissue_value in ontology_mapping_results.items():
         target_tissue = tissue_value["cellxgene_descendant_ontology_name"]
         if target_tissue:
             print(f"\nProcessing tissue: {target_tissue}")
-            top_pos, top_neg, all_gene_ids = cellxgene_analysis_mock.get_coexpression_matrix(
+            top_pos, top_neg, all_gene_ids = cellxgene_analysis.get_coexpression_matrix(
                 gene=gene_of_interest,
                 tissue=target_tissue,
                 cell_type=cell_type
@@ -618,23 +613,19 @@ def __(CellxgeneMock, json, ontology_mapping_results):
         else:
             print(f"No target tissue found for {tissue_key}")
 
-    return cellxgene_coexp_results, gene_of_interest, cell_type, cellxgene_analysis_mock
+    return cellxgene_coexp_results, gene_of_interest, cell_type, cellxgene_analysis
 
 @app.cell
 def __(cellxgene_coexp_results, pickle, os):
-    # Convert Ensembl IDs to HGNC symbols and prepare for pathway analysis
     hgnc_converted_results = {}
     
     try:
         ensembl_to_hgnc_map = pickle.load(open("../data/ensembl_to_hgnc.pkl", "rb"))
-        
-        # Process results for each tissue
         for tissue_name, coexp_results in cellxgene_coexp_results.items():
             top_positive_hgnc = [(ensembl_to_hgnc_map.get(gene_id, gene_id), corr) for gene_id, corr in coexp_results['top_positive']]
             top_negative_hgnc = [(ensembl_to_hgnc_map.get(gene_id, gene_id), corr) for gene_id, corr in coexp_results['top_negative']]
             all_genes_hgnc = [ensembl_to_hgnc_map.get(gene_id, gene_id) for gene_id in coexp_results['all_genes']]
             
-            # Save positive correlations to file
             hgnc_output_filename = f"top_positive_hgnc_{tissue_name.replace(' ', '_').replace('/', '_')}.txt"
             with open(hgnc_output_filename, "w") as hgnc_file: 
                 hgnc_file.writelines([f"{gene_symbol}\t{corr:.4f}\n" for gene_symbol, corr in top_positive_hgnc])
@@ -657,7 +648,6 @@ def __(cellxgene_coexp_results, pickle, os):
 
 @app.cell
 def __(gp, hgnc_converted_results):
-    # Pathway enrichment analysis using GSEAPY
     pathway_library = "GO_Biological_Process_2023"
     organism = "Human"
 
@@ -665,7 +655,6 @@ def __(gp, hgnc_converted_results):
     for tissue_name, hgnc_results in hgnc_converted_results.items():
         try:
             print(f"\nPerforming pathway enrichment analysis for {tissue_name}...")
-            
             gene_list = [gene_data[0] for gene_data in hgnc_results['top_positive_hgnc']]
             background = hgnc_results['all_genes_hgnc']
             
@@ -676,7 +665,6 @@ def __(gp, hgnc_converted_results):
                                 organism=organism,
                                 outdir=None).results
                 
-                # Process results as in original code
                 enrichment_res.drop("Gene_set", axis=1, inplace=True)
                 enrichment_res.insert(1, "ID", enrichment_res["Term"].apply(
                     lambda x: x.split("(")[1].split(")")[0] if "(" in x and ")" in x else ""))
@@ -697,7 +685,6 @@ def __(gp, hgnc_converted_results):
 
 @app.cell
 def __(mo, pathway_enrichment_results, cellxgene_coexp_results):
-    # Summary of all analyses
     mo.md(f"""
     ## Analysis Summary
     
