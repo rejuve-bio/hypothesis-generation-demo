@@ -697,7 +697,7 @@ def __(mo, pathway_enrichment_results, cellxgene_coexp_results):
     - Gene of interest: {gene_of_interest}
     - Cell type focus: {cell_type}
     
-    ### Pathway Enrichment Analysis Complete
+    ##Pathway Enrichment Analysis Complete
     - Library used: "GO_Biological_Process_2023"
     - Results available for 
     """)
