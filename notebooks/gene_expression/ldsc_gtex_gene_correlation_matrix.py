@@ -1,3 +1,4 @@
+import warnings
 import marimo
 
 __generated_with = "0.1.0"
@@ -100,9 +101,7 @@ def cell_copy_ldsc_script(LDSC_DIR, LDSC_REPO_DIR, subprocess):
 def __(mo, os):
     config = {
         'ldsc_dir': '/mnt/hdd_1/rediet/hypothesis-generation-demo/ldsc_ph/ldsc',
-        nn: '/mnt/hdd_1/rediet/hypothesis-generation-demo/ldsc_ph/results',
-        
-    
+        'results_dir': '/mnt/hdd_1/rediet/hypothesis-generation-demo/ldsc_ph/results',
         'gwas_file': '21001_munged.gwas.imputed_v3.both_sexes.tsv',
         'baseline_ld': '1000G_Phase3_baselineLD_ldscores/baselineLD.',
         'weights_ld': '1000G_Phase3_weights_hm3_no_MHC/weights.hm3_noMHC.',
@@ -264,6 +263,7 @@ def __(analysis_result, pd):
             df_filtered = ldsc_df[ldsc_df[pval_col] < 0.01]
             df_sorted = df_filtered.sort_values(by=effect_col, ascending=False)
             top_tissues = df_sorted[tissue_col].head(10).tolist()
+            print("Top 10 significant tissues based on LDSC analysis:")
             print("Top 10 significant tissues:", top_tissues)
         else:
             top_tissues = []
@@ -293,6 +293,8 @@ def __(analysis_result, pd):
 def __():
     import requests
     import json
+    import warnings
+    warnings.filterwarnings("ignore", category=SyntaxWarning, module=r"pronto(\.|$)")
     from pronto import Ontology
     import warnings
     
@@ -466,7 +468,8 @@ def __(
     json,
     map_gtex_to_cellxgene_tissue,
     os,
-    top_tissues
+    top_tissues,
+    warnings
 ):
     print("Starting the main execution")
     uberon_url = "http://purl.obolibrary.org/obo/uberon.owl"
@@ -477,11 +480,9 @@ def __(
     download_file(uberon_url, uberon_filename)
     tissue_descendants_data = download_json_file(tissue_descendants_url, tissue_descendants_filename)
 
-
     gtex_uberon_mapping = {
         'Brain_Putamen_basal_ganglia': 'UBERON:0001874'
     }
-
 
     cellxgene_uberon_mapping = create_cellxgene_mapping_from_tissue_descendants(tissue_descendants_data)
 
@@ -489,7 +490,10 @@ def __(
     if os.path.exists(uberon_filename):
         try:
             print("Loading UBERON ontology... This may take a moment.")
-            uberon_ontology = Ontology(uberon_filename)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                warnings.filterwarnings("ignore", category=SyntaxWarning, module=r"pronto.*")
+                uberon_ontology = Ontology(uberon_filename)
             print("UBERON ontology loaded successfully.")
         except Exception as e:
             print(f"Error loading UBERON ontology: {e}")
@@ -497,13 +501,26 @@ def __(
     else:
         print(f"UBERON ontology file '{uberon_filename}' not found. Only direct matches will be found.")
 
+    print(f"DEBUG: top_tissues contains: {top_tissues}")
+    print(f"DEBUG: Number of tissues to process: {len(top_tissues)}")
+    
+    if not top_tissues:
+        print("WARNING: No tissues found from LDSC analysis. Check LDSC output parsing.")
+        print("Using mock tissue data for testing...")
+        top_tissues_to_use = ['Brain_Putamen_basal_ganglia']
+    else:
+        top_tissues_to_use = top_tissues
+
     ontology_mapping_results = {}
 
-    for gtex_tissue_to_map in top_tissues:
-       
+    for gtex_tissue_to_map in top_tissues_to_use:
+        print(f"\nProcessing GTEx tissue: {gtex_tissue_to_map}") 
+        with open("new_top_10.txt", "w") as f:
+            for tissue in top_tissues_to_use:
+                f.write(f"{tissue}\n")
+        
         gtex_uberon_id = gtex_uberon_mapping.get(gtex_tissue_to_map)
         gtex_ontology_name = get_tissue_name_from_ontology(gtex_uberon_id, uberon_ontology) if gtex_uberon_id else None
-
 
         mapped_parent_id, match_type, notes = map_gtex_to_cellxgene_tissue(
             gtex_tissue_to_map,
@@ -512,7 +529,6 @@ def __(
             uberon_ontology
         )
         parent_ontology_name = get_tissue_name_from_ontology(mapped_parent_id, uberon_ontology) if mapped_parent_id else None
-
 
         if mapped_parent_id and gtex_uberon_id and mapped_parent_id != gtex_uberon_id:
             descendant_id = gtex_uberon_id
