@@ -640,6 +640,45 @@ def __(cellxgene_coexp_results, pickle, os):
 
     return hgnc_converted_results, conversion_successful
 
+@app.cell
+def __(gp, hgnc_converted_results):
+    # Pathway enrichment analysis using GSEAPY
+    pathway_library = "GO_Biological_Process_2023"
+    organism = "Human"
+
+    pathway_enrichment_results = {}
+    for tissue_name, hgnc_results in hgnc_converted_results.items():
+        try:
+            print(f"\nPerforming pathway enrichment analysis for {tissue_name}...")
+            
+            gene_list = [gene_data[0] for gene_data in hgnc_results['top_positive_hgnc']]
+            background = hgnc_results['all_genes_hgnc']
+            
+            if len(gene_list) > 0 and len(background) > 0:
+                enrichment_res = gp.enrichr(gene_list=gene_list,
+                                gene_sets=pathway_library,
+                                background=background,
+                                organism=organism,
+                                outdir=None).results
+                
+                # Process results as in original code
+                enrichment_res.drop("Gene_set", axis=1, inplace=True)
+                enrichment_res.insert(1, "ID", enrichment_res["Term"].apply(
+                    lambda x: x.split("(")[1].split(")")[0] if "(" in x and ")" in x else ""))
+                enrichment_res["Term"] = enrichment_res["Term"].apply(lambda x: x.split("(")[0])
+                enrichment_res = enrichment_res[enrichment_res["Adjusted P-value"] < 0.05]
+                
+                pathway_enrichment_results[tissue_name] = enrichment_res
+                print(f"Found {len(enrichment_res)} significant pathways for {tissue_name}")
+                print(enrichment_res.head())
+            else:
+                print(f"No genes found for analysis in {tissue_name}")
+                
+        except Exception as e:
+            print(f"Error in pathway analysis for {tissue_name}: {e}")
+            pathway_enrichment_results[tissue_name] = None
+
+    return pathway_enrichment_results, organism
 
 
 if __name__ == "__main__":
