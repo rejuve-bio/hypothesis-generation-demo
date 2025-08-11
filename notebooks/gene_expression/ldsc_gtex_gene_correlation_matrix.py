@@ -680,6 +680,27 @@ def __(gp, hgnc_converted_results):
 
     return pathway_enrichment_results, organism
 
+@app.cell
+def __(mo, pathway_enrichment_results, cellxgene_coexp_results):
+    # Summary of all analyses
+    mo.md(f"""
+    ## Analysis Summary
+    
+    ### LDSC Analysis Complete
+    - Cell-type-specific heritability analysis performed
+    - Top 10 significant tissues identified
+    
+    ### CellxGene Co-expression Analysis Complete
+    - Analyzed {len(cellxgene_coexp_results)} tissues
+    - Gene of interest: {gene_of_interest}
+    - Cell type focus: {cell_type}
+    
+    ### Pathway Enrichment Analysis Complete
+    - Library used: "GO_Biological_Process_2023"
+    - Results available for 
+    """)
+    
+    return
 
 if __name__ == "__main__":
     app.run()
