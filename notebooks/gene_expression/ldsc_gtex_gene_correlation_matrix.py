@@ -137,6 +137,73 @@ def __(config, os, subprocess):
         ]
         return cmd
     
+    def run_ldsc_analysis(cfg):
+        """Execute the LDSC analysis with real-time output"""
+        original_dir = os.getcwd()
+        os.chdir(cfg['ldsc_dir'])
+        
+        try:
+            cmd = build_ldsc_command(cfg)
+            
+            print("Running LDSC command:")
+            print(" ".join(cmd))
+            print("\n" + "="*80 + "\n")
+            print("Analysis in progress... This may take a few minutes.")
+            print("Processing tissues:")
+            
+            import time
+            start_time = time.time()
+            
+    
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=cfg['ldsc_dir'],
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            output_lines = []
+            while True:
+                output = process.stdout.readline()
+                if output == '' and process.poll() is not None:
+                    break
+                if output:
+                    print(output.strip())
+                    output_lines.append(output.strip())
+            
+          
+            rc = process.poll()
+            elapsed_time = time.time() - start_time
+            
+            print(f"\nAnalysis completed in {elapsed_time:.2f} seconds")
+            
+            if rc != 0:
+                print(f"Command failed with return code: {rc}")
+            else:
+                print("Analysis completed successfully!")
+                
+           
+            class MockResult:
+                def __init__(self, returncode, stdout):
+                    self.returncode = returncode
+                    self.stdout = "\n".join(stdout)
+                    self.stderr = ""
+                    
+            return MockResult(rc, output_lines)
+            
+        finally:
+            
+            os.chdir(original_dir)
+    
+    ldsc_cmd = build_ldsc_command(config)
+    print("LDSC Command to be executed:")
+    print(" ".join(ldsc_cmd))
+    return build_ldsc_command, ldsc_cmd, run_ldsc_analysis
+
+
 
 if __name__ == "__main__":
     app.run()
