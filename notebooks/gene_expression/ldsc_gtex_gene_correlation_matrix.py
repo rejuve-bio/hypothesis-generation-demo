@@ -508,6 +508,73 @@ def __(
         tissue_descendants_filename
     )
 
+@app.cell
+def __():
+    # Import additional packages for CellxGene analysis
+    import cellxgene_census
+    import pickle
+    from scipy.stats import pearsonr
+    import gseapy as gp
+    
+    return cellxgene_census, pickle, pearsonr, gp
+
+@app.cell
+def __(cellxgene_census, np, pd, pearsonr):
+    class CellxgeneMock:
+        def get_coexpression_matrix(self, gene, tissue, cell_type, k=500):
+            with cellxgene_census.open_soma() as census:
+                adata = cellxgene_census.get_anndata(
+                    census=census,
+                    organism="Homo sapiens",
+                    obs_value_filter = f"tissue == '{tissue}'",
+                    obs_column_names=["assay", "cell_type", "tissue", "tissue_general", "suspension_type", "disease"]
+
+                )
+
+                if 'feature_id' in adata.var.columns:
+                    print("feature id is found inside the data")
+                    adata.var_names = adata.var['feature_id']
+                else:
+                    print("Gene names column 'feature_id' not found in var DataFrame")
+
+                gene_expression_sum = np.array((adata.X > 0).sum(axis=0)).flatten()
+                adata_filtered = adata[:, gene_expression_sum > 0]
+                genes = adata_filtered.var['feature_id']
+                df_expression = pd.DataFrame(adata_filtered.X.toarray(), columns=genes)
+
+                if gene in df_expression.columns:
+                    non_zero_samples = df_expression[df_expression[gene] > 0]
+                    total_samples = df_expression.shape[0]
+                    non_zero_sample_count = non_zero_samples.shape[0]
+                    non_zero_percentage = (non_zero_sample_count / total_samples) * 100
+
+                    print(f"Total samples: {total_samples}")
+                    print(f"Samples with non-zero expression for '{gene}': {non_zero_sample_count} ({non_zero_percentage:.2f}%)")
+
+                    correlations = {}
+                    for gene_col in non_zero_samples.columns:
+                        if gene_col != gene:
+                            corr, p_value = pearsonr(non_zero_samples[gene], non_zero_samples[gene_col])
+                            if p_value < 0.05:
+                                correlations[gene_col] = corr
+
+                    sorted_correlations = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
+                    top_positive = sorted_correlations[:k]
+                    top_negative = sorted_correlations[-k:]
+                    
+                    # Save to file with unique tissue name
+                    output_filename = f"top_positive_{tissue.replace(' ', '_').replace('/', '_')}.txt"
+                    with open(output_filename, "w") as output_file: 
+                        output_file.writelines([f"{gene_id}\t{corr:.4f}\n" for gene_id, corr in top_positive])
+
+                    return top_positive, top_negative, genes
+                else:
+                    print(f"Gene of interest '{gene}' not found in the dataset.")
+                    return [], [], []
+
+    return CellxgeneMock,
+
+
 
 if __name__ == "__main__":
     app.run()
