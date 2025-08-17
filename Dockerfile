@@ -1,6 +1,6 @@
 #  For susie 0.12.35
 #  Use an official Python runtime as a parent image
-FROM python:3.10
+FROM python:3.10-bookworm
 
 # Install all system dependencies in one layer
 RUN apt-get update && apt-get install -y \
