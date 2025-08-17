@@ -443,9 +443,9 @@ def init_socket_handlers(hypotheses_handler):
             
            
             if current_user_id is None:
-                hypothesis = db_instance.get_hypothesis_by_id(hypothesis_id)
+                hypothesis = hypotheses_handler.get_hypothesis_by_id(hypothesis_id)
             else:
-                hypothesis = db_instance.get_hypotheses(current_user_id, hypothesis_id)
+                hypothesis = hypotheses_handler.get_hypotheses(current_user_id, hypothesis_id)
                 
             if not hypothesis:
                 logger.error(f"Hypothesis not found: {hypothesis_id}")

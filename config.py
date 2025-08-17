@@ -81,6 +81,10 @@ def create_dependencies(config):
     mongodb_uri = config.mongodb_uri 
     db_name = config.db_name
     
+    # Validate MongoDB configuration
+    if not mongodb_uri or not db_name:
+        raise ValueError("Missing required MongoDB configuration: MONGODB_URI and DB_NAME environment variables must be set")
+    
     return {
         'enrichr': enrichr,
         'llm': llm,
