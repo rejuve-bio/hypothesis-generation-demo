@@ -20,8 +20,6 @@
 :- style_check(-singleton).
 
 
-
-:- include('util.pl').
 :- include('load_kbs.pl').
 :- include('queries.pl').
 % :- include('rules.pl').
