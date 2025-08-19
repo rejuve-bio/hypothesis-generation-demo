@@ -32,8 +32,8 @@ ENV LANG C.UTF-8
 
 # Install build dependencies and SWI-Prolog 9.3.11
 RUN set -eux; \
-    SWIPL_VER=9.3.20; \
-    SWIPL_CHECKSUM=81cae918f75778c285bbecfc2b17c7117b574238e00213043a1fa0022acc36d6; \
+    SWIPL_VER=9.3.11; \
+    SWIPL_CHECKSUM=b8bffac671ee031ee34d033c168fed0a6f4ea0a906e2a13f5a19f00b59cd4b55; \
     BUILD_DEPS='make cmake ninja-build gcc g++ wget git pkg-config m4 libtool automake autoconf \
                 libarchive-dev libgmp-dev libossp-uuid-dev libpcre2-dev libreadline-dev libedit-dev \
                 libssl-dev zlib1g-dev libdb-dev unixodbc-dev libsqlite3-dev libserd-dev libraptor2-dev \
@@ -69,12 +69,13 @@ COPY ./pl /app/pl
 # Install Prolog libraries using pack_install
 RUN apt-get update && apt-get install -y git graphviz && \
     swipl -g "pack_install('prolog_library_collection', [interactive(false)])" -t halt && \
-    swipl -g "pack_install('prolog_graphviz', [interactive(false)])" -t halt
-    # swipl -g "pack_install('interpolate', [interactive(false)])" -t halt 
+    swipl -g "pack_install('prolog_graphviz', [interactive(false)])" -t halt && \
+    swipl -g "pack_install('interpolate', [interactive(false)])" -t halt && \
+    swipl -g "pack_install(cplint, [interactive(false)])" -t halt
     
 
 # Expose port 4242 for the Prolog server
 EXPOSE 4242
 
 # Command to load Prolog files and start the server on port 4242
-ENTRYPOINT ["swipl", "-s", "load_kbs.pl", "-s", "meta_interpreter.pl", "-s", "queries.pl", "-s", "rules.pl", "-g", "server_start(4242)", "-g", "thread_get_message(_)"]
+ENTRYPOINT ["swipl", "-s", "hypgen.pl", "-g", "init", "-g", "server_start(4242)", "-g", "thread_get_message(_)"]

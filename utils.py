@@ -117,9 +117,9 @@ def allowed_file(filename):
     ALLOWED_EXTENSIONS = {'tsv', 'csv', 'txt', 'bgz', 'gz'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def get_user_file_path(db, file_id, user_id):
+def get_user_file_path(files_handler, file_id, user_id):
     """Get file path from file ID using database metadata"""
-    file_metadata = db.get_file_metadata(user_id, file_id)
+    file_metadata = files_handler.get_file_metadata(user_id, file_id)
     if not file_metadata:
         raise FileNotFoundError(f"File with ID {file_id} not found for user {user_id}")
     

@@ -19,8 +19,8 @@ services:
       - "4241:4242"
     volumes:
       - ./pl:/app/pl
-      - /mnt/hdd_1/abdu/prolog_out_v2:/mnt/prolog_out_v2
-      - /mnt/hdd_1/abdu/prolog_out_v3:/mnt/prolog_out_v3
+      - /mnt/hdd_1/tesnim/version1/prolog_out_v2:/mnt/prolog_out_v2
+      - /mnt/hdd_1/tesnim/version1/prolog_out_v3:/mnt/prolog_out_v3
     networks:
       - app_network
 

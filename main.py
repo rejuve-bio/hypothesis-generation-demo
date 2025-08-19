@@ -79,7 +79,7 @@ def setup_api(config):
     
     # Initialize status tracker
     status_tracker = StatusTracker()
-    status_tracker.initialize(deps['db'])
+    status_tracker.initialize(deps['tasks'])
     try:
         hf_token = os.environ["HF_TOKEN"]
     except KeyError:
@@ -93,7 +93,9 @@ def setup_api(config):
             "enrichr": deps['enrichr'], 
             "llm": deps['llm'], 
             "prolog_query": deps['prolog_query'], 
-            "db": deps['db']
+            "enrichment": deps['enrichment'],
+            "hypotheses": deps['hypotheses'],
+            "projects": deps['projects']
         }
     )
     api.add_resource(HypothesisAPI, "/hypothesis", 
@@ -101,17 +103,32 @@ def setup_api(config):
             "enrichr": deps['enrichr'], 
             "prolog_query": deps['prolog_query'], 
             "llm": deps['llm'], 
-            "db": deps['db']
+            "hypotheses": deps['hypotheses'],
+            "enrichment": deps['enrichment']
         }
     )
-    api.add_resource(ChatAPI, "/chat", resource_class_kwargs={"llm": deps['llm']})
-    api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete",resource_class_kwargs={"db": deps['db']})
+    api.add_resource(ChatAPI, "/chat", resource_class_kwargs={
+        "llm": deps['llm'],
+        "hypotheses": deps['hypotheses']
+    })
+    api.add_resource(BulkHypothesisDeleteAPI, "/hypothesis/delete", resource_class_kwargs={
+        "hypotheses": deps['hypotheses']
+    })
     # project-based workflow
-    api.add_resource(ProjectsAPI, "/projects", resource_class_kwargs={"db": deps['db']})
-    api.add_resource(AnalysisPipelineAPI, "/analysis-pipeline", resource_class_kwargs={"db": deps['db']})
+    api.add_resource(ProjectsAPI, "/projects", resource_class_kwargs={
+        "projects": deps['projects'],
+        "analysis": deps['analysis'],
+        "hypotheses": deps['hypotheses']
+    })
+    api.add_resource(AnalysisPipelineAPI, "/analysis-pipeline", resource_class_kwargs={
+        "projects": deps['projects'],
+        "files": deps['files'],
+        "analysis": deps['analysis'],
+        "config": config
+    })
 
     # Initialize socket handlers 
-    socket_namespace = init_socket_handlers(deps['db'])
+    socket_namespace = init_socket_handlers(deps['hypotheses'])
     logger.info(f"Socket namespace initialized: {socket_namespace}")
     
     return app, socketio

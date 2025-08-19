@@ -106,8 +106,8 @@ load_with_time(Files, FileName) :-
     format("Loaded ~w!~n", [FileName]).
 
 
-user:file_search_path(prolog_out_v2,'/mnt/hdd_1/abdu/prolog_out_v2').
-user:file_search_path(prolog_out,'/mnt/hdd_1/abdu/prolog_out_v3').
+user:file_search_path(prolog_out_v2,'/mnt/prolog_out_v2').
+user:file_search_path(prolog_out,'/mnt/prolog_out_v3').
 % user:file_search_path(prolog_out,'/mnt/hdd_2/abdu/prolog_out_v4').
 % user:file_search_path(prolog_out,'/mnt/hdd_2/abdu/prolog_out').
 user:file_search_path(gene, prolog_out('gencode/gene')).
