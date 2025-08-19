@@ -72,7 +72,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
 
         # Create enrichment data with project context
         enrich_id = create_enrich_data.submit(
-            deps['enrichment'], current_user_id, project_id, variant, 
+            deps['enrichment'], hypotheses, current_user_id, project_id, variant, 
             phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id
         ).result()
 
@@ -106,13 +106,18 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
 
 ### Hypothesis Flow
 @flow(log_prints=True)
-def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog_query, llm):
-    hypothesis = check_hypothesis(db, current_user_id, enrich_id, go_id, hypothesis_id)
+def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses, prolog_query, llm):
+    # Initialize dependencies from environment variables for enrichment handler
+    config = Config.from_env()
+    deps = create_dependencies(config)
+    enrichment = deps['enrichment']
+    
+    hypothesis = check_hypothesis(hypotheses, current_user_id, enrich_id, go_id, hypothesis_id)
     if hypothesis:
         logger.info("Retrieved hypothesis data from saved db")
         return {"summary": hypothesis.get('summary'), "graph": hypothesis.get('graph')}, 200
 
-    enrich_data = get_enrich(db, current_user_id, enrich_id, hypothesis_id)
+    enrich_data = get_enrich(enrichment, current_user_id, enrich_id, hypothesis_id)
     if not enrich_data:
         return {"message": "Invalid enrich_id or access denied."}, 404
 
@@ -174,7 +179,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, db, prolog
     summary = summarize_graph(llm, causal_graph, hypothesis_id)
 
     
-    hypothesis_id = create_hypothesis(db, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id, hypothesis_id)
+    hypothesis_id = create_hypothesis(hypotheses, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id, hypothesis_id)
 
     
     return {"summary": summary, "graph": causal_graph}, 201
