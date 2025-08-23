@@ -529,63 +529,231 @@ def __():
     import pickle
     from scipy.stats import pearsonr
     import gseapy as gp
+    from scipy import stats
+    import tiledbsoma as soma
+    from scipy import sparse
+    import multiprocessing
+    from functools import partial
+    import warnings
+    from scipy.stats import ConstantInputWarning
+
+    try:
+        from tqdm import tqdm
+        use_tqdm = True
+    except ImportError:
+        use_tqdm = False
     
-    return cellxgene_census, pickle, pearsonr, gp
+    return cellxgene_census, pickle, pearsonr, gp, stats, soma, sparse, multiprocessing, partial, warnings, ConstantInputWarning, tqdm if use_tqdm else None, use_tqdm
 
 @app.cell
-def __(cellxgene_census, np, pd, pearsonr):
+def __(np, soma, sparse, pearsonr, warnings, ConstantInputWarning, tqdm, use_tqdm, multiprocessing, partial, cellxgene_census):
+    def process_batch(start, *, batch_size, other_gene_joinids, other_genes,
+                     sub_joinids, gene_expr_sub, census_version, sub_joinid_to_idx):
+        with cellxgene_census.open_soma(census_version=census_version) as census:
+            experiment = census["census_data"]["homo_sapiens"]
+            end = min(start + batch_size, len(other_gene_joinids))
+            batch_joinids = other_gene_joinids[start:end].tolist()
+            batch_genes = other_genes[start:end]
+            local_correlations = {}
+            if not batch_joinids:
+                return local_correlations
+            batch_iter = experiment.ms["RNA"].X["raw"].read((sub_joinids.tolist(), batch_joinids)).tables()
+            row_indices, col_indices, values_list = [], [], []
+            batch_joinid_to_idx = {jid: idx for idx, jid in enumerate(batch_joinids)}
+
+            for table_batch in batch_iter:
+                cell_jids = table_batch["soma_dim_0"].to_numpy()
+                gene_jids = table_batch["soma_dim_1"].to_numpy()
+                vals = table_batch["soma_data"].to_numpy()
+                if len(cell_jids) == 0 or len(gene_jids) == 0:
+                    continue
+                cell_idxs = np.array([sub_joinid_to_idx.get(cjid, -1) for cjid in cell_jids], dtype=np.int32)
+                gene_idxs = np.array([batch_joinid_to_idx.get(gjid, -1) for gjid in gene_jids], dtype=np.int32)
+                valid = (cell_idxs != -1) & (gene_idxs != -1)
+                row_indices.extend(cell_idxs[valid])
+                col_indices.extend(gene_idxs[valid])
+                values_list.extend(vals[valid])
+
+            if row_indices:
+                batch_matrix = sparse.coo_matrix(
+                    (values_list, (row_indices, col_indices)),
+                    shape=(len(gene_expr_sub), len(batch_joinids)),
+                    dtype=np.float32
+                ).toarray()
+            else:
+                batch_matrix = np.zeros((len(gene_expr_sub), len(batch_joinids)), dtype=np.float32)
+
+            with warnings.catch_warnings():
+                for i, gene_id in enumerate(batch_genes):
+                    if np.var(batch_matrix[:, i], ddof=1) > 0:  # Skip constant arrays
+                        corr, p_value = pearsonr(gene_expr_sub, batch_matrix[:, i])
+                        if p_value < 0.05 and not np.isnan(p_value):
+                            local_correlations[gene_id] = corr
+
+            return local_correlations
     class CellxgeneMock:
-        def get_coexpression_matrix(self, gene, tissue, cell_type, k=500):
-            with cellxgene_census.open_soma() as census:
-                adata = cellxgene_census.get_anndata(
-                    census=census,
-                    organism="Homo sapiens",
-                    obs_value_filter = f"tissue == '{tissue}'",
-                    obs_column_names=["assay", "cell_type", "tissue", "tissue_general", "suspension_type", "disease"]
-
-                )
-
-                if 'feature_id' in adata.var.columns:
-                    print("feature id is found inside the data")
-                    adata.var_names = adata.var['feature_id']
-                else:
-                    print("Gene names column 'feature_id' not found in var DataFrame")
-
-                gene_expression_sum = np.array((adata.X > 0).sum(axis=0)).flatten()
-                adata_filtered = adata[:, gene_expression_sum > 0]
-                genes = adata_filtered.var['feature_id']
-                df_expression = pd.DataFrame(adata_filtered.X, columns=genes)
-
-                if gene in df_expression.columns:
-                    non_zero_samples = df_expression[df_expression[gene] > 0]
-                    total_samples = df_expression.shape[0]
-                    non_zero_sample_count = non_zero_samples.shape[0]
-                    non_zero_percentage = (non_zero_sample_count / total_samples) * 100
-
-                    print(f"Total samples: {total_samples}")
-                    print(f"Samples with non-zero expression for '{gene}': {non_zero_sample_count} ({non_zero_percentage:.2f}%)")
-
-                    correlations = {}
-                    for gene_col in non_zero_samples.columns:
-                        if gene_col != gene:
-                            corr, p_value = pearsonr(non_zero_samples[gene], non_zero_samples[gene_col])
-                            if p_value < 0.05:
-                                correlations[gene_col] = corr
-
-                    sorted_correlations = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
-                    top_positive = sorted_correlations[:k]
-                    top_negative = sorted_correlations[-k:]
-                    
-                    output_filename = f"top_positive_{tissue.replace(' ', '_').replace('/', '_')}.txt"
-                    with open(output_filename, "w") as output_file: 
-                        output_file.writelines([f"{gene_id}\t{corr:.4f}\n" for gene_id, corr in top_positive])
-
-                    return top_positive, top_negative, genes
-                else:
-                    print(f"Gene of interest '{gene}' not found in the dataset.")
+        def get_coexpression_matrix(self, gene, tissue, cell_type, k=500, batch_size=1000, use_prefilter=False):
+            with cellxgene_census.open_soma(census_version="2025-01-30") as census:
+                experiment = census["census_data"]["homo_sapiens"]
+                value_filter = f"tissue == '{tissue}'"
+                try:
+                    axis_query = experiment.axis_query(
+                        measurement_name="RNA",
+                        obs_query=soma.AxisQuery(value_filter=value_filter)
+                    )
+                except ValueError:
+                    print(f"No cells found for tissue '{tissue}'")
                     return [], [], []
 
-    return CellxgeneMock,
+                obs_joinids = axis_query.obs_joinids().to_numpy()
+
+                if len(obs_joinids) > 100000:
+                    obs_joinids = obs_joinids[:100000] 
+                    n = 100000
+                else:
+                    n = len(obs_joinids)
+                if n == 0:
+                    print(f"No cells found for tissue '{tissue}'")
+                    return [], [], []
+
+                var_df = experiment.ms["RNA"].var.read(column_names=["soma_joinid", "feature_id"]).concat().to_pandas().set_index("feature_id")
+                genes = var_df.index.tolist()
+
+                if gene not in genes:
+                    print(f"Gene of interest '{gene}' not found in the dataset.")
+                    return [], [], genes
+
+                gene_joinid = var_df.loc[gene]["soma_joinid"]
+
+                gene_table_iter = experiment.ms["RNA"].X["raw"].read((obs_joinids.tolist(), [gene_joinid])).tables()
+                gene_expr = np.zeros(n, dtype=np.float32)
+                joinid_to_idx = {jid: idx for idx, jid in enumerate(obs_joinids)}
+                for batch in gene_table_iter:
+                    cell_jids = batch["soma_dim_0"].to_numpy()
+                    values = batch["soma_data"].to_numpy()
+                    indices = np.array([joinid_to_idx.get(cjid, -1) for cjid in cell_jids], dtype=np.int32)
+                    valid_mask = indices != -1
+                    gene_expr[indices[valid_mask]] = values[valid_mask]
+
+                non_zero_rows = np.nonzero(gene_expr)[0]
+                non_zero_sample_count = len(non_zero_rows)
+                total_samples = n
+                non_zero_percentage = (non_zero_sample_count / total_samples) * 100 if total_samples > 0 else 0
+
+                print(f"Total samples: {total_samples}")
+                print(f"Samples with non-zero expression for '{gene}': {non_zero_sample_count} ({non_zero_percentage:.2f}%)")
+
+                if non_zero_sample_count < 2:
+                    print(f"Not enough samples with non-zero expression for '{gene}' to compute correlations.")
+                    return [], [], genes
+
+                if use_tqdm:
+                    print("Subsetting to non-zero cells...")
+                sub_joinids = obs_joinids[non_zero_rows]
+                gene_expr_sub = gene_expr[non_zero_rows]
+                if use_tqdm:
+                    print("Completed subsetting to non-zero cells")
+
+                if use_tqdm:
+                    print("Checking for zero variance...")
+                if np.var(gene_expr_sub, ddof=1) <= 0:
+                    print(f"Zero variance for '{gene}' in non-zero samples.")
+                    return [], [], genes
+                if use_tqdm:
+                    print("Completed checking for zero variance")
+
+                if use_tqdm:
+                    print("Preparing gene joinids...")
+                all_gene_joinids = var_df["soma_joinid"].to_numpy()
+                mask = all_gene_joinids != gene_joinid
+                other_gene_joinids = all_gene_joinids[mask]
+                other_genes = np.array(genes)[mask]
+                if use_tqdm:
+                    print("Completed preparing gene joinids")
+
+                if use_prefilter:
+                    gene_nnz = np.zeros(len(other_gene_joinids), dtype=np.int32)
+                    batch_iter = experiment.ms["RNA"].X["raw"].read((sub_joinids.tolist(), other_gene_joinids.tolist())).tables()
+                    if use_tqdm:
+                        prefilter_progress = tqdm(total=len(other_gene_joinids), desc="Pre-filtering genes", unit="gene",
+                                                 bar_format="{l_bar}{bar:20}{r_bar} {n_fmt}/{total_fmt} genes")
+                    else:
+                        print("Starting pre-filtering genes...")
+                    for batch in batch_iter:
+                        gene_jids = batch["soma_dim_1"].to_numpy()
+                        for gjid in gene_jids:
+                            idx = np.where(other_gene_joinids == gjid)[0]
+                            if idx.size > 0:
+                                gene_nnz[idx[0]] += 1
+                        if use_tqdm:
+                            prefilter_progress.update(len(np.unique(gene_jids)))
+                        else:
+                            print(f"Processed pre-filtering batch")
+                    if use_tqdm:
+                        prefilter_progress.close()
+                    else:
+                        print("Completed pre-filtering")
+                    expr_mask = gene_nnz > 0
+                    other_gene_joinids = other_gene_joinids[expr_mask]
+                    other_genes = other_genes[expr_mask]
+
+                    if len(other_gene_joinids) == 0:
+                        print("No genes with non-zero expression found for correlation.")
+                        return [], [], genes
+
+                if use_tqdm:
+                    print("Pre-computing cell index mapping...")
+                sub_joinid_to_idx = {jid: idx for idx, jid in enumerate(sub_joinids)}
+                if use_tqdm:
+                    print("Completed pre-computing cell index mapping")
+
+                correlations = {}
+                num_genes = len(other_gene_joinids)
+                num_batches = (num_genes + batch_size - 1) // batch_size
+                batch_iterable = range(0, num_genes, batch_size)
+
+                if use_tqdm:
+                    pbar = tqdm(total=num_batches, desc="Analyzing gene correlations", unit="batch",
+                                bar_format="{l_bar}{bar:30}{r_bar} {n_fmt}/{total_fmt} batches | {elapsed}<{remaining}",
+                                dynamic_ncols=True)
+                else:
+                    print(f"Processing {num_batches} batches of {batch_size} genes each...")
+
+                num_processes = multiprocessing.cpu_count()
+
+                with multiprocessing.Pool(processes=num_processes) as pool:
+                    func = partial(
+                        process_batch,
+                        batch_size=batch_size,
+                        other_gene_joinids=other_gene_joinids,
+                        other_genes=other_genes,
+                        sub_joinids=sub_joinids,
+                        gene_expr_sub=gene_expr_sub,
+                        census_version="2025-01-30",
+                        sub_joinid_to_idx=sub_joinid_to_idx
+                    )
+                    batch_results = pool.imap_unordered(func, batch_iterable)
+                    for result in batch_results:
+                        correlations.update(result)
+                        if use_tqdm:
+                            pbar.update(1)
+
+                if use_tqdm:
+                    pbar.close()
+
+                if not correlations:
+                    print("No significant correlations found.")
+                    return [], [], genes
+
+                print("Sorting correlations...")
+                sorted_correlations = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
+                top_positive = sorted_correlations[:k]
+                top_negative = sorted_correlations[-k:]
+                print("Completed sorting correlations")
+
+                return top_positive, top_negative, genes
+
+    return CellxgeneMock, process_batch
 
 @app.cell
 def __(CellxgeneMock, json, ontology_mapping_results):
