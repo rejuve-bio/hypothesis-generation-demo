@@ -123,9 +123,12 @@ RUN Rscript -e " \
     cat('R version:', R.version.string, '\n'); \
     "
 
+# Install uv
+RUN wget -qO- https://astral.sh/uv/install.sh | sh
+
 # Install Python dependencies
-COPY requirements.txt .
-RUN pip install -r requirements.txt rpy2
+COPY pyproject.toml .
+RUN uv sync
 
 # Copy application
 COPY . .
