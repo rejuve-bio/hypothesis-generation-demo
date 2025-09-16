@@ -535,7 +535,6 @@ def __():
     from scipy import sparse
     import multiprocessing
     from functools import partial
-    import warnings
     from scipy.stats import ConstantInputWarning
 
     try:
@@ -586,52 +585,7 @@ def __(np, soma, sparse, pearsonr, warnings, ConstantInputWarning, tqdm, use_tqd
 
             with warnings.catch_warnings():
                 for i, gene_id in enumerate(batch_genes):
-                    if np.var(batch_matrix[:, i], ddof=1) > 0:  # Skip constant arrays
-                        corr, p_value = pearsonr(gene_expr_sub, batch_matrix[:, i])
-                        if p_value < 0.05 and not np.isnan(p_value):
-                            local_correlations[gene_id] = corr
-
-            return local_correlations
-def __(np, soma, sparse, pearsonr, warnings, ConstantInputWarning, tqdm, use_tqdm, multiprocessing, partial, cellxgene_census):
-    def process_batch(start, *, batch_size, other_gene_joinids, other_genes,
-                     sub_joinids, gene_expr_sub, census_version, sub_joinid_to_idx):
-        with cellxgene_census.open_soma(census_version=census_version) as census:
-            experiment = census["census_data"]["homo_sapiens"]
-            end = min(start + batch_size, len(other_gene_joinids))
-            batch_joinids = other_gene_joinids[start:end].tolist()
-            batch_genes = other_genes[start:end]
-            local_correlations = {}
-            if not batch_joinids:
-                return local_correlations
-            batch_iter = experiment.ms["RNA"].X["raw"].read((sub_joinids.tolist(), batch_joinids)).tables()
-            row_indices, col_indices, values_list = [], [], []
-            batch_joinid_to_idx = {jid: idx for idx, jid in enumerate(batch_joinids)}
-
-            for table_batch in batch_iter:
-                cell_jids = table_batch["soma_dim_0"].to_numpy()
-                gene_jids = table_batch["soma_dim_1"].to_numpy()
-                vals = table_batch["soma_data"].to_numpy()
-                if len(cell_jids) == 0 or len(gene_jids) == 0:
-                    continue
-                cell_idxs = np.array([sub_joinid_to_idx.get(cjid, -1) for cjid in cell_jids], dtype=np.int32)
-                gene_idxs = np.array([batch_joinid_to_idx.get(gjid, -1) for gjid in gene_jids], dtype=np.int32)
-                valid = (cell_idxs != -1) & (gene_idxs != -1)
-                row_indices.extend(cell_idxs[valid])
-                col_indices.extend(gene_idxs[valid])
-                values_list.extend(vals[valid])
-
-            if row_indices:
-                batch_matrix = sparse.coo_matrix(
-                    (values_list, (row_indices, col_indices)),
-                    shape=(len(gene_expr_sub), len(batch_joinids)),
-                    dtype=np.float32
-                ).toarray()
-            else:
-                batch_matrix = np.zeros((len(gene_expr_sub), len(batch_joinids)), dtype=np.float32)
-
-            with warnings.catch_warnings():
-                for i, gene_id in enumerate(batch_genes):
-                    if np.var(batch_matrix[:, i], ddof=1) > 0:  # Skip constant arrays
+                    if np.var(batch_matrix[:, i], ddof=1) > 0:  
                         corr, p_value = pearsonr(gene_expr_sub, batch_matrix[:, i])
                         if p_value < 0.05 and not np.isnan(p_value):
                             local_correlations[gene_id] = corr
@@ -642,6 +596,8 @@ def __(np, soma, sparse, pearsonr, warnings, ConstantInputWarning, tqdm, use_tqd
             with cellxgene_census.open_soma(census_version="2025-01-30") as census:
                 experiment = census["census_data"]["homo_sapiens"]
                 value_filter = f"tissue == '{tissue}'"
+                if cell_type:
+                   value_filter += f" and cell_type == '{cell_type}'"
                 try:
                     axis_query = experiment.axis_query(
                         measurement_name="RNA",
@@ -652,7 +608,6 @@ def __(np, soma, sparse, pearsonr, warnings, ConstantInputWarning, tqdm, use_tqd
                     return [], [], []
 
                 obs_joinids = axis_query.obs_joinids().to_numpy()
-
                 if len(obs_joinids) > 100000:
                     obs_joinids = obs_joinids[:100000] 
                     n = 100000
@@ -686,8 +641,6 @@ def __(np, soma, sparse, pearsonr, warnings, ConstantInputWarning, tqdm, use_tqd
                 total_samples = n
                 non_zero_percentage = (non_zero_sample_count / total_samples) * 100 if total_samples > 0 else 0
 
-                print(f"Total samples: {total_samples}")
-                print(f"Samples with non-zero expression for '{gene}': {non_zero_sample_count} ({non_zero_percentage:.2f}%)")
                 print(f"Total samples: {total_samples}")
                 print(f"Samples with non-zero expression for '{gene}': {non_zero_sample_count} ({non_zero_percentage:.2f}%)")
 
@@ -800,16 +753,14 @@ def __(np, soma, sparse, pearsonr, warnings, ConstantInputWarning, tqdm, use_tqd
                 print("Completed sorting correlations")
 
                 return top_positive, top_negative, genes
-                return top_positive, top_negative, genes
 
-    return CellxgeneMock, process_batch
     return CellxgeneMock, process_batch
 
 @app.cell
 def __(CellxgeneMock, json, ontology_mapping_results):
-    gene_of_interest = 'ENSG00000140718'
+    gene_of_interest = 'ENSG00000140718' #FTO
     # gene_of_interest = 'ENSG00000177508'  # IRX3
-    cell_type = 'preadipocyte'
+    cell_type = 'preadipocyte' 
     cellxgene_analysis = CellxgeneMock()
     cellxgene_coexp_results = {}
     
