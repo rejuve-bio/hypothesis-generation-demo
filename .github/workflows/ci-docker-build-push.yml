@@ -1,0 +1,191 @@
+name: CI - Build and Push Multi-Service (Staging Only)
+
+on:
+  push:
+    branches: [ main, develop, 'feature/*' ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+  DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+jobs:
+  # Priority 1: Prolog Service 
+  build-prolog:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+     
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+     
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+    - name: Create .env file
+      run: |
+        echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" >> .env
+        echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+        echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+        echo "HF_TOKEN=${{ secrets.HF_TOKEN }}" >> .env
+        echo "JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}" >> .env
+        echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+
+    - name: Extract Docker metadata
+      id: meta-prolog
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-prolog
+        tags: |
+          type=ref,event=branch
+          type=sha
+          type=raw,value=staging
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Free Disk Space (Before Prolog Build)
+      run: |
+        echo "Freeing disk space before Prolog build..."
+        sudo docker system prune -a -f
+        sudo docker builder prune -a -f
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        df -h
+
+    - name: Build and Push Prolog Service
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: Dockerfile.prolog
+        push: true
+        tags: ${{ steps.meta-prolog.outputs.tags }}
+        labels: ${{ steps.meta-prolog.outputs.labels }}
+        cache-from: type=gha,scope=prolog-service
+        cache-to: type=gha,mode=max,scope=prolog-service
+
+  # Priority 2: Prefect Service 
+  build-prefect:
+    runs-on: ubuntu-latest
+    needs: build-prolog  # Run after prolog build completes
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+     
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+     
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+    - name: Create .env file
+      run: |
+        echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" >> .env
+        echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+        echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+        echo "HF_TOKEN=${{ secrets.HF_TOKEN }}" >> .env
+        echo "JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}" >> .env
+        echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+
+    - name: Extract Docker metadata
+      id: meta-prefect
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-prefect
+        tags: |
+          type=ref,event=branch
+          type=sha
+          type=raw,value=staging
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Free Disk Space (Before Prefect Build)
+      run: |
+        echo "Freeing disk space before Prefect build..."
+        sudo docker system prune -a -f
+        sudo docker builder prune -a -f
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        df -h
+
+    - name: Build and Push Prefect Service
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: Dockerfile.prefect
+        push: true
+        tags: ${{ steps.meta-prefect.outputs.tags }}
+        labels: ${{ steps.meta-prefect.outputs.labels }}
+        cache-from: type=gha,scope=prefect-service
+        cache-to: type=gha,mode=max,scope=prefect-service
+
+  # Priority 3: Flask App 
+  build-flask:
+    runs-on: ubuntu-latest
+    needs: build-prefect  # Run after prefect build completes
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+     
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+     
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+    - name: Create .env file
+      run: |
+        echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" >> .env
+        echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+        echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+        echo "HF_TOKEN=${{ secrets.HF_TOKEN }}" >> .env
+        echo "JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}" >> .env
+        echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+
+    - name: Extract Docker metadata
+      id: meta-flask
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-flask
+        tags: |
+          type=ref,event=branch
+          type=sha
+          type=raw,value=staging
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Free Disk Space (Before Flask Build)
+      run: |
+        echo "Freeing disk space before Flask build..."
+        sudo docker system prune -a -f
+        sudo docker builder prune -a -f
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        df -h
+
+    - name: Build and Push Flask App
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: Dockerfile
+        push: true
+        tags: ${{ steps.meta-flask.outputs.tags }}
+        labels: ${{ steps.meta-flask.outputs.labels }}
+        cache-from: type=gha,scope=flask-app
+        cache-to: type=gha,mode=max,scope=flask-app
