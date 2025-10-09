@@ -124,11 +124,15 @@ RUN Rscript -e " \
     "
 
 # Install uv
-RUN wget -qO- https://astral.sh/uv/install.sh | sh
+RUN wget -qO- https://astral.sh/uv/install.sh | sh && \
+    mv /root/.local/bin/uv /usr/local/bin/uv
 
-# Install Python dependencies
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/flask-venv
+ENV PATH="/opt/flask-venv/bin:$PATH"
 COPY pyproject.toml .
 RUN uv sync
+RUN uv pip install '.[r-integration]'
 
 # Copy application
 COPY . .
