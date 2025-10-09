@@ -2,35 +2,36 @@
 FROM python:3.10
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y build-essential curl
+RUN apt-get update && apt-get install -y build-essential curl \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Install the outlines library
 RUN pip install --upgrade pip setuptools wheel
 
 # Install rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Set the working directory in the container
+# Install uv
+RUN wget -qO- https://astral.sh/uv/install.sh | sh && \
+    mv /root/.local/bin/uv /usr/local/bin/uv
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
+ENV PATH="/opt/prefect-venv/bin:$PATH"
+
 WORKDIR /app
 
 # Install the Python dependencies
-COPY requirements.txt /app/requirements.txt
-RUN pip install -r requirements.txt
+COPY pyproject.toml .
+RUN uv sync
 
-
-# Install Prefect and other dependencies
-RUN pip install --upgrade pip \
-    && pip install -U prefect 
-
-# Install OpenCravat
-RUN pip install open-cravat
+# Install dependencies for the virutal environment
+RUN pip install -U prefect open-cravat
 
 # Install the annotators
 RUN oc module install-base && oc module install clinvar cosmic --yes
 
-# Copy application code (needed for workers to execute flows)
+# Copy application code
 COPY . /app
 
 # Expose port 4200 for Prefect server

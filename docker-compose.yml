@@ -5,7 +5,7 @@ services:
   mongo:
     image: mongo:latest
     ports:
-      - "27016:27017"
+      - "27010:27017"
     volumes:
       - mongo-data:/data/db
     networks:
@@ -16,7 +16,7 @@ services:
       context: .
       dockerfile: Dockerfile.prolog
     ports:
-      - "4241:4242"
+      - "4261:4242"
     volumes:
       - ./pl:/app/pl
       - /mnt/hdd_1/tesnim/version1/prolog_out_v2:/mnt/prolog_out_v2
@@ -29,7 +29,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "5008:5000"
+      - "5028:5000"
     environment:
       - FLASK_ENV=development
       - PREFECT_API_URL=http://prefect-service:4200/api
@@ -45,7 +45,7 @@ services:
       - prefect-service
     command: >
       sh -c "
-      python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl \
+      uv run python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl \
       --go-map data/go_map.pkl --swipl-host prolog-service --swipl-port 4242 
       "
     networks:
@@ -56,16 +56,17 @@ services:
       context: .
       dockerfile: Dockerfile.prefect
     ports:
-      - "4201:4200"
+      - "4221:4200"
     volumes:
       - .:/app
       - prefect-data:/root/.prefect 
     environment:
       - PREFECT_API_URL=http://localhost:4200/api
+      - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
     env_file:
       - .env
     command: > 
-      sh -c "prefect server start --host 0.0.0.0"
+      sh -c "uv run prefect server start --host 0.0.0.0"
     networks:
       - app_network
     healthcheck:
@@ -84,7 +85,7 @@ services:
       - .env
     command: >
       sh -c "
-      python deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl 
+      uv run python deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl 
       --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl 
       --go-map /app/data/go_map.pkl 
       --swipl-host prolog-service 
@@ -92,6 +93,7 @@ services:
       "
     environment:
     - PREFECT_API_URL=http://prefect-service:4200/api
+    - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
     depends_on:
       prefect-service:
         condition: service_healthy
