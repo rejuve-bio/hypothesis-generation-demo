@@ -1,0 +1,309 @@
+name: CI - Build, Test and Push All Services (Staging)
+
+on:
+  push:
+    branches: [ staging ]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [staging]
+
+env:
+  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+  DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+jobs:
+  build-and-test-all:
+    runs-on: self-hosted
+    outputs:
+      validation-status: ${{ steps.validate.outcome }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Create .env file
+      run: |
+        echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" >> .env
+        echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+        echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+        echo "HF_TOKEN=${{ secrets.HF_TOKEN }}" >> .env
+        echo "JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}" >> .env
+        echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+
+    - name: Create test docker-compose
+      run: |
+        cat > docker-compose.ci.yml << 'EOF'
+
+        services:
+          mongo:
+            image: mongo:latest
+            ports:
+              - "27011:27017"  # Different port to avoid conflict
+            volumes:
+              - mongo-data-ci:/data/db
+            networks:
+              - app_network_ci
+
+          prolog-service:
+            build:
+              context: .
+              dockerfile: Dockerfile.prolog
+            ports:
+              - "4262:4242"  # Different port
+            volumes:
+              - ./pl:/app/pl
+              - ./prolog_out_ci:/mnt/prolog_out_v2  # Local dir for CI
+              - ./prolog_out_ci:/mnt/prolog_out_v3
+            networks:
+              - app_network_ci
+
+          flask-app:
+            build:
+              context: .
+              dockerfile: Dockerfile
+            ports:
+              - "5029:5000"  # Different port
+            environment:
+              - FLASK_ENV=development
+              - PREFECT_API_URL=http://prefect-service:4200/api
+            env_file:
+              - .env
+            volumes:
+              - .:/app
+              - ./data:/app/data
+              - ./external_data_ci:/app/data/external_data
+            depends_on:
+              - mongo
+              - prolog-service
+              - prefect-service
+            command: >
+              sh -c "
+              uv run python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl \
+              --go-map data/go_map.pkl --swipl-host prolog-service --swipl-port 4242 
+              "
+            networks:
+              - app_network_ci
+
+          prefect-service:
+            build:
+              context: .
+              dockerfile: Dockerfile.prefect
+            ports:
+              - "4227:4200"  # Different port
+            volumes:
+              - .:/app
+              - prefect-data-ci:/root/.prefect 
+            environment:
+              - PREFECT_API_URL=http://localhost:4200/api
+              - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
+            env_file:
+              - .env
+            command: > 
+              sh -c "uv run prefect server start --host 0.0.0.0"
+            networks:
+              - app_network_ci
+            healthcheck:
+              test: ["CMD", "curl", "-f", "http://localhost:4200/api/health"]
+              interval: 10s
+              timeout: 5s
+              retries: 5
+          
+          prefect-deployment:
+            build:
+              context: .
+              dockerfile: Dockerfile.prefect
+            volumes:
+              - .:/app
+            env_file:
+              - .env
+            command: >
+              sh -c "
+              uv run python deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl 
+              --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl 
+              --go-map /app/data/go_map.pkl 
+              --swipl-host prolog-service 
+              --swipl-port 4242
+              "
+            environment:
+            - PREFECT_API_URL=http://prefect-service:4200/api
+            - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
+            depends_on:
+              prefect-service:
+                condition: service_healthy
+            networks:
+              - app_network_ci
+
+        volumes:
+          mongo-data-ci:
+          prefect-data-ci:
+
+        networks:
+          app_network_ci:
+            driver: bridge
+            name: app_network_ci
+        EOF
+        
+        # Create necessary directories for volumes
+        mkdir -p prolog_out_ci external_data_ci
+
+    - name: Login to Docker Hub
+      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+    - name: Deploy and Monitor All Services
+      id: validate
+      run: |
+        set -e
+        echo "=== Building all Docker images ==="
+        docker compose -f docker-compose.ci.yml build
+        
+        echo "=== Starting ALL services ==="
+        docker compose -f docker-compose.ci.yml up -d
+        
+        echo "=== Waiting for services to initialize (90 seconds) ==="
+        sleep 90
+        
+        echo "=== Checking ALL services status ==="
+        docker compose -f docker-compose.ci.yml ps
+        
+        echo "=== Checking individual service health ==="
+        
+        # Check MongoDB
+        echo "--- Checking MongoDB ---"
+        if docker compose -f docker-compose.ci.yml ps mongo | grep -q "running"; then
+          echo "[success] MongoDB is running"
+          docker compose -f docker-compose.ci.yml logs mongo --tail=5
+        else
+          echo "[error] MongoDB is NOT running"
+          docker compose -f docker-compose.ci.yml logs mongo
+          exit 1
+        fi
+        
+        # Check Prolog Service
+        echo "--- Checking Prolog Service ---"
+        if docker compose -f docker-compose.ci.yml ps prolog-service | grep -q "running"; then
+          echo "[success] Prolog Service is running"
+          docker compose -f docker-compose.ci.yml logs prolog-service --tail=5
+        else
+          echo "[error] Prolog Service is NOT running"
+          docker compose -f docker-compose.ci.yml logs prolog-service
+          exit 1
+        fi
+        
+        # Check Prefect Service
+        echo "--- Checking Prefect Service ---"
+        if docker compose -f docker-compose.ci.yml ps prefect-service | grep -q "running"; then
+          echo "[success] Prefect Service is running"
+          docker compose -f docker-compose.ci.yml logs prefect-service --tail=5
+        else
+          echo "[error] Prefect Service is NOT running"
+          docker compose -f docker-compose.ci.yml logs prefect-service
+          exit 1
+        fi
+        
+        # Check Prefect Deployment
+        echo "--- Checking Prefect Deployment ---"
+        if docker compose -f docker-compose.ci.yml ps prefect-deployment | grep -q "running"; then
+          echo "[success] Prefect Deployment is running"
+          docker compose -f docker-compose.ci.yml logs prefect-deployment --tail=5
+        else
+          echo "[error] Prefect Deployment is NOT running"
+          docker compose -f docker-compose.ci.yml logs prefect-deployment
+          exit 1
+        fi
+        
+        # Check Flask App
+        echo "--- Checking Flask App ---"
+        if docker compose -f docker-compose.ci.yml ps flask-app | grep -q "running"; then
+          echo "[success] Flask App is running"
+          docker compose -f docker-compose.ci.yml logs flask-app --tail=5
+        else
+          echo "[error] Flask App is NOT running"
+          docker compose -f docker-compose.ci.yml logs flask-app
+          exit 1
+        fi
+        
+        echo "=== Testing service endpoints ==="
+        
+        # Test Flask health endpoint
+        echo "Testing Flask health endpoint..."
+        if curl -f --retry 3 --retry-delay 10 --max-time 15 http://localhost:5029/health; then
+          echo "[success] Flask health endpoint working"
+        else
+          echo "[error] Flask health endpoint failed"
+          echo "=== Flask logs ==="
+          docker compose -f docker-compose.ci.yml logs flask-app
+          exit 1
+        fi
+        
+        # Test Prefect API health
+        echo "Testing Prefect API health..."
+        if curl -f --retry 3 --retry-delay 10 --max-time 15 http://localhost:4227/api/health; then
+          echo "[success] Prefect API health endpoint working"
+        else
+          echo "[error] Prefect API health endpoint failed"
+          echo "=== Prefect logs ==="
+          docker compose -f docker-compose.ci.yml logs prefect-service
+          exit 1
+        fi
+        
+        echo "=== Final status - All services ==="
+        docker compose -f docker-compose.ci.yml ps
+        
+        echo "[success] VALIDATION PASSED - ALL services are running and healthy!"
+        
+        # Show resource usage
+        echo "=== Container resource usage ==="
+        docker stats --no-stream $(docker compose -f docker-compose.ci.yml ps -q)
+
+    - name: Tag and Push Images to Docker Hub
+      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+      run: |
+        echo "=== Tagging and pushing images to Docker Hub ==="
+        
+        # Tag and push each service
+        docker tag $(docker compose -f docker-compose.ci.yml images -q prolog-service) ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-prolog:staging
+        docker tag $(docker compose -f docker-compose.ci.yml images -q flask-app) ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-flask:staging
+        docker tag $(docker compose -f docker-compose.ci.yml images -q prefect-service) ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-prefect:staging
+        docker tag $(docker compose -f docker-compose.ci.yml images -q prefect-deployment) ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-prefect-deployment:staging
+        
+        # Push all images
+        docker push ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-prolog:staging
+        docker push ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-flask:staging
+        docker push ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-prefect:staging
+        docker push ${{ env.DOCKER_HUB_USERNAME }}/hypothesis-generation-prefect-deployment:staging
+        
+        echo "[success] All images pushed to Docker Hub"
+
+    - name: Trigger CD workflow via Repository Dispatch
+      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+      run: |
+        curl -L -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/${{ github.repository }}/dispatches \
+          -d '{"event_type":"deploy-staging","client_payload":{"image_tag":"staging"}}'
+        echo "[SUCCESS] CD workflow triggered successfully!"
+
+    - name: Complete Cleanup
+      if: always()
+      run: |
+        echo "=== Cleaning up CI containers and networks ==="
+        
+        # Only cleanup Docker resources, skip file deletion
+        docker compose -f docker-compose.ci.yml down -v 2>/dev/null || true
+        
+        echo "=== Current running containers ==="
+        docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+        
+        echo "=== Current networks ==="
+        docker network ls --filter "name=app_network_ci"
+        
+        echo "=== Current volumes ==="
+        docker volume ls --filter "name=ci"
+        
+        echo "[success] Docker resources cleaned up - file cleanup skipped due to permissions"
