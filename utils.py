@@ -169,10 +169,10 @@ def transform_credible_sets_to_locuszoom(credible_sets_data):
         "data": {
             "beta": df['BETA'].astype(float).tolist(),
             "chromosome": df['CHR'].astype(int).tolist(), 
-            "log_pvalue": (-np.log10(df['P'].astype(float))).tolist(),
+            "log_pvalue": (-np.log10(df['P'].astype(float).clip(lower=1e-300))).tolist(),  # Clip to avoid log(0)
             "position": df['BP'].astype(int).tolist(),
             "ref_allele": df['A2'].astype(str).tolist(),
-            "alt_allele": df['A1'].astype(str).tolist(),
+            "minor_allele": df['A1'].astype(str).tolist(),
             "ref_allele_freq": df['FRQ'].astype(float).tolist(),
             "variant": [f"{row['CHR']}:{row['BP']}:{row['A2']}:{row['A1']}" for _, row in df.iterrows()],
             "posterior_prob": df['PIP'].astype(float).tolist(),

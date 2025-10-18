@@ -26,8 +26,8 @@
 :- include('pl_rules.pl').
 % :- include('param_learn.pl').
 :- include('server.pl').
-:- include('meta_interpreter').
-:- include('json_util').
+:- include('meta_interpreter.pl').
+:- include('json_util.pl').
 
 init :- 
     format("Loading atomspace...~n", []),

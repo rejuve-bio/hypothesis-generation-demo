@@ -727,28 +727,10 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         except Exception as e:
             logger.warning(f"[FINEMAP] Error processing credible sets: {str(e)}")
         
-        # Fallback: use high PIP threshold
-        logger.info(f"[FINEMAP] Using fallback: variants with PIP > 0.1")
-        high_pip_mask = sub_region_sumstats_ld["PIP"] > 0.1
-        if high_pip_mask.sum() > 0:
-            fallback_result = sub_region_sumstats_ld[high_pip_mask].copy()
-        else:
-            # Return top 10 SNPs by PIP
-            top_n = min(10, len(sub_region_sumstats_ld))
-            fallback_result = sub_region_sumstats_ld.nlargest(top_n, 'PIP').copy()
+        logger.warning(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - No credible sets identified")
         
-        # Add metadata to fallback result
-        fallback_result['cs'] = 1  # Single credible set
-        fallback_result['credible_set'] = 1
-        fallback_result['region_id'] = f"chr{chr_num}:{lead_variant_position}"
-        fallback_result['region_chr'] = chr_num
-        fallback_result['region_center'] = lead_variant_position
-        fallback_result['converged'] = True
-        
-        logger.info(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - Fallback result: {len(fallback_result)} SNPs with PIP > 0.1 or top variants")
-        
-        # Return DataFrame directly for multiprocessing
-        return fallback_result
+            
+        return None
             
     except Exception as e:
         logger.error(f"[FINEMAP] Error in fine-mapping chr{chr_num}:{lead_variant_position}: {str(e)}")
