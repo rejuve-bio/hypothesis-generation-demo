@@ -13,7 +13,8 @@ class HypothesisHandler(BaseHandler):
         """Create a new hypothesis"""
         data['user_id'] = user_id
         result = self.hypothesis_collection.insert_one(data)
-        return {'message': 'Hypothesis created', 'id': str(result.inserted_id)}, 201
+        created_id = data.get('id', str(result.inserted_id))
+        return {'message': 'Hypothesis created', 'id': created_id}, 201
 
     def get_hypotheses(self, user_id=None, hypothesis_id=None):
         """Get hypotheses"""
