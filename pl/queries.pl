@@ -23,7 +23,7 @@ variant_id(S, Id) :-
     alt(S, A),
     upcase_atom(R, Ref),
     upcase_atom(A, Alt),
-    Id = "$Chr:$Start-$End-$Ref>$Alt".
+    format(atom(Id), '~w:~w-~w-~w>~w', [Chr, Start, End, Ref, Alt]).
 
 overlaps_with(A, B) :-
              chr(A, Chr),
