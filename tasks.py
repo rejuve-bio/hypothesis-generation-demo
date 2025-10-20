@@ -705,7 +705,7 @@ def create_hypothesis(hypotheses, enrich_id, go_id, variant_id, phenotype, causa
         clean_history = []
         for task in hypothesis_history:
             task_copy = task.copy()
-            task_copy.pop('details', None)  # Remove details field
+            task_copy.pop('details', None)
             clean_history.append(task_copy)
         
         # Limit task_history to last 50 entries to avoid MongoDB document size limit (16MB)
