@@ -8,6 +8,62 @@ import socketio as sio
 import os
 import pandas as pd
 import numpy as np
+import threading
+import time
+
+# Global persistent client for Prefect connections
+_prefect_client = None
+_client_lock = threading.Lock()
+_last_connection_time = 0
+_connection_timeout = 300  # 5 minutes
+
+def _get_or_create_prefect_client():
+    """Get or create a persistent SocketIO client for Prefect updates"""
+    global _prefect_client, _last_connection_time
+    
+    with _client_lock:
+        current_time = time.time()
+        
+        # Check if we need to create a new client or reconnect
+        if (_prefect_client is None or 
+            not _prefect_client.connected or 
+            (current_time - _last_connection_time) > _connection_timeout):
+            
+            # Clean up old client
+            if _prefect_client:
+                try:
+                    _prefect_client.disconnect()
+                except:
+                    pass
+            
+            # Create new client
+            flask_host = os.getenv('FLASK_HOST', 'flask-app')
+            flask_port = os.getenv('FLASK_PORT', '5000')
+            flask_url = f'http://{flask_host}:{flask_port}'
+            
+            service_token = os.getenv('PREFECT_SERVICE_TOKEN')
+            if not service_token:
+                logger.error("Warning: PREFECT_SERVICE_TOKEN not found. Task update will not be emitted.")
+                return None
+            
+            try:
+                _prefect_client = sio.SimpleClient()
+                headers = {'Authorization': f'Bearer {service_token}'}
+                _prefect_client.connect(
+                    flask_url, 
+                    headers=headers, 
+                    transports=['websocket', 'polling'],
+                    wait_timeout=10
+                )
+                _last_connection_time = current_time
+                logger.info(f"Established persistent SocketIO connection to Flask server at {flask_url}")
+                
+            except Exception as e:
+                logger.error(f"Failed to create persistent SocketIO connection: {e}")
+                _prefect_client = None
+                return None
+        
+        return _prefect_client
 
 def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, next_task=None, error=None):
     """
@@ -61,41 +117,28 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
             logger.info(f"Emitted task update to room {room}")
             socketio.sleep(0)
         else:
-            # We're in Prefect context - use SocketIO client with service token
-            flask_host = os.getenv('FLASK_HOST', 'flask-app')
-            flask_port = os.getenv('FLASK_PORT', '5000')
-            flask_url = f'http://{flask_host}:{flask_port}'
-            
-            # Get the system service token
-            service_token = os.getenv('PREFECT_SERVICE_TOKEN')
-            if not service_token:
-                logger.error("Warning: PREFECT_SERVICE_TOKEN not found. Task update will not be emitted.")
-                logger.info(f"Status update saved locally: {update['task']} - {update['state']}")
+            # We're in Prefect context
+            client = _get_or_create_prefect_client()
+            if not client:
+                logger.info(f"Status update saved locally (no connection): {update['task']} - {update['state']}")
                 return
             
-            # Create a client connection to Flask app with service token
-            client = sio.SimpleClient()
             try:
-                # Connect with service token in headers
-                headers = {'Authorization': f'Bearer {service_token}'}
-                client.connect(
-                    flask_url, 
-                    headers=headers, 
-                    transports=['websocket', 'polling'],
-                    retry=True,  
-                    retry_delay=3,  
-                    retry_delay_max=5,  
-                    retry_randomization=0.5,  
-                    wait_timeout=10  
-                )
-                
                 # Include room information in the update data since client.emit() doesn't support room parameter
                 update_with_room = {**update, 'target_room': room}
                 client.emit('task_update', update_with_room)
-                logger.info(f"Emitted task update to Flask server at {flask_url}")
-                client.disconnect()
+                logger.info(f"Emitted task update via persistent connection: {update['task']} - {update['state']}")
+                
             except Exception as client_e:
-                logger.error(f"Failed to connect to Flask SocketIO server: {client_e}")
+                logger.error(f"Failed to emit via persistent connection: {client_e}")
+                # Reset client on error
+                with _client_lock:
+                    if _prefect_client:
+                        try:
+                            _prefect_client.disconnect()
+                        except:
+                            pass
+                        _prefect_client = None
                 # Fall back to just updating status without emission
                 logger.info(f"Status update saved locally: {update['task']} - {update['state']}")
                 
@@ -181,3 +224,36 @@ def transform_credible_sets_to_locuszoom(credible_sets_data):
         },
         "lastPage": None
     }
+
+
+def convert_variants_to_object_array(variants_data):
+    """
+    Convert variants data from object-with-arrays format to array-of-objects format.
+    """
+    if not variants_data or not isinstance(variants_data, dict):
+        return []
+    
+    # Get all field names
+    field_names = list(variants_data.keys())
+    if not field_names:
+        return []
+    
+    # Get the length of arrays 
+    first_field = field_names[0]
+    if not isinstance(variants_data[first_field], list):
+        return []
+    
+    array_length = len(variants_data[first_field])
+    
+    # Convert to array of objects
+    result = []
+    for i in range(array_length):
+        variant_obj = {}
+        for field_name in field_names:
+            if isinstance(variants_data[field_name], list) and i < len(variants_data[field_name]):
+                variant_obj[field_name] = variants_data[field_name][i]
+            else:
+                variant_obj[field_name] = None
+        result.append(variant_obj)
+    
+    return result
