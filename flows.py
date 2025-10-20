@@ -453,7 +453,9 @@ def analysis_pipeline_flow(projects_handler, analysis_handler, mongodb_uri, db_n
                     'L': L,
                     'coverage': coverage,
                     'min_abs_corr': min_abs_corr,
-                    'population': population
+                    'population': population,
+                    'ref_genome': ref_genome,
+                    'maf_threshold': maf_threshold
                 }
             })
             batch_data_list.append(batch_data)

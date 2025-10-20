@@ -1,7 +1,7 @@
 import os
 from threading import Thread, Timer
 import uuid
-from flask import json, request
+from flask import json, request, send_file
 from flask_restful import Resource
 from flask_socketio import join_room, leave_room
 from socketio_instance import socketio
@@ -13,11 +13,16 @@ from flows import hypothesis_flow, analysis_pipeline_flow
 from run_deployment import invoke_enrichment_deployment
 from status_tracker import status_tracker, TaskState
 from prefect import flow
-from utils import allowed_file, transform_credible_sets_to_locuszoom
+from utils import allowed_file, convert_variants_to_object_array, serialize_datetime_fields
 from loguru import logger
 from werkzeug.utils import secure_filename
-from utils import serialize_datetime_fields
 from tasks import extract_probability, get_related_hypotheses
+from project_tasks import count_gwas_records, get_project_with_full_data, extract_gwas_file_metadata
+import re
+from config import Config
+import pandas as pd
+import gzip
+import glob
 
 
 class EnrichAPI(Resource):
@@ -67,12 +72,15 @@ class EnrichAPI(Resource):
 
     @token_required
     def post(self, current_user_id):
-        args = request.args
-        variant = args['variant']
-        project_id = args.get('project_id')
+        json_data = request.get_json(silent=True) or {}
+        
+        variant = json_data.get('variant')
+        project_id = json_data.get('project_id')
         
         if not project_id:
             return {"error": "project_id is required"}, 400
+        if not variant:
+            return {"error": "variant is required"}, 400
         
         # Validate project exists and get phenotype from project
         project = self.projects.get_projects(current_user_id, project_id)
@@ -100,7 +108,7 @@ class EnrichAPI(Resource):
             )
             return {"hypothesis_id": existing_hypothesis['id'], "project_id": project_id}, 202
         
-        # Generate hypothesis_id and create with project context (no credible_set_id in hypothesis)
+        # Generate hypothesis_id and create with project context 
         hypothesis_id = str(uuid4())
         hypothesis_data = {
             "id": hypothesis_id,
@@ -240,7 +248,7 @@ class HypothesisAPI(Resource):
             
             formatted_hypothesis = {
                 'id': hypothesis['id'],
-                'phenotype': hypothesis.get('phenotype' ),
+                'phenotype': hypothesis.get('phenotype'),
                 'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
                 'created_at': hypothesis.get('created_at'),
                 'status': hypothesis.get('status'),
@@ -272,7 +280,7 @@ class HypothesisAPI(Resource):
         hypothesis_id = hypothesis['id']
         
         # Run the Prefect flow and return the result
-        flow_result = hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, self.hypotheses, self.prolog_query, self.llm)
+        flow_result = hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, self.hypotheses, self.prolog_query, self.llm, self.enrichment)
 
         return flow_result[0], flow_result[1]
 
@@ -347,7 +355,7 @@ def init_socket_handlers(hypotheses_handler):
             logger.info(f"Client connected: {client_id}")
             
             # Set a reasonable timeout for all connections
-            inactivity_timer = Timer(300, lambda: socketio.server.disconnect(client_id))
+            inactivity_timer = Timer(600, lambda: socketio.server.disconnect(client_id))  # 10 minutes
             inactivity_timer.start()
             
             # Store the timer for potential cleanup
@@ -506,10 +514,12 @@ class ProjectsAPI(Resource):
     """
     API endpoint for managing projects
     """
-    def __init__(self, projects, analysis, hypotheses):
+    def __init__(self, projects, files, analysis, hypotheses, enrichment):
         self.projects = projects
+        self.files = files
         self.analysis = analysis
         self.hypotheses = hypotheses
+        self.enrichment = enrichment
     
     @token_required
     def get(self, current_user_id):
@@ -517,111 +527,63 @@ class ProjectsAPI(Resource):
         project_id = request.args.get('id')
         
         if project_id:
-            return self._get_project_with_full_data(current_user_id, project_id)
+            response_data, status_code = get_project_with_full_data(
+                self.projects, self.analysis, self.hypotheses, self.enrichment, 
+                current_user_id, project_id
+            )
+            if status_code == 200:
+                response_data = serialize_datetime_fields(response_data)
+            return response_data, status_code
         
         projects = self.projects.get_projects(current_user_id)
-        # Serialize datetime objects in all projects
-        projects = serialize_datetime_fields(projects)
-        return {"projects": projects}, 200
-    
-    def _get_project_with_full_data(self, current_user_id, project_id):
-        """Get comprehensive project data including state, hypotheses, and credible sets"""
-        try:
-            # Get basic project info
-            project = self.projects.get_projects(current_user_id, project_id)
-            if not project:
-                return {"error": "Project not found"}, 404
-            
-            # Get analysis state (may be None for new projects)
-            analysis_state = self.projects.load_analysis_state(current_user_id, project_id)
-            if not analysis_state:
-                analysis_state = {"status": "not_started"}
-            
-            # Get credible sets (may be empty during processing)
-            credible_sets_data = []
-            try:
-                credible_sets_raw = self.analysis.get_lead_variant_credible_sets(current_user_id, project_id)
-                if credible_sets_raw:
-                    if isinstance(credible_sets_raw, list):
-                        credible_sets_data = [
-                            {
-                                "lead_variant_id": cs["lead_variant_id"],
-                                "credible_sets": cs["data"].get("credible_sets", []),
-                                "metadata": cs["data"].get("metadata", {})
-                            }
-                            for cs in credible_sets_raw
-                        ]
-                    else:
-                        # Single result
-                        credible_sets_data = [{
-                            "lead_variant_id": credible_sets_raw["lead_variant_id"],
-                            "credible_sets": credible_sets_raw["data"].get("credible_sets", []),
-                            "metadata": credible_sets_raw["data"].get("metadata", {})
-                        }]
-            except Exception as cs_e:
-                logger.warning(f"Could not load credible sets for project {project_id}: {cs_e}")
-                credible_sets_data = []
-            
-            # Get hypotheses for this project (id + variant only)
-            project_hypotheses = []
-            try:
-                all_hypotheses = self.hypotheses.get_hypotheses(current_user_id)
-                if isinstance(all_hypotheses, list):
-                    project_hypotheses = [
-                        {
-                            "id": h["id"], 
-                            "variant": h.get("variant") or h.get("variant_id")
-                        }
-                        for h in all_hypotheses 
-                        if h.get('project_id') == project_id
-                    ]
-            except Exception as hyp_e:
-                logger.warning(f"Could not load hypotheses for project {project_id}: {hyp_e}")
-                project_hypotheses = []
-            
-            # Build comprehensive response
-            response = {
+        enhanced_projects = []
+        
+        for project in projects:
+            enhanced_project = {
                 "id": project["id"],
                 "name": project["name"],
                 "phenotype": project.get("phenotype", ""),
-                "gwas_file_id": project["gwas_file_id"],
                 "created_at": project.get("created_at"),
-                "state": analysis_state,
-                "hypotheses": project_hypotheses,
-                "credible_sets": credible_sets_data
             }
             
-            # Serialize datetime objects before returning
-            response = serialize_datetime_fields(response)
-            return response, 200
+            # Add GWAS file information
+            file_metadata = self.files.get_file_metadata(current_user_id, project["gwas_file_id"])
+            enhanced_project["gwas_file"] = file_metadata["download_url"]
+            enhanced_project["gwas_records_count"] = file_metadata["record_count"]
             
-        except Exception as e:
-            logger.error(f"Error getting comprehensive project data for {project_id}: {str(e)}")
-            return {"error": f"Error retrieving project data: {str(e)}"}, 500
-    
-    @token_required
-    def post(self, current_user_id):
-        """Create a new project"""
-        data = request.get_json()
-        
-        if not data or 'name' not in data or 'gwas_file_id' not in data or 'phenotype' not in data:
-            return {"error": "Missing required fields: name, gwas_file_id, phenotype"}, 400
-        
-        try:
-            project_id = self.projects.create_project(
-                current_user_id, 
-                data['name'], 
-                data['gwas_file_id'],
-                data['phenotype']
-            )
+            # Add analysis status
+            analysis_state = self.projects.load_analysis_state(current_user_id, project["id"])
+            enhanced_project["status"] = analysis_state.get("status") if analysis_state else "Not_started"
             
-            project = self.projects.get_projects(current_user_id, project_id)
-            # Serialize datetime objects before returning
-            project = serialize_datetime_fields(project)
-            return {"project": project}, 201
-        except Exception as e:
-            return {"error": f"Failed to create project: {str(e)}"}, 500
-    
+            # Get analysis parameters from project
+            enhanced_project["population"] = project.get("population")
+            enhanced_project["ref_genome"] = project.get("ref_genome")
+            
+            # Extract credible sets and variants counts
+            credible_sets_raw = self.analysis.get_credible_sets_for_project(current_user_id, project["id"])
+            if credible_sets_raw and isinstance(credible_sets_raw, list):
+                enhanced_project["total_credible_sets_count"] = len(credible_sets_raw)
+                enhanced_project["total_variants_count"] = sum(cs.get("variants_count", 0) for cs in credible_sets_raw)
+            else:
+                enhanced_project["total_credible_sets_count"] = 0
+                enhanced_project["total_variants_count"] = 0
+            
+            # Count hypotheses for this project
+            all_hypotheses = self.hypotheses.get_hypotheses(current_user_id)
+            if isinstance(all_hypotheses, list):
+                hypothesis_count = len([h for h in all_hypotheses if h.get('project_id') == project["id"]])
+            elif all_hypotheses and all_hypotheses.get('project_id') == project["id"]:
+                hypothesis_count = 1
+            else:
+                hypothesis_count = 0
+            
+            enhanced_project["hypothesis_count"] = hypothesis_count
+            
+            enhanced_projects.append(enhanced_project)
+        
+        # Serialize datetime objects in all projects
+        enhanced_projects = serialize_datetime_fields(enhanced_projects)
+        return {"projects": enhanced_projects}, 200
     @token_required
     def delete(self, current_user_id):
         """Delete a project"""
@@ -653,6 +615,9 @@ class AnalysisPipelineAPI(Resource):
             population = request.form.get('population', 'EUR')
             max_workers = int(request.form.get('max_workers', 3))
             
+            # Check the mode
+            is_uploaded = request.form.get('is_uploaded', 'false').lower() == 'true'
+            
             # Fine-mapping parameters with defaults
             maf_threshold = float(request.form.get('maf_threshold', 0.01))
             seed = int(request.form.get('seed', 42))
@@ -669,22 +634,47 @@ class AnalysisPipelineAPI(Resource):
             if not phenotype:
                 return {"error": "phenotype is required"}, 400
             
-            # Get uploaded file
-            if 'gwas_file' not in request.files:
-                return {"error": "No GWAS file uploaded"}, 400
-            
-            gwas_file = request.files['gwas_file']
-            if gwas_file.filename == '':
-                return {"error": "No file selected"}, 400
+            # Handle based on the upload flag
+            if not is_uploaded:
+                predefined_file_id = request.form.get('gwas_file')  
+                
+                if not predefined_file_id:
+                    return {"error": "gwas_file is required (file ID for predefined files)"}, 400
+                
+                logger.info(f"[API] Using predefined GWAS file ID: {predefined_file_id}")
+                
+                # Find the predefined file
+                raw_data_path = os.path.join(self.config.data_dir, 'raw')
+                
+                possible_extensions = ['.tsv', '.tsv.gz', '.tsv.bgz', '.txt', '.txt.gz', '.csv', '.csv.gz']
+                gwas_file_path = None
+                filename = None
+                
+                for ext in possible_extensions:
+                    candidate_path = os.path.join(raw_data_path, f"{predefined_file_id}{ext}")
+                    if os.path.exists(candidate_path):
+                        gwas_file_path = candidate_path
+                        filename = f"{predefined_file_id}{ext}"
+                        break
+                
+                if not gwas_file_path:
+                    return {"error": f"Predefined GWAS file not found for ID: {predefined_file_id}"}, 404
+                
+                logger.info(f"[API] Found predefined file: {filename} at {gwas_file_path}")
+                file_size = os.path.getsize(gwas_file_path)
+                file_id = str(uuid.uuid4())
+                
+            else:
+                # gwas_file contains the actual file
+                if 'gwas_file' not in request.files:
+                    return {"error": "No GWAS file uploaded"}, 400
+                
+                gwas_file = request.files['gwas_file']
+                if gwas_file.filename == '':
+                    return {"error": "No file selected"}, 400
             
             logger.info(f"[API] Starting analysis pipeline")
-            logger.info(f"[API] Project: {project_name}")
-            logger.info(f"[API] File: {gwas_file.filename}")
-            logger.info(f"[API] Reference: {ref_genome}, Population: {population}")
-            logger.info(f"[API] Fine-mapping params: maf={maf_threshold}, seed={seed}, window={window}kb, L={L}, coverage={coverage}, min_abs_corr={min_abs_corr}")
-            
-            # Validate file
-            if not allowed_file(gwas_file.filename):
+            if is_uploaded and not allowed_file(gwas_file.filename):
                 return {"error": "Invalid file format. Supported: .tsv, .txt, .csv, .gz, .bgz"}, 400
             
             # Validate parameters
@@ -719,52 +709,80 @@ class AnalysisPipelineAPI(Resource):
             if batch_size < 1 or batch_size > 20:
                 return {"error": "Batch size must be between 1-20"}, 400
             
-            # === FILE UPLOAD AND PROJECT CREATION  ===
-            # Generate secure filename and file ID
-            filename = secure_filename(gwas_file.filename)
-            file_id = str(uuid.uuid4())
-            
-            # Create user upload directory
-            user_upload_dir = os.path.join('data', 'uploads', current_user_id)
-            os.makedirs(user_upload_dir, exist_ok=True)
-            
-            # File path for saving
-            file_path = os.path.join(user_upload_dir, f"{file_id}_{filename}")
-            
-            logger.info(f"Starting upload for file {filename} (ID: {file_id})")
+            # === FILE HANDLING AND PROJECT CREATION  ===
             start_time = datetime.now()
             
-            # Save file
-            gwas_file.save(file_path)
-            file_size = os.path.getsize(file_path)
+            if not is_uploaded:
+                # Use predefined file
+                logger.info(f"Using predefined GWAS file: {filename} (Path: {gwas_file_path})")
+                file_path = gwas_file_path
+                gwas_records_count = count_gwas_records(file_path)
+            else:
+                # Generate secure filename and file ID
+                filename = secure_filename(gwas_file.filename)
+                file_id = str(uuid.uuid4())
+                
+                # Create user upload directory
+                user_upload_dir = os.path.join('data', 'uploads', str(current_user_id))
+                os.makedirs(user_upload_dir, exist_ok=True)
+                
+                # File path for saving
+                file_path = os.path.join(user_upload_dir, f"{file_id}_{filename}")
+                
+                logger.info(f"Starting upload for file {filename} (ID: {file_id})")
+                
+                # Save file
+                gwas_file.save(file_path)
+                file_size = os.path.getsize(file_path)
+                gwas_file_path = file_path
+                
+                gwas_records_count = count_gwas_records(file_path)
             
-            # Create file metadata in database
+            # Create file metadata in database with record count 
+            original_filename = gwas_file.filename if is_uploaded else filename
             file_metadata_id = self.files.create_file_metadata(
                 user_id=current_user_id,
                 filename=filename,
-                original_filename=gwas_file.filename,
+                original_filename=original_filename,
                 file_path=file_path,
                 file_type='gwas',
-                file_size=file_size
+                file_size=file_size,
+                record_count=gwas_records_count,
+                download_url=f"/download/{str(uuid.uuid4())}"
             )
             
-            # Create project automatically
+            # Prepare analysis parameters
+            analysis_parameters = {
+                'maf_threshold': maf_threshold,
+                'seed': seed,
+                'window': window,
+                'L': L,
+                'coverage': coverage,
+                'min_abs_corr': min_abs_corr,
+                'batch_size': batch_size,
+                'max_workers': max_workers
+            }
+            
+            # Create project with analysis parameters
             project_id = self.projects.create_project(
                 user_id=current_user_id,
                 name=project_name,
                 gwas_file_id=file_metadata_id,
-                phenotype=phenotype
+                phenotype=phenotype,
+                population=population,
+                ref_genome=ref_genome,
+                analysis_parameters=analysis_parameters
             )
             
             # Save metadata to file system
-            metadata_dir = os.path.join('data', 'metadata', current_user_id)
+            metadata_dir = os.path.join('data', 'metadata', str(current_user_id))
             os.makedirs(metadata_dir, exist_ok=True)
             
             metadata = {
                 'file_id': file_metadata_id,
                 'user_id': current_user_id,
                 'filename': filename,
-                'original_filename': gwas_file.filename,
+                'original_filename': original_filename,
                 'file_path': file_path,
                 'file_type': 'gwas',
                 'upload_date': str(datetime.now()),
@@ -834,6 +852,172 @@ class AnalysisPipelineAPI(Resource):
             logger.error(f"[API] Error starting analysis pipeline: {str(e)}")
             return {"error": f"Error starting analysis pipeline: {str(e)}"}, 500
 
+class CredibleSetsAPI(Resource):
+    """
+    API endpoint for fetching credible sets
+    """
+    def __init__(self, analysis):
+        self.analysis = analysis
+
+    @token_required
+    def get(self, current_user_id):
+        """Get credible set details by credible set ID or lead variant ID"""
+        project_id = request.args.get('project_id')
+        credible_set_id = request.args.get('credible_set_id')
+        
+        if not project_id:
+            return {"error": "project_id is required"}, 400
+        
+        if not credible_set_id:
+            return {"error": "Credible_set_id is required"}, 400
+        
+        try:
+            credible_set = self.analysis.get_credible_set_by_id(current_user_id, project_id, credible_set_id)
+            if not credible_set:
+                return {"message": "No credible set found with this ID"}, 404
+            
+            # Extract variants data 
+            variants_data = credible_set.get("variants_data", {})
+            if not variants_data:
+                return {"message": "No variants data found for this credible set"}, 404
+            
+            variants = variants_data.get("data", {})
+            
+            # Convert from object-with-arrays format to array-of-objects format
+            variants_array = convert_variants_to_object_array(variants)
+
+            variants_array = serialize_datetime_fields(variants_array)
+            return {
+                "variants": variants_array
+            }, 200
+
+        except Exception as e:
+            logger.error(f"Error fetching credible set: {str(e)}")
+            return {"error": f"Failed to fetch credible set: {str(e)}"}, 500
 
 
+class GWASFilesAPI(Resource):
+    """
+    API endpoint for automatically discovering GWAS files and extracting their metadata
+    """
+    def __init__(self, config, phenotypes):
+        self.config = config
+        self.phenotypes = phenotypes
+
+    def get(self):
+        """Automatically discover GWAS files and extract their metadata"""
+        try:
+            # Get data directory
+            raw_data_path = os.path.join(self.config.data_dir, 'raw')
+            
+            if not os.path.exists(raw_data_path):
+                return {"gwas_files": [], "total_files": 0}, 200
+            
+            # Scan for all potential GWAS files
+            patterns = [
+                os.path.join(raw_data_path, '*.tsv'),
+                os.path.join(raw_data_path, '*.tsv.gz'),
+                os.path.join(raw_data_path, '*.tsv.bgz'),
+                os.path.join(raw_data_path, '*.txt'),
+                os.path.join(raw_data_path, '*.txt.gz'),
+                os.path.join(raw_data_path, '*.csv'),
+                os.path.join(raw_data_path, '*.csv.gz')
+            ]
+            
+            all_files = []
+            for pattern in patterns:
+                all_files.extend(glob.glob(pattern))
+            
+            # Remove duplicates and sort
+            all_files = sorted(list(set(all_files)))
+            
+            gwas_files = []
+            
+            for file_path in all_files:
+                filename = os.path.basename(file_path)
+                
+                # Extract metadata from the file
+                metadata = extract_gwas_file_metadata(file_path)
+                
+                # Generate file ID
+                file_id = filename
+                for ext in ['.tsv.bgz', '.tsv.gz', '.txt.gz', '.csv.gz', '.tsv', '.txt', '.csv']:
+                    if file_id.endswith(ext):
+                        file_id = file_id[:-len(ext)]
+                        break
+                
+                # Create file entry
+                gwas_file_entry = {
+                    "id": file_id,
+                    "name": metadata['phenotype_name'],
+                    "filename": filename,
+                    "data_field": metadata['phenotype_id'],
+                    "phenotype": metadata['phenotype_name'],
+                    "population": metadata['population'],
+                    "sample_size": metadata['sample_size'],
+                    "genome_build": metadata['genome_build'],
+                    "file_path": file_path,
+                    "file_size_mb": round(metadata['file_size'] / (1024 * 1024), 2),
+                    "url": f"/gwas-files/download/{file_id}"
+                }
+                
+                gwas_files.append(gwas_file_entry)
+            
+            
+            return {
+                "gwas_files": gwas_files,
+                "total_files": len(gwas_files)
+            }, 200
+            
+        except Exception as e:
+            logger.error(f"Error discovering GWAS files: {str(e)}")
+            return {"error": f"Failed to discover GWAS files: {str(e)}"}, 500
+
+class GWASFileDownloadAPI(Resource):
+    """
+    API endpoint for downloading predefined GWAS files
+    """
+    def __init__(self, config):
+        self.config = config
+
+    def get(self, file_id):
+        """Download a predefined GWAS file by file_id"""
+        try:
+            logger.info(f"[GWAS DOWNLOAD] Download request for file {file_id}")
+            
+            # Get data directory
+            raw_data_path = os.path.join(self.config.data_dir, 'raw')
+            
+            # Scan for matching files dynamically
+            possible_extensions = ['.tsv', '.tsv.gz', '.tsv.bgz']
+            file_path = None
+            original_filename = None
+            
+            for ext in possible_extensions:
+                candidate_path = os.path.join(raw_data_path, f"{file_id}{ext}")
+                if os.path.exists(candidate_path):
+                    file_path = candidate_path
+                    original_filename = f"{file_id}{ext}"
+                    break
+            
+            if not file_path:
+                logger.error(f"[GWAS DOWNLOAD] File not found for ID: {file_id}")
+                return {"error": "File not found"}, 404
+            
+            # Generate a user-friendly download name
+            download_name = original_filename.replace('_raw.gwas.imputed_v3.both_sexes', '_GWAS')
+            
+            logger.info(f"[GWAS DOWNLOAD] Serving file: {download_name} (Path: {file_path})")
+            
+            # Return file for download
+            return send_file(
+                file_path,
+                as_attachment=True,
+                download_name=download_name,
+                mimetype='text/tab-separated-values'
+            )
+            
+        except Exception as e:
+            logger.error(f"[GWAS DOWNLOAD] Error downloading file {file_id}: {str(e)}")
+            return {"error": f"Download failed: {str(e)}"}, 500
 
