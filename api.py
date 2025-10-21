@@ -636,8 +636,45 @@ class ProjectsAPI(Resource):
         if success:
             return {"message": "Project deleted successfully"}, 200
         return {"error": "Project not found or access denied"}, 404
-
-
+class BulkProjectDeleteAPI(Resource):
+    def __init__(self, projects):
+        self.projects = projects
+        
+    @token_required
+    def post(self, current_user_id):
+        data = request.get_json()
+        
+        if not data or 'project_ids' not in data:
+            return {"message": "project_ids is required in request body"}, 400
+            
+        project_ids = data.get('project_ids')
+        
+        # Validate the list of IDs
+        if not isinstance(project_ids, list):
+            return {"message": "project_ids must be a list"}, 400
+            
+        if not project_ids:
+            return {"message": "project_ids list cannot be empty"}, 400
+            
+        # Call the bulk delete method
+        result = self.projects.bulk_delete_projects(current_user_id, project_ids)
+        
+        if result and isinstance(result, dict):
+            if result['success']:
+                return {
+                    "message": f"Successfully deleted {result['deleted_count']} project(s)",
+                    "deleted_count": result['deleted_count'],
+                    "total_requested": result['total_requested']
+                }, 200
+            else:
+                return {
+                    "message": f"Partially deleted {result['deleted_count']}/{result['total_requested']} project(s)",
+                    "deleted_count": result['deleted_count'],
+                    "total_requested": result['total_requested'],
+                    "errors": result['errors']
+                }, 207  # Multi-status
+        else:
+            return {"error": "Failed to delete projects"}, 500
 
 class AnalysisPipelineAPI(Resource):
     def __init__(self, projects, files, analysis, gene_expression, config):
