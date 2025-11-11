@@ -4,7 +4,8 @@ from llm import LLM
 from query_swipl import PrologQuery
 from db import (
     UserHandler, ProjectHandler, FileHandler, AnalysisHandler,
-    EnrichmentHandler, HypothesisHandler, SummaryHandler, TaskHandler
+    EnrichmentHandler, HypothesisHandler, SummaryHandler, TaskHandler,
+    PhenotypeHandler
 )
 
 class Config:
@@ -96,5 +97,6 @@ def create_dependencies(config):
         'enrichment': EnrichmentHandler(mongodb_uri, db_name),
         'hypotheses': HypothesisHandler(mongodb_uri, db_name),
         'summaries': SummaryHandler(mongodb_uri, db_name),
-        'tasks': TaskHandler(mongodb_uri, db_name)
+        'tasks': TaskHandler(mongodb_uri, db_name),
+        'phenotypes': PhenotypeHandler(mongodb_uri, db_name)
     }

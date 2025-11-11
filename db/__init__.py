@@ -11,6 +11,8 @@ from .hypothesis_handler import HypothesisHandler
 from .summary_handler import SummaryHandler
 from .task_handler import TaskHandler
 from .base_handler import BaseHandler
+from .phenotype_handler import PhenotypeHandler
+
 
 __all__ = [
     'UserHandler', 
@@ -21,5 +23,6 @@ __all__ = [
     'HypothesisHandler',
     'SummaryHandler',
     'TaskHandler',
-    'BaseHandler'
+    'BaseHandler',
+    'PhenotypeHandler',
 ]
