@@ -106,7 +106,7 @@ def count_gwas_records(file_path):
         return 0
 
 
-def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_handler, enrichment_handler, user_id, project_id):
+def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_handler, enrichment_handler, user_id, project_id, gene_expression_handler=None):
     """Get comprehensive project data including state, hypotheses, and credible sets"""
     try:
         # Get basic project info
@@ -177,10 +177,37 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
                             "probability": probability  # Add confidence/probability score
                         }
                         
+                        # Get tissue selection from tissue_selections collection
+                        selected_tissue = None
+                        if gene_expression_handler:
+                            try:
+                                variant_id = h.get("variant") or h.get("variant_id")
+                                if variant_id:
+                                    tissue_selection = gene_expression_handler.get_tissue_selection(
+                                        user_id, project_id, variant_id
+                                    )
+                                    if tissue_selection:
+                                        selected_tissue = tissue_selection.get('tissue_name')
+                                        logger.info(f"Retrieved tissue selection from DB for hypothesis {h['id']}: {selected_tissue}")
+                            except Exception as ts_e:
+                                logger.warning(f"Could not get tissue selection for hypothesis {h['id']}: {ts_e}")
+                        
+                        hypothesis_data["tissue_selected"] = selected_tissue
+                        
                         project_hypotheses.append(hypothesis_data)
         except Exception as hyp_e:
             logger.warning(f"Could not load hypotheses for project {project_id}: {hyp_e}")
             project_hypotheses = []
+        
+        # Get LDSC data
+        ldsc_data = None
+        if gene_expression_handler:
+            try:
+                ldsc_data = gene_expression_handler.get_ldsc_results_for_project(user_id, project_id, limit=10, format='summary')
+                if ldsc_data:
+                    logger.info(f"Retrieved LDSC summary from MongoDB for project {project_id}")
+            except Exception as ldsc_e:
+                logger.warning(f"Could not load LDSC data: {ldsc_e}")
         
         # Build comprehensive response
         response = {
@@ -203,7 +230,11 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
             
             # Hypotheses information
             "hypotheses": project_hypotheses
-        }        
+        }
+        
+        if ldsc_data:
+            response["ldsc"] = ldsc_data
+        
         return response, 200
         
     except Exception as e:

@@ -27,6 +27,10 @@ from project_tasks import (
     get_project_analysis_path_task
 )
 
+from gene_expression_tasks import (
+run_combined_ldsc_tissue_analysis
+)
+
 import pandas as pd
 from datetime import datetime, timezone
 from prefect.task_runners import ThreadPoolTaskRunner
@@ -52,6 +56,8 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     llm = deps['llm']
     prolog_query = deps['prolog_query']
     hypotheses = deps['hypotheses']
+    gene_expression = deps['gene_expression']
+    projects = deps['projects']
     enrichment = deps['enrichment']
     
     try:
@@ -111,7 +117,19 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         unique_genes = set(gene for _, gene in graph_genes)
         use_shared_enrichment = len(unique_genes) == 1
         
-
+        # Get tissue selection for enrichment
+        tissue_selection = gene_expression.get_tissue_selection(current_user_id, project_id, variant)
+        selected_tissue = None
+        
+        if tissue_selection:
+            selected_tissue = tissue_selection['tissue_name']
+            logger.info(f"Found user tissue selection: {selected_tissue} for variant {variant}")
+        else:
+            # Get top tissue from LDSC analysis (from MongoDB)
+            ldsc_results = gene_expression.get_ldsc_results_for_project(current_user_id, project_id, limit=1, format='selection')
+            if ldsc_results and len(ldsc_results) > 0:
+                selected_tissue = ldsc_results[0].get('tissue_name')
+                logger.info(f"Using top tissue from LDSC (MongoDB): {selected_tissue}")
 
         # Create enrichments for all graphs
         enrichment_data = []
@@ -132,11 +150,15 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                     hypothesis_id=hypothesis_id,
                     task_name=f"Enrichment Analysis ({idx+1}/{len(graphs_with_prob)})",
                     state=TaskState.STARTED,
-                    details={"causal_gene": this_causal_gene},
+                    details={"causal_gene": this_causal_gene, "tissue": selected_tissue or "standard"},
                     progress=45 + (idx * 15 // len(graphs_with_prob))
                 )
                 
-                enrich_tbl = enrichr.run(this_causal_gene)
+                if selected_tissue:
+                    enrich_tbl = enrichr.run(this_causal_gene, tissue_name=selected_tissue, 
+                                            user_id=current_user_id, project_id=project_id)
+                else:
+                    enrich_tbl = enrichr.run(this_causal_gene)
                 
                 relevant_gos = llm.get_relevant_go(phenotype, enrich_tbl)
                 
@@ -326,7 +348,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
 
 
 @flow(log_prints=True)
-def analysis_pipeline_flow(projects_handler, analysis_handler, mongodb_uri, db_name, user_id, project_id, gwas_file_path, ref_genome="GRCh37", 
+def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, mongodb_uri, db_name, user_id, project_id, gwas_file_path, ref_genome="GRCh37", 
                            population="EUR", batch_size=5, max_workers=3,
                            maf_threshold=0.01, seed=42, window=2000, L=-1, 
                            coverage=0.95, min_abs_corr=0.5):
@@ -366,6 +388,13 @@ def analysis_pipeline_flow(projects_handler, analysis_handler, mongodb_uri, db_n
         else:
             munged_file = munged_file_result
             munged_df = pd.read_csv(munged_file, sep='\t')
+
+        # Start LDSC + tissue analysis immediately after munging (runs in parallel)
+        logger.info(f"[PIPELINE] Starting LDSC + tissue analysis in parallel after munging")
+        ldsc_tissue_future = run_combined_ldsc_tissue_analysis.submit(gene_expression, projects_handler,
+            munged_file, output_dir, project_id, user_id
+        )
+        logger.info(f"[PIPELINE] LDSC + tissue analysis started in background")
         
         # Update analysis state after preprocessing
         preprocessing_state = {
@@ -513,11 +542,40 @@ def analysis_pipeline_flow(projects_handler, analysis_handler, mongodb_uri, db_n
             high_pip_variants = len(combined_results[combined_results['PIP'] > 0.5])
             total_credible_sets = combined_results.get('credible_set', pd.Series([0])).max()
             
+            # Wait for parallel LDSC + tissue analysis to complete
+            logger.info(f"[PIPELINE] Stage 5: Waiting for LDSC + Tissue Analysis to complete")
+            
+            # Update analysis state for waiting on LDSC + tissue analysis
+            ldsc_tissue_state = {
+                "status": "Running",
+                "stage": "LDSC_Tissue_Analysis",
+                "progress": 85,
+                "message": "Fine-mapping completed, waiting for LDSC and tissue analysis"
+            }
+            save_analysis_state_task.submit(projects_handler, user_id, project_id, ldsc_tissue_state).result()
+            
+            try:
+                # Wait for the parallel LDSC + tissue analysis task to complete
+                ldsc_tissue_result = ldsc_tissue_future.result()
+                
+                logger.info(f"[PIPELINE] LDSC + tissue analysis completed successfully!")
+                logger.info(f"[PIPELINE] - Analysis run ID: {ldsc_tissue_result['analysis_run_id']}")
+                logger.info(f"[PIPELINE] - Tissues analyzed: {ldsc_tissue_result['tissues_analyzed']}")
+                logger.info(f"[PIPELINE] - Significant tissues: {ldsc_tissue_result['significant_tissues']}")
+                
+                ldsc_status = "completed"
+                
+            except Exception as ldsc_e:
+                logger.error(f"[PIPELINE] LDSC + tissue analysis failed: {str(ldsc_e)}")
+                ldsc_status = "failed"
+                # Continue with pipeline completion even if LDSC fails
+            
             # Save completed analysis state
             completed_state = {
                 "status": "Completed",
                 "progress": 100,
                 "message": "Analysis completed successfully",
+                "ldsc_status": ldsc_status
             }
             save_analysis_state_task.submit(projects_handler, user_id, project_id, completed_state).result()
             

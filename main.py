@@ -11,7 +11,7 @@ from api import (
     EnrichAPI,
     HypothesisAPI, 
     BulkHypothesisDeleteAPI,
-    ChatAPI, 
+    ChatAPI,
     init_socket_handlers,
     ProjectsAPI,
     AnalysisPipelineAPI,
@@ -98,7 +98,8 @@ def setup_api(config):
             "prolog_query": deps['prolog_query'], 
             "enrichment": deps['enrichment'],
             "hypotheses": deps['hypotheses'],
-            "projects": deps['projects']
+            "projects": deps['projects'],
+            "gene_expression": deps['gene_expression']
         }
     )
     api.add_resource(HypothesisAPI, "/hypothesis", 
@@ -124,11 +125,13 @@ def setup_api(config):
         "analysis": deps['analysis'],
         "hypotheses": deps['hypotheses'],
         "enrichment": deps['enrichment'],
+        "gene_expression": deps['gene_expression']
     })
     api.add_resource(AnalysisPipelineAPI, "/analysis-pipeline", resource_class_kwargs={
         "projects": deps['projects'],
         "files": deps['files'],
         "analysis": deps['analysis'],
+        "gene_expression": deps['gene_expression'],
         "config": config
     })
     api.add_resource(CredibleSetsAPI, "/credible-sets", resource_class_kwargs={"analysis": deps['analysis']})
