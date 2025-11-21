@@ -10,6 +10,7 @@ from api import (
     EnrichAPI,
     HypothesisAPI, 
     BulkHypothesisDeleteAPI,
+    BulkProjectDeleteAPI,
     ChatAPI, 
     init_socket_handlers,
     ProjectsAPI,
@@ -120,6 +121,7 @@ def setup_api(config):
         "analysis": deps['analysis'],
         "hypotheses": deps['hypotheses']
     })
+    api.add_resource(BulkProjectDeleteAPI, "/projects/delete", resource_class_kwargs={"projects": deps['projects']})
     api.add_resource(AnalysisPipelineAPI, "/analysis-pipeline", resource_class_kwargs={
         "projects": deps['projects'],
         "files": deps['files'],
