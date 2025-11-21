@@ -17,6 +17,7 @@ from utils import allowed_file, transform_credible_sets_to_locuszoom
 from loguru import logger
 from werkzeug.utils import secure_filename
 from utils import serialize_datetime_fields
+from tasks import extract_probability, get_related_hypotheses
 
 
 class EnrichAPI(Resource):
@@ -121,7 +122,7 @@ class EnrichAPI(Resource):
             project_id=project_id
         )
         
-        return {"hypothesis_id": hypothesis_id}, 201
+        return {"hypothesis_id": hypothesis_id, "project_id": project_id}, 202
     
          
     @token_required
@@ -165,12 +166,20 @@ class HypothesisAPI(Resource):
             last_pending_task = [pending_tasks[-1]] if pending_tasks else [] 
             logger.info(f"last_pending_task: {last_pending_task}")
 
+            # Extract confidence and related hypotheses once
+            confidence = extract_probability(hypothesis, self.enrichment, current_user_id)
+            related_hypotheses = get_related_hypotheses(hypothesis, self.hypotheses, self.enrichment, current_user_id)
+            
+            # Log for debugging
+            logger.info(f"Hypothesis {hypothesis_id}: confidence={confidence}, variant_hypotheses_count={len(related_hypotheses)}")
+
             if is_complete:
                 enrich_id = hypothesis.get('enrich_id')
                 enrich_data = self.enrichment.get_enrich(current_user_id, enrich_id)
                 # Remove 'causal_graph' field from enrich_data if it exists
                 if isinstance(enrich_data, dict):
                     enrich_data.pop('causal_graph', None)
+                
                 response_data = {
                     'id': hypothesis_id,
                     'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
@@ -178,6 +187,8 @@ class HypothesisAPI(Resource):
                     'phenotype': hypothesis['phenotype'],
                     "status": "completed",
                     "created_at": hypothesis.get('created_at'),
+                    "probability": confidence,
+                    "hypotheses": related_hypotheses,
                     "result": enrich_data
                 }
                 # Serialize datetime objects before returning
@@ -193,6 +204,8 @@ class HypothesisAPI(Resource):
                 'status': 'pending',
                 "created_at": hypothesis.get('created_at'),
                 'task_history': last_pending_task,
+                "probability": confidence,
+                "hypotheses": related_hypotheses,
             }
             if 'enrich_id' in hypothesis and hypothesis.get('enrich_id') is not None:
                 enrich_id = hypothesis.get('enrich_id')
@@ -227,7 +240,7 @@ class HypothesisAPI(Resource):
             
             formatted_hypothesis = {
                 'id': hypothesis['id'],
-                'phenotype': hypothesis['phenotype'],
+                'phenotype': hypothesis.get('phenotype' ),
                 'variant': hypothesis.get('variant') or hypothesis.get('variant_id'),
                 'created_at': hypothesis.get('created_at'),
                 'status': hypothesis.get('status'),

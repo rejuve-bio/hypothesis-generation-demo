@@ -110,7 +110,7 @@ class LLM:
         except:
             # retry
             response = self.llm.chat(messages)
-            response = json.loads(response)
+            response = json.loads(response.message.content)
         return response
         
     def get_relevant_go(self, phentoype, enrich_tbl, 

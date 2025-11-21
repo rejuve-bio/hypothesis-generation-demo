@@ -6,12 +6,15 @@ from loguru import logger
 from prefect import flow
 from status_tracker import TaskState
 import multiprocessing as mp
+from uuid import uuid4
 
 from tasks import (
-    check_enrich, create_enrich_data, get_candidate_genes, predict_causal_gene, 
-    get_relevant_gene_proof, retry_predict_causal_gene, retry_get_relevant_gene_proof,
+    check_enrich, create_enrich_data, get_candidate_genes,
+    get_relevant_gene_proof, retry_get_relevant_gene_proof,
     check_hypothesis, get_enrich, get_gene_ids, execute_gene_query, execute_variant_query,
-    summarize_graph, create_hypothesis, execute_phenotype_query
+    summarize_graph, create_hypothesis, execute_phenotype_query,
+    extract_causal_gene_from_graph, 
+    process_child_enrichments_simple
 )
 
 from analysis_tasks import (
@@ -30,6 +33,10 @@ from prefect.task_runners import ThreadPoolTaskRunner
 
 from utils import emit_task_update
 from config import Config, create_dependencies
+from threading import Thread
+import traceback
+from utils import transform_credible_sets_to_locuszoom
+
 
 ### Enrichment Flow
 @flow(log_prints=True, persist_result=False, task_runner=ThreadPoolTaskRunner(max_workers=4))
@@ -45,45 +52,142 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     llm = deps['llm']
     prolog_query = deps['prolog_query']
     hypotheses = deps['hypotheses']
+    enrichment = deps['enrichment']
     
     try:
         logger.info(f"Running project-based enrichment for project {project_id}, variant {variant}")
         
         # Check for existing enrichment data
-        enrich = check_enrich.submit(deps['enrichment'], current_user_id, variant, phenotype, hypothesis_id).result()
+        enrich = check_enrich.submit(enrichment, current_user_id, variant, phenotype, hypothesis_id).result()
         
         if enrich:
             logger.info("Retrieved enrich data from saved db")
             return {"id": enrich['id']}, 200
 
-        # Run enrichment analysis pipeline
         candidate_genes = get_candidate_genes.submit(prolog_query, variant, hypothesis_id).result()
-        causal_gene = predict_causal_gene.submit(llm, phenotype, candidate_genes, hypothesis_id).result()
-        causal_graph, proof = get_relevant_gene_proof.submit(prolog_query, variant, causal_gene, hypothesis_id).result()
+        graphs_list = get_relevant_gene_proof.submit(prolog_query, variant, hypothesis_id).result()
 
-        if causal_graph is None:
-            causal_gene = retry_predict_causal_gene.submit(llm, phenotype, candidate_genes, proof, causal_gene, hypothesis_id).result()
-            causal_graph, proof = retry_get_relevant_gene_proof.submit(prolog_query, variant, causal_gene, hypothesis_id).result()
-            logger.info(f"Retried causal gene: {causal_gene}")
-            logger.info(f"Retried causal graph: {causal_graph}")
+        if not graphs_list or len(graphs_list) == 0:
+            graphs_list = retry_get_relevant_gene_proof.submit(prolog_query, variant, hypothesis_id).result()
+            logger.info(f"Retried graphs: {len(graphs_list) if graphs_list else 0} graphs received")
+        
+        # If still no graphs after retry, fail the enrichment
+        if not graphs_list or len(graphs_list) == 0:
+            error_msg = f"No causal graphs found for variant {variant}. Prolog server returned 0 graphs."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        enrich_tbl = enrichr.run(causal_gene)
-        relevant_gos = llm.get_relevant_go(phenotype, enrich_tbl)
+        logger.info(f"Creating enrichments for {len(graphs_list)} graphs from Prolog server")
 
-        # Create enrichment data with project context
-        enrich_id = create_enrich_data.submit(
-            deps['enrichment'], hypotheses, current_user_id, project_id, variant, 
-            phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id
-        ).result()
+        # Sort graphs by probability (highest first)
+        graphs_with_prob = []
+        for i, graph in enumerate(graphs_list):
+            prob = graph.get('prob', {}).get('value', 0.0)
+            graphs_with_prob.append((i, graph, prob))
+        
+        graphs_with_prob.sort(key=lambda x: x[2], reverse=True)
+        logger.info(f"Graph probabilities: {[(i, prob) for i, _, prob in graphs_with_prob]}")
 
-        # Update hypothesis with enrichment ID
+        # Extract causal genes from ALL graphs
+        graph_genes = []
+        for idx, (original_i, graph, prob) in enumerate(graphs_with_prob):
+            # Extract variant nodes from the graph
+            variant_nodes = [n for n in graph.get("nodes", []) if n.get("type") == "snp"]
+            
+            gene_id, gene_name = extract_causal_gene_from_graph(graph, variant_nodes)
+            
+            # Use extracted gene or fail 
+            extracted_gene = gene_name or gene_id
+            if not extracted_gene:
+                error_msg = f"No causal gene found in graph {idx+1}/{len(graphs_with_prob)} (prob={prob:.3f}). Graph may contain no genes or no direct SNP-gene connections."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            this_causal_gene = extracted_gene
+            logger.info(f"Graph {idx+1}: Extracted causal gene '{this_causal_gene}' (prob={prob:.3f})")
+            graph_genes.append((idx, this_causal_gene))
+        
+        # Check if all graphs have the same causal gene
+        unique_genes = set(gene for _, gene in graph_genes)
+        use_shared_enrichment = len(unique_genes) == 1
+        
+
+
+        # Create enrichments for all graphs
+        enrichment_data = []
+        main_enrichment_id = None
+        shared_enrichment_cache = {}  # Cache for shared enrichments
+        
+        for idx, (original_i, graph, prob) in enumerate(graphs_with_prob):
+            this_causal_gene = graph_genes[idx][1]
+            
+            if use_shared_enrichment and this_causal_gene in shared_enrichment_cache:
+                logger.info(f"Reusing shared enrichment for gene {this_causal_gene}")
+                relevant_gos = shared_enrichment_cache[this_causal_gene]
+            else:
+                # Run enrichment for this specific gene
+                logger.info(f"Running enrichment for gene {this_causal_gene} (graph {idx+1}/{len(graphs_with_prob)})")
+                
+                emit_task_update(
+                    hypothesis_id=hypothesis_id,
+                    task_name=f"Enrichment Analysis ({idx+1}/{len(graphs_with_prob)})",
+                    state=TaskState.STARTED,
+                    details={"causal_gene": this_causal_gene},
+                    progress=45 + (idx * 15 // len(graphs_with_prob))
+                )
+                
+                enrich_tbl = enrichr.run(this_causal_gene)
+                
+                relevant_gos = llm.get_relevant_go(phenotype, enrich_tbl)
+                
+                # Cache if shared
+                if use_shared_enrichment:
+                    shared_enrichment_cache[this_causal_gene] = relevant_gos
+            
+            # Store metadata for the highest probability graph in the main hypothesis
+            if idx == 0:
+                best_causal_gene = this_causal_gene
+                
+                # Update hypothesis with best graph metadata
+                hypotheses.update_hypothesis(hypothesis_id, {
+                    "causal_gene": best_causal_gene,
+                    "enrichment_stage": "enrichment_running"
+                })
+            
+            # Create enrichment for this graph
+            enrich_id = create_enrich_data.submit(
+                enrichment, hypotheses, current_user_id, project_id, variant, 
+                phenotype, this_causal_gene, relevant_gos, {
+                    "graph": graph,
+                    "graph_index": original_i,
+                    "total_graphs": len(graphs_list),
+                }, hypothesis_id
+            ).result()            
+            enrichment_data.append({
+                "enrich_id": enrich_id,
+                "graph_index": original_i,
+                "graph_probability": prob,
+                "causal_gene": this_causal_gene
+            })
+            
+            if idx == 0:
+                main_enrichment_id = enrich_id
+
+        all_enrich_ids = [e['enrich_id'] for e in enrichment_data]
+        
+        # Update original hypothesis with main enrichment and children info
         hypotheses.update_hypothesis(hypothesis_id, {
-            "enrich_id": enrich_id,
+            "enrich_id": main_enrichment_id,
+            "child_enrich_ids": all_enrich_ids[1:],
+            "status": "pending"
         })
 
-        logger.info(f"Enrichment flow completed: {enrich_id}")
+        logger.info(f"Created {len(enrichment_data)} enrichments, main: {main_enrichment_id}")
+        logger.info(f"Child enrichments (will be processed on-demand): {all_enrich_ids[1:]}")
+
         
-        return {"id": enrich_id}, 201
+        # Return main enrichment
+        return {"id": main_enrichment_id}, 200
     except Exception as e:
         logger.error(f"Enrichment flow failed: {str(e)}")
         
@@ -106,16 +210,39 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
 
 ### Hypothesis Flow
 @flow(log_prints=True)
-def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses, prolog_query, llm):
-    # Initialize dependencies from environment variables for enrichment handler
-    config = Config.from_env()
-    deps = create_dependencies(config)
-    enrichment = deps['enrichment']
+def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses, prolog_query, llm, enrichment):
     
     hypothesis = check_hypothesis(hypotheses, current_user_id, enrich_id, go_id, hypothesis_id)
     if hypothesis:
         logger.info("Retrieved hypothesis data from saved db")
         return {"summary": hypothesis.get('summary'), "graph": hypothesis.get('graph')}, 200
+    # Check if this hypothesis has child enrichments
+    parent_hypothesis = hypotheses.get_hypotheses(current_user_id, hypothesis_id)
+    if parent_hypothesis and 'child_enrich_ids' in parent_hypothesis:
+        child_enrich_ids = parent_hypothesis.get('child_enrich_ids', [])
+        if child_enrich_ids and len(child_enrich_ids) > 0:
+            logger.info(f"Triggering background processing for {len(child_enrich_ids)} child enrichments")
+                        
+            # Create deps dict from current context
+            deps_for_bg = {
+                'hypotheses': hypotheses,
+                'enrichment': enrichment,
+                'prolog_query': prolog_query,
+                'llm': llm
+            }
+            
+            def run_background_hypotheses():
+                try:
+                    process_child_enrichments_simple(
+                        current_user_id, child_enrich_ids, hypothesis_id, deps_for_bg
+                    )
+                except Exception as bg_e:
+                    logger.error(f"Background child hypothesis generation failed: {str(bg_e)}")
+                    logger.error(traceback.format_exc())
+            
+            bg_thread = Thread(target=run_background_hypotheses)
+            bg_thread.start()
+            logger.info(f"Background thread started for child enrichments (processing in parallel)")
 
     enrich_data = get_enrich(enrichment, current_user_id, enrich_id, hypothesis_id)
     if not enrich_data:
@@ -127,25 +254,28 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
     variant_id = enrich_data['variant']
     phenotype = enrich_data['phenotype']
     coexpressed_gene_names = go_term[0]["genes"]
-    causal_graph = enrich_data['causal_graph']
-
-    logger.info(f"Enrich data: {enrich_data}")
-
-    causal_gene_id = get_gene_ids(prolog_query, [causal_gene.lower()], hypothesis_id)[0]
+    causal_graph_data = enrich_data['causal_graph']
+    
+    graph = causal_graph_data["graph"]
+    graph_index = causal_graph_data.get("graph_index", 0)
+    total_graphs = causal_graph_data.get("total_graphs", 1)
+    
+    logger.info(f"Processing graph {graph_index + 1}/{total_graphs} from Prolog server")
+    
+    graph_prob = graph.get('prob', {}).get('value', 1.0)
+    logger.info(f"Processing graph {graph_index + 1}/{total_graphs} with probability {graph_prob}")
+    
+    causal_graph = graph      
+    
     coexpressed_gene_ids = get_gene_ids(prolog_query, [g.lower() for g in coexpressed_gene_names], hypothesis_id)
 
     nodes, edges = causal_graph["nodes"], causal_graph["edges"]
-
-    gene_nodes = [n for n in nodes if n["type"] == "gene"]
-    gene_ids = [n['id'] for n in gene_nodes]
-    gene_entities = [f"gene({id})" for id in gene_ids]
-    query = f"maplist(gene_name, {gene_entities}, X)".replace("'", "")
-
-    gene_names = execute_gene_query(prolog_query, query, hypothesis_id)
-    for id, name, node in zip(gene_ids, gene_names, gene_nodes):
-        node["id"] = id
-        node["name"] = name.upper()
     
+    causal_gene_id = causal_gene.lower()
+    causal_gene_name = causal_gene.upper()
+    logger.info(f"Using causal gene from enrichment: {causal_gene_name} (ID: {causal_gene_id})")
+    
+    # Standardize variant IDs
     variant_nodes = [n for n in nodes if n["type"] == "snp"]
     variant_rsids = [n['id'] for n in variant_nodes]
     variant_entities = [f"snp({id})" for id in variant_rsids]
@@ -162,9 +292,21 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
             edge["source"] = variant_id
         for edge in target_edges:
             edge["target"] = variant_id
-            
+
+    gene_nodes = [n for n in nodes if n["type"] == "gene"]
+    gene_ids = [n['id'] for n in gene_nodes]
+    gene_entities = [f"gene({id})" for id in gene_ids]
+    query = f"maplist(gene_name, {gene_entities}, X)".replace("'", "")
+
+    gene_names = execute_gene_query(prolog_query, query, hypothesis_id)
+    for id, name, node in zip(gene_ids, gene_names, gene_nodes):
+        node["id"] = id
+        node["name"] = name.upper()
+    
     nodes.append({"id": go_id, "type": "go", "name": go_name})
-    phenotype_id = execute_phenotype_query(prolog_query, phenotype, hypothesis_id)
+    phenotype_result = execute_phenotype_query(prolog_query, phenotype, hypothesis_id)
+    
+    phenotype_id = phenotype_result[0] if isinstance(phenotype_result, list) and phenotype_result else phenotype_result
 
     nodes.append({"id": phenotype_id, "type": "phenotype", "name": phenotype})
     edges.append({"source": go_id, "target": phenotype_id, "label": "involved_in"})
@@ -173,17 +315,14 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
         edges.append({"source": gene_id, "target": go_id, "label": "enriched_in"})
         edges.append({"source": causal_gene_id, "target": gene_id, "label": "coexpressed_with"})
 
+    final_causal_graph = {"nodes": nodes, "edges": edges, "probability": graph_prob}
 
-    causal_graph = {"nodes": nodes, "edges": edges}
+    summary = summarize_graph(llm, {"nodes": nodes, "edges": edges}, hypothesis_id)
 
-    summary = summarize_graph(llm, causal_graph, hypothesis_id)
-
+    create_hypothesis(hypotheses, enrich_id, go_id, variant_id, phenotype, causal_gene_name, final_causal_graph, 
+                     summary, current_user_id, hypothesis_id)
     
-    hypothesis_id = create_hypothesis(hypotheses, enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id, hypothesis_id)
-
-    
-    return {"summary": summary, "graph": causal_graph}, 201
-
+    return {"summary": summary, "graph": final_causal_graph}, 201
 
 
 @flow(log_prints=True)
