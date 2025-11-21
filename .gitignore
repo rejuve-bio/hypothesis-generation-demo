@@ -208,3 +208,4 @@ data/ontology
 
 # Logs
 logs/
+.infisical.json
