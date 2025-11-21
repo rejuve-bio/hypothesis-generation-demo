@@ -14,6 +14,8 @@ from api import (
     init_socket_handlers,
     ProjectsAPI,
     AnalysisPipelineAPI,
+    PhenotypesAPI,
+
 )
 from dotenv import load_dotenv
 import os
@@ -126,6 +128,8 @@ def setup_api(config):
         "analysis": deps['analysis'],
         "config": config
     })
+    api.add_resource(PhenotypesAPI, "/phenotypes", resource_class_kwargs={"phenotypes": deps['phenotypes']})
+
 
     # Initialize socket handlers 
     socket_namespace = init_socket_handlers(deps['hypotheses'])
