@@ -960,7 +960,7 @@ def finemap_region_batch_worker(batch_data):
                                 credible_set["completed_at"] = metadata["completed_at"]
                                 
                                 # Save individual credible set
-                                db.save_credible_set(user_id, project_id, credible_set)
+                                analysis_handler.save_credible_set(user_id, project_id, credible_set)
                             
                             logger.info(f"[BATCH-{batch_id}] Saved {len(credible_sets_data)} credible sets for {lead_variant_id}")
                             
