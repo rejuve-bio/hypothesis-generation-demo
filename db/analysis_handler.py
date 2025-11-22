@@ -1,7 +1,8 @@
-from bson.objectid import ObjectId
 from datetime import datetime, timezone
 from loguru import logger
 from .base_handler import BaseHandler
+from bson import ObjectId
+
 
 
 class AnalysisHandler(BaseHandler):
