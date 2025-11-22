@@ -1,7 +1,8 @@
-from bson.objectid import ObjectId
 from datetime import datetime, timezone
 from loguru import logger
 from .base_handler import BaseHandler
+from bson import ObjectId
+
 
 
 class AnalysisHandler(BaseHandler):
@@ -66,37 +67,6 @@ class AnalysisHandler(BaseHandler):
             logger.error(f"Error saving analysis results: {str(e)}")
             raise
 
-    def save_lead_variant_credible_sets(self, user_id, project_id, lead_variant_id, lead_variant_data):
-        """Save credible sets for a specific lead variant incrementally"""
-        try:
-            # Create entry organized by lead variant
-            credible_set_data = {
-                'user_id': user_id,
-                'project_id': project_id,
-                'lead_variant_id': lead_variant_id,
-                'data': lead_variant_data,
-                'created_at': datetime.now(timezone.utc),
-                'type': 'lead_variant_credible_sets'
-            }
-            
-            # Upsert - update if exists, create if doesn't
-            result = self.credible_sets_collection.update_one(
-                {
-                    'user_id': user_id,
-                    'project_id': project_id,
-                    'lead_variant_id': lead_variant_id,
-                    'type': 'lead_variant_credible_sets'
-                },
-                {'$set': credible_set_data},
-                upsert=True
-            )
-            
-            logger.info(f"Saved/updated credible sets for lead variant {lead_variant_id} in project {project_id}")
-            return str(result.upserted_id) if result.upserted_id else "updated"
-        except Exception as e:
-            logger.error(f"Error saving lead variant credible sets: {str(e)}")
-            raise
-
     def get_lead_variant_credible_sets(self, user_id, project_id, lead_variant_id=None):
         """Get credible sets organized by lead variant"""
         try:
@@ -120,3 +90,132 @@ class AnalysisHandler(BaseHandler):
         except Exception as e:
             logger.error(f"Error getting lead variant credible sets: {str(e)}")
             raise
+
+    def save_credible_set(self, user_id, project_id, credible_set_data):
+        """Save a single credible set with its own lead variant"""
+        try:
+            # Extract lead variant info from the credible set data
+            variants_data = credible_set_data.get('variants', {}).get('data', {})
+            if not variants_data or not variants_data.get('variant'):
+                raise ValueError("No variant data found in credible set")
+            
+            # Find lead variant (highest posterior probability)
+            variants = variants_data['variant']
+            posterior_probs = variants_data['posterior_prob']
+            max_idx = posterior_probs.index(max(posterior_probs))
+            lead_variant_id = variants[max_idx]
+            
+            # Create lead variant info
+            lead_variant = {
+                'id': lead_variant_id,
+                'rs_id': variants_data.get('rs_id', [None] * len(variants))[max_idx],
+                'beta': variants_data['beta'][max_idx],
+                'chromosome': str(variants_data['chromosome'][max_idx]),
+                'log_pvalue': variants_data['log_pvalue'][max_idx],
+                'position': variants_data['position'][max_idx],
+                'ref_allele': variants_data['ref_allele'][max_idx],
+                'minor_allele': variants_data['minor_allele'][max_idx],
+                'ref_allele_freq': variants_data['ref_allele_freq'][max_idx],
+                'posterior_prob': variants_data['posterior_prob'][max_idx]
+            }
+            
+            # Create credible set document
+            credible_set_doc = {
+                'user_id': user_id,
+                'project_id': project_id,
+                'lead_variant_id': lead_variant_id,
+                'coverage': credible_set_data.get('coverage'),
+                'variants_count': len(variants),
+                'completed_at': credible_set_data.get('completed_at'),
+                'lead_variant': lead_variant,
+                'variants_data': credible_set_data.get('variants'),
+                'metadata': credible_set_data.get('metadata', {}),
+                'created_at': datetime.now(timezone.utc),
+                'type': 'credible_set'
+            }
+            
+            result = self.credible_sets_collection.insert_one(credible_set_doc)
+            logger.info(f"Saved credible set with lead variant {lead_variant_id} in project {project_id}")
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Error saving credible set: {str(e)}")
+            raise
+
+    def get_credible_sets_for_project(self, user_id, project_id):
+        """Get all credible sets for a project"""
+        try:
+            query = {
+                'user_id': user_id,
+                'project_id': project_id,
+                'type': 'credible_set'
+            }
+            
+            results = list(self.credible_sets_collection.find(query))
+            credible_sets = []
+            
+            for result in results:
+                credible_set = {
+                    '_id': str(result['_id']),
+                    'coverage': result.get('coverage'),
+                    'variants_count': result.get('variants_count'),
+                    'completed_at': result.get('completed_at'),
+                    'lead_variant': result.get('lead_variant')
+                }
+                credible_sets.append(credible_set)
+            
+            return credible_sets
+        except Exception as e:
+            logger.error(f"Error getting credible sets for project: {str(e)}")
+            raise
+    
+    def get_credible_set_by_lead_variant(self, user_id, project_id, lead_variant_id):
+        """Get credible set data by lead variant ID"""
+        try:
+            query = {
+                'user_id': user_id,
+                'project_id': project_id,
+                'lead_variant_id': lead_variant_id,
+                'type': 'credible_set'
+            }
+            
+            result = self.credible_sets_collection.find_one(query)
+            if result:
+                result['_id'] = str(result['_id'])
+                return result
+            return None
+        except Exception as e:
+            logger.error(f"Error getting credible set by lead variant: {str(e)}")
+            raise
+
+    def get_credible_set_by_id(self, user_id, project_id, credible_set_id):
+        """Get credible set data by credible set ID"""
+        try:
+            query = {
+                '_id': ObjectId(credible_set_id),
+                'user_id': user_id,
+                'project_id': project_id,
+                'type': 'credible_set'
+            }
+            
+            result = self.credible_sets_collection.find_one(query)
+            if result:
+                result['_id'] = str(result['_id'])
+                return result
+            return None
+        except Exception as e:
+            logger.error(f"Error getting credible set by ID: {str(e)}")
+            raise
+    def update_analysis_state(self, project_id, user_id, update_data):
+        """Update analysis state by merging new data with existing state"""
+        # Load existing state
+        existing_state = self.load_analysis_state(user_id, project_id)
+        if existing_state is None:
+            existing_state = {}
+        
+        # Merge update data
+        existing_state.update(update_data)
+        
+        # Save updated state
+        self.save_analysis_state(user_id, project_id, existing_state)
+        logger.info(f"Updated analysis state for project {project_id} with keys: {list(update_data.keys())}")
+        return existing_state

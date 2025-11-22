@@ -7,6 +7,7 @@ import werkzeug
 from config import Config, create_dependencies
 from logging_config import setup_logging
 from api import (
+    CredibleSetsAPI,
     EnrichAPI,
     HypothesisAPI, 
     BulkHypothesisDeleteAPI,
@@ -14,6 +15,8 @@ from api import (
     init_socket_handlers,
     ProjectsAPI,
     AnalysisPipelineAPI,
+    GWASFilesAPI,
+    GWASFileDownloadAPI,
 )
 from dotenv import load_dotenv
 import os
@@ -117,8 +120,10 @@ def setup_api(config):
     # project-based workflow
     api.add_resource(ProjectsAPI, "/projects", resource_class_kwargs={
         "projects": deps['projects'],
+        "files": deps['files'],
         "analysis": deps['analysis'],
-        "hypotheses": deps['hypotheses']
+        "hypotheses": deps['hypotheses'],
+        "enrichment": deps['enrichment'],
     })
     api.add_resource(AnalysisPipelineAPI, "/analysis-pipeline", resource_class_kwargs={
         "projects": deps['projects'],
@@ -126,6 +131,11 @@ def setup_api(config):
         "analysis": deps['analysis'],
         "config": config
     })
+    api.add_resource(CredibleSetsAPI, "/credible-sets", resource_class_kwargs={"analysis": deps['analysis']})
+    # GWAS files
+    api.add_resource(GWASFilesAPI, "/gwas-files", resource_class_kwargs={"config": config, "phenotypes": deps['phenotypes']})
+    api.add_resource(GWASFileDownloadAPI, "/gwas-files/download/<string:file_id>", resource_class_kwargs={"config": config})
+
 
     # Initialize socket handlers 
     socket_namespace = init_socket_handlers(deps['hypotheses'])

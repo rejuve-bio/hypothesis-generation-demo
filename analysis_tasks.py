@@ -21,6 +21,8 @@ import optuna
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import Config
 import re
+from utils import transform_credible_sets_to_locuszoom
+
 logging.basicConfig(level=logging.INFO)
 
 try:
@@ -727,28 +729,10 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         except Exception as e:
             logger.warning(f"[FINEMAP] Error processing credible sets: {str(e)}")
         
-        # Fallback: use high PIP threshold
-        logger.info(f"[FINEMAP] Using fallback: variants with PIP > 0.1")
-        high_pip_mask = sub_region_sumstats_ld["PIP"] > 0.1
-        if high_pip_mask.sum() > 0:
-            fallback_result = sub_region_sumstats_ld[high_pip_mask].copy()
-        else:
-            # Return top 10 SNPs by PIP
-            top_n = min(10, len(sub_region_sumstats_ld))
-            fallback_result = sub_region_sumstats_ld.nlargest(top_n, 'PIP').copy()
+        logger.warning(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - No credible sets identified")
         
-        # Add metadata to fallback result
-        fallback_result['cs'] = 1  # Single credible set
-        fallback_result['credible_set'] = 1
-        fallback_result['region_id'] = f"chr{chr_num}:{lead_variant_position}"
-        fallback_result['region_chr'] = chr_num
-        fallback_result['region_center'] = lead_variant_position
-        fallback_result['converged'] = True
-        
-        logger.info(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - Fallback result: {len(fallback_result)} SNPs with PIP > 0.1 or top variants")
-        
-        # Return DataFrame directly for multiprocessing
-        return fallback_result
+            
+        return None
             
     except Exception as e:
         logger.error(f"[FINEMAP] Error in fine-mapping chr{chr_num}:{lead_variant_position}: {str(e)}")
@@ -818,6 +802,8 @@ def finemap_region_batch_worker(batch_data):
         coverage = finemap_params['coverage']
         min_abs_corr = finemap_params['min_abs_corr']
         population = finemap_params['population']
+        ref_genome = finemap_params.get('ref_genome', 'Unknown')
+        maf_threshold = finemap_params.get('maf_threshold', 0.01)
         
         # Recreate database connection in worker process
         if db_params:
@@ -912,9 +898,28 @@ def finemap_region_batch_worker(batch_data):
                     # Save to database if available
                     if analysis_handler and user_id and project_id:
                         try:
-                            from utils import transform_credible_sets_to_locuszoom
-                            
-                            lead_variant_id = region['variant_id']
+                            # Determine lead variant
+                            try:
+                                if 'cs' in result.columns and (result['cs'] > 0).any():
+                                    candidate_df = result[result['cs'] > 0]
+                                else:
+                                    candidate_df = result
+
+                                lead_variant_id = None
+
+                                if 'PIP' in candidate_df.columns:
+                                    try:
+                                        lead_variant_id = candidate_df['PIP'].astype(float).idxmax()
+                                    except Exception:
+                                        lead_variant_id = None
+
+                                if lead_variant_id is None:
+                                    lead_variant_id = str(candidate_df.index[0])
+
+                                logger.info(f"[BATCH-{batch_id}] Lead variant selected from results: {lead_variant_id}")
+                            except Exception as lead_e:
+                                logger.warning(f"[BATCH-{batch_id}] Lead selection from results failed ({lead_e}); using region seed {region['variant_id']}")
+                                lead_variant_id = region['variant_id']
                             credible_sets_data = []
                             
                             # Transform results
@@ -937,6 +942,8 @@ def finemap_region_batch_worker(batch_data):
                                 "position": region['position'],
                                 "finemap_window_kb": window,
                                 "population": population,
+                                "ref_genome": ref_genome,
+                                "maf_threshold": maf_threshold,
                                 "seed": seed,
                                 "L": L,
                                 "coverage": coverage,
@@ -946,13 +953,14 @@ def finemap_region_batch_worker(batch_data):
                                 "completed_at": datetime.now().isoformat()
                             }
                             
-                            analysis_handler.save_lead_variant_credible_sets(
-                                user_id, project_id, lead_variant_id, 
-                                {
-                                    "credible_sets": credible_sets_data,
-                                    "metadata": metadata
-                                }
-                            )
+                            # Save each credible set separately
+                            for credible_set in credible_sets_data:
+                                # Add metadata and completion time to each credible set
+                                credible_set["metadata"] = metadata
+                                credible_set["completed_at"] = metadata["completed_at"]
+                                
+                                # Save individual credible set
+                                analysis_handler.save_credible_set(user_id, project_id, credible_set)
                             
                             logger.info(f"[BATCH-{batch_id}] Saved {len(credible_sets_data)} credible sets for {lead_variant_id}")
                             

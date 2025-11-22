@@ -2,6 +2,8 @@ from bson.objectid import ObjectId
 from datetime import datetime, timezone
 import os
 import json
+
+from loguru import logger
 from .base_handler import BaseHandler
 
 
@@ -12,7 +14,7 @@ class ProjectHandler(BaseHandler):
         super().__init__(uri, db_name)
         self.projects_collection = self.db['projects']
     
-    def create_project(self, user_id, name, gwas_file_id, phenotype):
+    def create_project(self, user_id, name, gwas_file_id, phenotype,population, ref_genome, analysis_parameters=None):
         """Create a new project"""
         project_data = {
             'user_id': user_id,
@@ -21,7 +23,10 @@ class ProjectHandler(BaseHandler):
             'created_at': datetime.now(timezone.utc),
             'updated_at': datetime.now(timezone.utc),
             'status': 'active',
-            'gwas_file_id': gwas_file_id
+            'gwas_file_id': gwas_file_id,
+            'population': population,
+            'ref_genome': ref_genome,
+            'analysis_parameters': analysis_parameters or {}
         }
         result = self.projects_collection.insert_one(project_data)
         return str(result.inserted_id)
