@@ -10,7 +10,7 @@ class FileHandler(BaseHandler):
         super().__init__(uri, db_name)
         self.file_metadata_collection = self.db['file_metadata']
     
-    def create_file_metadata(self, user_id, filename, original_filename, file_path, file_type, file_size, md5_hash=None):
+    def create_file_metadata(self, user_id, filename, original_filename, file_path, file_type, file_size, md5_hash=None, record_count=None, download_url=None):
         """Create file metadata entry"""
         file_data = {
             'user_id': user_id,
@@ -20,7 +20,9 @@ class FileHandler(BaseHandler):
             'file_type': file_type,
             'file_size': file_size,
             'upload_date': datetime.now(timezone.utc),
-            'md5_hash': md5_hash
+            'md5_hash': md5_hash,
+            'record_count': record_count,
+            'download_url': download_url
         }
         result = self.file_metadata_collection.insert_one(file_data)
         return str(result.inserted_id)
