@@ -136,7 +136,7 @@ def setup_api(config):
     })
     api.add_resource(CredibleSetsAPI, "/credible-sets", resource_class_kwargs={"analysis": deps['analysis']})
     # GWAS files
-    api.add_resource(GWASFilesAPI, "/gwas-files", resource_class_kwargs={"config": config, "phenotypes": deps['phenotypes']})
+    api.add_resource(GWASFilesAPI, "/gwas-files", resource_class_kwargs={"config": config})
     api.add_resource(GWASFileDownloadAPI, "/gwas-files/download/<string:file_id>", resource_class_kwargs={"config": config})
 
 

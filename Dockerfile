@@ -159,7 +159,6 @@ RUN wget -qO- https://astral.sh/uv/install.sh | sh && \
 
 # Copy project files needed for uv
 COPY pyproject.toml .
-COPY uv.lock .
 
 # Set up Python environment with uv
 ENV UV_PROJECT_ENVIRONMENT=/opt/flask-venv

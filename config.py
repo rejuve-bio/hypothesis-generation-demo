@@ -4,7 +4,7 @@ from llm import LLM
 from query_swipl import PrologQuery
 from db import (
     UserHandler, ProjectHandler, FileHandler, AnalysisHandler,
-    EnrichmentHandler, HypothesisHandler, SummaryHandler, TaskHandler, PhenotypeHandler,
+    EnrichmentHandler, HypothesisHandler, SummaryHandler, TaskHandler,
     GeneExpressionHandler
 )
 
