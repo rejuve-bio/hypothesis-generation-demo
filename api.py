@@ -1002,9 +1002,8 @@ class GWASFilesAPI(Resource):
     """
     API endpoint for automatically discovering GWAS files and extracting their metadata
     """
-    def __init__(self, config, phenotypes):
+    def __init__(self, config):
         self.config = config
-        self.phenotypes = phenotypes
 
     def get(self):
         """Automatically discover GWAS files and extract their metadata"""
