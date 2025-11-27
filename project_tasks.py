@@ -2,7 +2,6 @@ import os
 import pandas as pd
 from prefect import task
 from loguru import logger
-from datetime import datetime, timezone
 import gzip
 import re
 
@@ -241,36 +240,11 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
         logger.error(f"Error getting comprehensive project data for {project_id}: {str(e)}")
         return {"error": f"Error retrieving project data: {str(e)}"}, 500
 
-
-def get_phenotype_name(phenotype_id):
-    """Get phenotype name from known UK Biobank field IDs"""
-    known_phenotypes = {
-        "21001": "Body Mass Index (BMI)",
-        "50": "Standing Height",
-        "23104": "Body Fat Percentage", 
-        "21002": "Weight",
-        "23105": "Basal Metabolic Rate",
-        "23106": "Impedance",
-        "23107": "Arm Fat-free Mass",
-        "23108": "Arm Fat Mass",
-        "23109": "Arm Predicted Mass",
-        "48": "Waist Circumference",
-        "49": "Hip Circumference"
-    }
-    return known_phenotypes.get(phenotype_id, f"Phenotype {phenotype_id}")
-
-
 def extract_gwas_file_metadata(file_path):
     """Extract metadata from a GWAS file by examining its content"""
     filename = os.path.basename(file_path)
     
     try:
-        # Extract phenotype ID from filename
-        phenotype_id = None
-        match = re.match(r'^(\d+)_', filename)
-        if match:
-            phenotype_id = match.group(1)
-        
         # Determine file type and how to open it
         if file_path.endswith('.bgz'):
             with gzip.open(file_path, 'rt') as f:
@@ -299,41 +273,12 @@ def extract_gwas_file_metadata(file_path):
             except (ValueError, IndexError):
                 pass
         
-        # Extract population from filename patterns
-        population = "Unknown"
-        if "both_sexes" in filename:
-            population = "Mixed"
-        elif "male" in filename:
-            population = "Male"
-        elif "female" in filename:
-            population = "Female"
-        elif re.search(r'(eur|european)', filename.lower()):
-            population = "EUR"
-        elif re.search(r'(afr|african)', filename.lower()):
-            population = "AFR"
-        elif re.search(r'(eas|east_asian)', filename.lower()):
-            population = "EAS"
-        elif re.search(r'(sas|south_asian)', filename.lower()):
-            population = "SAS"
-        elif re.search(r'(amr|american)', filename.lower()):
-            population = "AMR"
-        else:
-            # Default to EUR for UK Biobank files
-            if phenotype_id and phenotype_id.startswith(('2', '50', '23')):
-                population = "EUR"
-        
         # Determine genome build
         genome_build = "GRCh37"
         if "hg38" in filename.lower() or "grch38" in filename.lower():
             genome_build = "GRCh38"
         
-        # Get phenotype name from known mappings or use ID
-        phenotype_name = get_phenotype_name(phenotype_id) if phenotype_id else "Unknown"
-        
         return {
-            "phenotype_id": phenotype_id,
-            "phenotype_name": phenotype_name,
-            "population": population,
             "sample_size": sample_size,
             "genome_build": genome_build,
             "header_columns": header,
@@ -343,8 +288,6 @@ def extract_gwas_file_metadata(file_path):
     except Exception as e:
         logger.warning(f"Could not extract metadata from {filename}: {str(e)}")
         return {
-            "phenotype_id": phenotype_id,
-            "phenotype_name": f"Phenotype {phenotype_id}" if phenotype_id else "Unknown",
             "population": "Unknown",
             "sample_size": "Unknown",
             "genome_build": "Unknown",

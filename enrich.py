@@ -1,5 +1,5 @@
 from collections import namedtuple
-from typing import NamedTuple, List, Optional, Tuple
+from typing import List, Optional
 import pickle
 import gseapy as gp
 from config import Config
@@ -76,13 +76,6 @@ class Enrich:
     def get_coexpression_net(self, relevant_gene, tissue_name=None, cell_type=None, k=500, user_id=None, project_id=None):
         """
         Given a gene, tissue and cell_type, return the top correlated genes using CellxGene API.
-        :param relevant_gene: Gene symbol
-        :param tissue_name: Tissue name from user selection 
-        :param cell_type: Cell type for more specificity (optional)
-        :param k: Number of top correlated genes to return
-        :param user_id: User ID for project-specific work directory 
-        :param project_id: Project ID for project-specific work directory
-        :return: List of gene symbols
         """
         if not tissue_name:
             return self._load_fallback_coexpression_data()
@@ -121,11 +114,6 @@ class Enrich:
                                         project_id: str, tissue_name: str) -> Optional[List[str]]:
         """
         Get tissue-specific background genes for enrichment analysis.
-        
-        :param relevant_gene: Gene symbol
-        :param user_id: User ID for project-specific work directory
-        :param project_id: Project ID for project-specific work directory
-        :param tissue_name: Tissue name to analyze
         :return: List of background genes or None if failed
         """
         try:
@@ -155,9 +143,6 @@ class Enrich:
     def _process_enrichment_results(self, res: pd.DataFrame) -> pd.DataFrame:
         """
         Process and filter enrichment results from gseapy.
-        
-        :param res: Raw results DataFrame from gseapy.enrichr
-        :return: Processed DataFrame with GO descriptions
         """
         res.drop("Gene_set", axis=1, inplace=True)
         res.insert(1, "ID", res["Term"].apply(
@@ -183,11 +168,6 @@ class Enrich:
     def run(self, relevant_gene, tissue_name=None, user_id=None, project_id=None):
         """
         Given a gene, return the enriched GO terms based on its co-expression network.
-        Now supports tissue-specific analysis when tissue_name is provided.
-        :param relevant_gene: Gene symbol
-        :param tissue_name: Tissue name from LDSC analysis (optional)
-        :param user_id: User ID for project-specific work directory
-        :param project_id: Project ID for project-specific work directory
         """
         library = "GO_Biological_Process_2023"
         organism = "Human"

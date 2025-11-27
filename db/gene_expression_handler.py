@@ -14,8 +14,6 @@ class GeneExpressionHandler(BaseHandler):
         super().__init__(uri, db_name)
         self.gene_expression_runs_collection = self.db['gene_expression_runs']
         self.ldsc_results_collection = self.db['ldsc_results']
-        self.coexpression_results_collection = self.db['coexpression_results']
-        self.pathway_results_collection = self.db['pathway_results']
         self.tissue_mappings_collection = self.db['tissue_mappings']
     
     def create_gene_expression_run(self, gwas_file, gene_of_interest, project_id, user_id):
@@ -102,79 +100,6 @@ class GeneExpressionHandler(BaseHandler):
             logger.error(f"Error saving tissue mappings: {str(e)}")
             raise
 
-
-    def save_coexpression_results(self, analysis_run_id, hgnc_converted_results):
-        """Save co-expression results"""
-        try:
-            results_docs = []
-            for tissue_name, results in hgnc_converted_results.items():
-                # Save positive correlations
-                for rank, (gene_symbol, correlation) in enumerate(results.get('top_positive_hgnc', [])):
-                    doc = {
-                        'id': str(uuid4()),
-                        'analysis_run_id': analysis_run_id,
-                        'tissue_name': tissue_name,
-                        'gene_symbol': gene_symbol,
-                        'correlation': correlation,
-                        'correlation_type': 'positive',
-                        'rank_order': rank + 1,
-                        'created_at': datetime.now(timezone.utc)
-                    }
-                    results_docs.append(doc)
-                
-                # Save negative correlations
-                for rank, (gene_symbol, correlation) in enumerate(results.get('top_negative_hgnc', [])):
-                    doc = {
-                        'id': str(uuid4()),
-                        'analysis_run_id': analysis_run_id,
-                        'tissue_name': tissue_name,
-                        'gene_symbol': gene_symbol,
-                        'correlation': correlation,
-                        'correlation_type': 'negative',
-                        'rank_order': rank + 1,
-                        'created_at': datetime.now(timezone.utc)
-                    }
-                    results_docs.append(doc)
-            
-            if results_docs:
-                self.coexpression_results_collection.insert_many(results_docs)
-                logger.info(f"Saved {len(results_docs)} co-expression results for analysis {analysis_run_id}")
-            return len(results_docs)
-        except Exception as e:
-            logger.error(f"Error saving co-expression results: {str(e)}")
-            raise
-
-
-    def save_pathway_results(self, analysis_run_id, pathway_results):
-        """Save pathway enrichment results"""
-        try:
-            results_docs = []
-            for tissue_name, df in pathway_results.items():
-                if df is not None and not df.empty:
-                    for _, row in df.iterrows():
-                        doc = {
-                            'id': str(uuid4()),
-                            'analysis_run_id': analysis_run_id,
-                            'tissue_name': tissue_name,
-                            'pathway_term': row.get('Term', ''),
-                            'pathway_id': row.get('ID', ''),
-                            'adjusted_p_value': row.get('Adjusted P-value'),
-                            'odds_ratio': row.get('Odds Ratio'),
-                            'overlap_count': row.get('Overlap'),
-                            'pathway_size': row.get('Gene_set_size'),
-                            'created_at': datetime.now(timezone.utc)
-                        }
-                        results_docs.append(doc)
-            
-            if results_docs:
-                self.pathway_results_collection.insert_many(results_docs)
-                logger.info(f"Saved {len(results_docs)} pathway results for analysis {analysis_run_id}")
-            return len(results_docs)
-        except Exception as e:
-            logger.error(f"Error saving pathway results: {str(e)}")
-            raise
-
-
     def get_gene_expression_results(self, project_id=None, user_id=None, gene_of_interest=None):
         """Get gene expression analysis results"""
         query = {}
@@ -197,26 +122,13 @@ class GeneExpressionHandler(BaseHandler):
                 {'analysis_run_id': analysis_run_id}
             ).sort('rank_order', 1))
             
-            # Get co-expression results
-            coexp_results = list(self.coexpression_results_collection.find(
-                {'analysis_run_id': analysis_run_id}
-            ).sort([('tissue_name', 1), ('correlation_type', 1), ('rank_order', 1)]))
-            
-            # Get pathway results
-            pathway_results = list(self.pathway_results_collection.find(
-                {'analysis_run_id': analysis_run_id}
-            ).sort([('tissue_name', 1), ('adjusted_p_value', 1)]))
-            
             # Clean up _id fields
-            for result_list in [ldsc_results, coexp_results, pathway_results]:
-                for result in result_list:
-                    result['_id'] = str(result['_id'])
+            for result in ldsc_results:
+                result['_id'] = str(result['_id'])
             
             results.append({
                 'run_info': run,
-                'ldsc_results': ldsc_results,
-                'coexpression_results': coexp_results,
-                'pathway_results': pathway_results
+                'ldsc_results': ldsc_results
             })
         
         return results
@@ -239,55 +151,14 @@ class GeneExpressionHandler(BaseHandler):
         # Count results
         analysis_run_id = latest_run['id']
         ldsc_count = self.ldsc_results_collection.count_documents({'analysis_run_id': analysis_run_id})
-        coexp_count = self.coexpression_results_collection.count_documents({'analysis_run_id': analysis_run_id})
-        pathway_count = self.pathway_results_collection.count_documents({'analysis_run_id': analysis_run_id})
         
         return {
             'status': latest_run['status'],
             'has_data': latest_run['status'] == 'completed',
             'gene_of_interest': latest_run['gene_of_interest'],
             'created_at': latest_run['created_at'],
-            'ldsc_count': ldsc_count,
-            'coexpression_count': coexp_count,
-            'pathway_count': pathway_count
+            'ldsc_count': ldsc_count
         }
-
-
-    def get_coexpressed_genes_for_enrichment(self, gene_of_interest, project_id=None, min_correlation=0.5):
-        """Get co-expressed genes for enrichment analysis"""
-        # Find latest completed run
-        run_query = {'gene_of_interest': gene_of_interest, 'status': 'completed'}
-        if project_id:
-            run_query['project_id'] = project_id
-        
-        latest_run = self.gene_expression_runs_collection.find_one(
-            run_query, sort=[('created_at', -1)]
-        )
-        
-        if not latest_run:
-            return []
-        
-        # Get co-expressed genes
-        coexp_query = {
-            'analysis_run_id': latest_run['id'],
-            'correlation_type': 'positive',
-            'correlation': {'$gte': min_correlation}
-        }
-        
-        coexp_results = list(self.coexpression_results_collection.find(
-            coexp_query
-        ).sort('correlation', -1))
-        
-        # Return unique gene symbols
-        seen_genes = set()
-        unique_genes = []
-        for result in coexp_results:
-            gene_symbol = result['gene_symbol']
-            if gene_symbol not in seen_genes:
-                unique_genes.append(gene_symbol)
-                seen_genes.add(gene_symbol)
-        
-        return unique_genes
 
     # ==================== TISSUE SELECTION METHODS ====================
     

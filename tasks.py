@@ -8,15 +8,11 @@ from cyvcf2 import VCF, Writer
 from prefect import task, flow
 import json
 from datetime import datetime, timezone
-from threading import Thread
-import traceback
-
 
 
 logging.basicConfig(level=logging.INFO)
 
 ### Helper Functions
-
 def parse_prolog_graphs(raw_response):
     """Parse graphs from Prolog response, skipping any that fail to parse."""
     graphs_raw = raw_response.get('response', [])

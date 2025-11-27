@@ -73,7 +73,6 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
 
     # Filter to only include 'started' state entries and keep the latest 5
     filtered_history = [entry for entry in task_history if entry["state"] == "completed"]
-    # latest_5_started_tasks = sorted(filtered_history, key=lambda x: x["timestamp"], reverse=True)[:5]
     latest_5_started_tasks = filtered_history[-5:]
 
     if progress == 0:

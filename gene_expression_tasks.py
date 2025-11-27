@@ -1,28 +1,21 @@
 import os
 import subprocess
 import json
-from time import time
-import warnings
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from datetime import datetime, timezone
 from prefect import task
 from loguru import logger
 import requests
-import gseapy as gp
 from scipy.stats import pearsonr
 from scipy import sparse
 import cellxgene_census
 import tiledbsoma as soma
 import multiprocessing
-from functools import partial
 import re
-from collections import Counter
 from config import Config
 import shutil
 import pickle
-
 
 try:
     import warnings
@@ -73,9 +66,6 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
         '--w-ld-chr', '1000G_Phase3_weights_hm3_no_MHC/weights.hm3_noMHC.'
     ]
     
-    logger.info(f"LDSC command: {' '.join(cmd)}")
-    logger.info(f"Working directory will be: {ldsc_data_dir}")
-    
     original_dir = os.getcwd()
     os.chdir(ldsc_data_dir)
     
@@ -119,8 +109,7 @@ def process_ldsc_results(results_dir, output_prefix, top_n=10):
     df_sorted = df_filtered.sort_values(by=df.columns[1], ascending=False)
     top_tissues_df = df_sorted.head(top_n)
     
-    # Clean tissue names
-    
+    # Clean tissue names 
     top_tissues = [
         re.sub(r"_\(", "_", name).replace(")", "") 
         for name in top_tissues_df['Name'].tolist()
@@ -133,7 +122,6 @@ def process_ldsc_results(results_dir, output_prefix, top_n=10):
 @task(log_prints=True)
 def load_ontology_mappings(work_dir):
     """Load mappings - uses shared cache directory from config"""
-    # Get ontology cache directory from config (shared across all projects)
     config = Config.from_env()
     cache_dir = Path(config.ontology_cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -396,179 +384,6 @@ def process_batch(start, *, batch_size, other_gene_joinids, other_genes,
 
         return local_correlations
 
-@task(log_prints=True)
-def run_coexpression_analysis(gene_of_interest, ontology_mapping_results, k=500):
-    """Complete co-expression analysis"""
-    
-    def get_coexpression_matrix(gene, tissue_uberon_id, k=500, batch_size=1000, use_prefilter=False):
-        with cellxgene_census.open_soma(census_version="2024-07-01") as census:
-            experiment = census["census_data"]["homo_sapiens"]
-            # Use tissue_ontology_term_id to filter by UBERON ID
-            value_filter = f"tissue_ontology_term_id == '{tissue_uberon_id}'"
-            
-            try:
-                axis_query = experiment.axis_query(
-                    measurement_name="RNA",
-                    obs_query=soma.AxisQuery(value_filter=value_filter)
-                )
-            except ValueError:
-                logger.warning(f"No cells found for tissue UBERON ID '{tissue_uberon_id}'")
-                return [], [], []
-
-            obs_joinids = axis_query.obs_joinids().to_numpy()
-
-            if len(obs_joinids) > 100000:
-                obs_joinids = obs_joinids[:100000] 
-                n = 100000
-            else:
-                n = len(obs_joinids)
-                
-            if n == 0:
-                logger.warning(f"No cells found for tissue UBERON ID '{tissue_uberon_id}'")
-                return [], [], []
-
-            var_df = experiment.ms["RNA"].var.read(
-                column_names=["soma_joinid", "feature_id"]
-            ).concat().to_pandas().set_index("feature_id")
-            genes = var_df.index.tolist()
-
-            if gene not in genes:
-                logger.warning(f"Gene of interest '{gene}' not found in dataset")
-                return [], [], genes
-
-            gene_joinid = var_df.loc[gene]["soma_joinid"]
-
-            # Get gene expression
-            gene_table_iter = experiment.ms["RNA"].X["raw"].read((obs_joinids.tolist(), [gene_joinid])).tables()
-            gene_expr = np.zeros(n, dtype=np.float32)
-            joinid_to_idx = {jid: idx for idx, jid in enumerate(obs_joinids)}
-            
-            for batch in gene_table_iter:
-                cell_jids = batch["soma_dim_0"].to_numpy()
-                values = batch["soma_data"].to_numpy()
-                indices = np.array([joinid_to_idx.get(cjid, -1) for cjid in cell_jids], dtype=np.int32)
-                valid_mask = indices != -1
-                gene_expr[indices[valid_mask]] = values[valid_mask]
-
-            non_zero_rows = np.nonzero(gene_expr)[0]
-            non_zero_sample_count = len(non_zero_rows)
-            total_samples = n
-            non_zero_percentage = (non_zero_sample_count / total_samples) * 100 if total_samples > 0 else 0
-
-            logger.info(f"Total samples: {total_samples}")
-            logger.info(f"Samples with non-zero expression for '{gene}': {non_zero_sample_count} ({non_zero_percentage:.2f}%)")
-
-            if non_zero_sample_count < 2:
-                logger.warning(f"Not enough samples with non-zero expression for '{gene}'")
-                return [], [], genes
-
-            # Subset to non-zero cells
-            sub_joinids = obs_joinids[non_zero_rows]
-            gene_expr_sub = gene_expr[non_zero_rows]
-
-            if np.var(gene_expr_sub, ddof=1) <= 0:
-                logger.warning(f"Zero variance for '{gene}' in non-zero samples")
-                return [], [], genes
-
-            # Prepare other genes
-            all_gene_joinids = var_df["soma_joinid"].to_numpy()
-            mask = all_gene_joinids != gene_joinid
-            other_gene_joinids = all_gene_joinids[mask]
-            other_genes = np.array(genes)[mask]
-
-            # Pre-filtering if requested
-            if use_prefilter:
-                logger.info("Pre-filtering genes...")
-                gene_nnz = np.zeros(len(other_gene_joinids), dtype=np.int32)
-                batch_iter = experiment.ms["RNA"].X["raw"].read((sub_joinids.tolist(), other_gene_joinids.tolist())).tables()
-                
-                for batch in batch_iter:
-                    gene_jids = batch["soma_dim_1"].to_numpy()
-                    for gjid in gene_jids:
-                        idx = np.where(other_gene_joinids == gjid)[0]
-                        if idx.size > 0:
-                            gene_nnz[idx[0]] += 1
-                
-                expr_mask = gene_nnz > 0
-                other_gene_joinids = other_gene_joinids[expr_mask]
-                other_genes = other_genes[expr_mask]
-
-                if len(other_gene_joinids) == 0:
-                    logger.warning("No genes with non-zero expression found")
-                    return [], [], genes
-
-            # Pre-compute cell index mapping
-            sub_joinid_to_idx = {jid: idx for idx, jid in enumerate(sub_joinids)}
-
-            # Process correlations in batches with multiprocessing
-            correlations = {}
-            num_genes = len(other_gene_joinids)
-            num_batches = (num_genes + batch_size - 1) // batch_size
-            batch_iterable = range(0, num_genes, batch_size)
-
-            logger.info(f"Processing {num_batches} batches of {batch_size} genes each...")
-
-            num_processes = min(multiprocessing.cpu_count(), 4)  # Limit processes
-
-            batch_results = []
-            for batch_start in batch_iterable:
-                logger.info(f"Processing batch starting at gene {batch_start}")
-                result = process_batch(
-                    batch_start,
-                    batch_size=batch_size,
-                    other_gene_joinids=other_gene_joinids,
-                    other_genes=other_genes,
-                    sub_joinids=sub_joinids,
-                    gene_expr_sub=gene_expr_sub,
-                    census_version="2024-07-01",
-                    sub_joinid_to_idx=sub_joinid_to_idx
-                )
-                batch_results.append(result)
-
-            for result in batch_results:
-                correlations.update(result)
-
-            if not correlations:
-                logger.warning("No significant correlations found")
-                return [], [], genes
-
-            logger.info(f"Found {len(correlations)} significant correlations")
-            sorted_correlations = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
-            top_positive = sorted_correlations[:k]
-            top_negative = sorted_correlations[-k:]
-
-            return top_positive, top_negative, genes
-    
-    cellxgene_coexp_results = {}
-    processed_tissues = set()  # Track already processed tissues
-    
-    for tissue_key, tissue_value in ontology_mapping_results.items():
-        # Use UBERON ID instead of ontology name
-        target_uberon_id = tissue_value.get("cellxgene_descendant_uberon_id") or tissue_value.get("cellxgene_parent_uberon_id")
-        target_tissue_name = tissue_value.get("cellxgene_descendant_ontology_name") or tissue_value.get("cellxgene_parent_ontology_name")
-        
-        if target_uberon_id:
-            if target_uberon_id in processed_tissues:
-                logger.info(f"Skipping co-expression for tissue: {target_tissue_name} ({target_uberon_id}) (already processed)")
-                continue
-                
-            logger.info(f"Processing co-expression for tissue: {target_tissue_name} ({target_uberon_id})")
-            top_pos, top_neg, all_gene_ids = get_coexpression_matrix(gene_of_interest, target_uberon_id, k)
-            
-            # Store results using the tissue name as key for readability
-            result_key = target_tissue_name or target_uberon_id
-            cellxgene_coexp_results[result_key] = {
-                'top_positive': top_pos,
-                'top_negative': top_neg,
-                'all_genes': all_gene_ids
-            }
-            processed_tissues.add(target_uberon_id)
-        else:
-            logger.warning(f"No target tissue UBERON ID found for {tissue_key}")
-    
-    return cellxgene_coexp_results
-
-
 def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k=500):
     
     def get_coexpression_matrix(gene, tissue_uberon_id, cell_type, k=500, batch_size=1000, use_prefilter=False):
@@ -697,231 +512,6 @@ def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k
     # Run the analysis
     return get_coexpression_matrix(gene, tissue_uberon_id, cell_type, k)
 
-
-@task(log_prints=True)
-def convert_ensembl_to_hgnc(cellxgene_coexp_results, work_dir):
-    """Convert IDs"""
-    work_dir = Path(work_dir)
-    
-    ensembl_to_hgnc_file = Path("data/ensembl_to_hgnc.pkl")
-    
-    if ensembl_to_hgnc_file.exists():
-        try:
-            with open(ensembl_to_hgnc_file, 'rb') as f:
-                ensembl_to_hgnc_map = pickle.load(f)
-        
-            hgnc_converted_results = {}
-            for tissue_name, coexp_results in cellxgene_coexp_results.items():
-                top_positive_hgnc = [(ensembl_to_hgnc_map.get(gene_id, gene_id), corr) 
-                                for gene_id, corr in coexp_results['top_positive']]
-                top_negative_hgnc = [(ensembl_to_hgnc_map.get(gene_id, gene_id), corr) 
-                                for gene_id, corr in coexp_results['top_negative']]
-                all_genes_hgnc = [ensembl_to_hgnc_map.get(gene_id, gene_id) 
-                                for gene_id in coexp_results['all_genes']]
-                
-                hgnc_converted_results[tissue_name] = {
-                    'top_positive_hgnc': top_positive_hgnc,
-                    'top_negative_hgnc': top_negative_hgnc,
-                    'all_genes_hgnc': all_genes_hgnc
-                }
-            
-            return hgnc_converted_results, True
-        except Exception as e:
-            logger.warning(f"Error loading HGNC mapping: {e}")
-            return cellxgene_coexp_results, False
-    else:
-        logger.warning("Ensembl to HGNC mapping not found")
-        return cellxgene_coexp_results, False
-
-
-@task(log_prints=True)
-def run_pathway_enrichment(hgnc_converted_results):
-    """Run pathway enrichmen"""
-    pathway_library = "GO_Biological_Process_2023"
-    organism = "Human"
-    
-    pathway_enrichment_results = {}
-    
-    for tissue_name, hgnc_results in hgnc_converted_results.items():
-        try:
-            gene_list = [gene_data[0] for gene_data in hgnc_results['top_positive_hgnc']]
-            background = hgnc_results['all_genes_hgnc']
-            
-            if len(gene_list) > 0 and len(background) > 0:
-                enrichment_res = gp.enrichr(
-                    gene_list=gene_list,
-                    gene_sets=pathway_library,
-                    background=background,
-                    organism=organism,
-                    outdir=None
-                ).results
-                
-                enrichment_res.drop("Gene_set", axis=1, inplace=True)
-                enrichment_res.insert(1, "ID", enrichment_res["Term"].apply(
-                    lambda x: x.split("(")[1].split(")")[0] if "(" in x and ")" in x else ""
-                ))
-                enrichment_res["Term"] = enrichment_res["Term"].apply(lambda x: x.split("(")[0])
-                enrichment_res = enrichment_res[enrichment_res["Adjusted P-value"] < 0.05]
-                
-                pathway_enrichment_results[tissue_name] = enrichment_res
-                logger.info(f"Found {len(enrichment_res)} significant pathways for {tissue_name}")
-            else:
-                pathway_enrichment_results[tissue_name] = None
-                
-        except Exception as e:
-            logger.error(f"Error in pathway analysis for {tissue_name}: {e}")
-            pathway_enrichment_results[tissue_name] = None
-    
-    return pathway_enrichment_results
-
-@task(log_prints=True)
-def find_munged_gwas_file(analysis, user_id, project_id):
-    """Find munged GWAS file from project using database"""
-    
-    try:
-        # Get project analysis state from database
-        analysis_state = analysis.load_analysis_state(user_id, project_id)
-        
-        if not analysis_state:
-            logger.warning(f"No analysis state found for project {project_id}")
-            return None
-        
-        # Look for munged file path in analysis results
-        analysis_results = analysis.get_analysis_results(user_id, project_id)
-        
-        if analysis_results:
-            # Check if results contain munged file path
-            for result in analysis_results:
-                if 'munged_file' in result:
-                    munged_file = result['munged_file']
-                    if os.path.exists(munged_file):
-                        logger.info(f"Found munged GWAS file from database: {munged_file}")
-                        return munged_file
-        
-        # Fallback: look in project directory structure
-        project_dir = Path(f"data/projects/{user_id}/{project_id}/analysis")
-        if project_dir.exists():
-            # Common patterns for munged files
-            patterns = ["*munged*.tsv", "*munged*.gz", "munged_*.tsv"]
-            
-            for pattern in patterns:
-                files = list(project_dir.glob(pattern))
-                if files:
-                    munged_file = str(files[0])
-                    logger.info(f"Found munged GWAS file in project dir: {munged_file}")
-                    return munged_file
-        
-        logger.warning(f"No munged GWAS file found for project {project_id}")
-        return None
-        
-    except Exception as e:
-        logger.error(f"Error finding munged GWAS file: {e}")
-        return None
-
-
-@task(log_prints=True) 
-def extract_coexpressed_genes_for_enrichment(hgnc_converted_results):
-    """Extract co-expressed genes from tissue analysis results for enrichment"""
-    
-    all_coexpressed_genes = []
-    
-    for tissue_name, results in hgnc_converted_results.items():
-        if 'top_positive_hgnc' in results:
-            # Get top 20 genes from each tissue
-            tissue_genes = [gene_data[0] for gene_data in results['top_positive_hgnc'][:20]]
-            all_coexpressed_genes.extend(tissue_genes)
-            logger.info(f"Added {len(tissue_genes)} co-expressed genes from {tissue_name}")
-    
-    # Remove duplicates while preserving order
-    unique_genes = []
-    seen = set()
-    for gene in all_coexpressed_genes:
-        if gene not in seen:
-            unique_genes.append(gene)
-            seen.add(gene)
-    
-    logger.info(f"Extracted {len(unique_genes)} unique co-expressed genes for enrichment")
-    return unique_genes
-
-@task(log_prints=True, cache_policy=None)
-def run_tissue_analysis_pipeline(gene_expression, analysis, current_user_id, project_id, causal_gene, hypothesis_id):
-    """Run the complete tissue analysis pipeline using Prefect tasks"""
-    
-    # Find munged GWAS file from project analysis
-    munged_file = find_munged_gwas_file.submit(analysis, current_user_id, project_id).result()
-    if not munged_file:
-        raise ValueError("No munged GWAS file found for project")
-    
-    # Create work directories
-    work_dir = f"data/gene_expression/{current_user_id}/{project_id}"
-    os.makedirs(work_dir, exist_ok=True)
-    
-    # Create analysis run record
-    analysis_run_id = gene_expression.create_gene_expression_run(
-        gwas_file=munged_file,
-        gene_of_interest=causal_gene,
-        project_id=project_id,
-        user_id=current_user_id
-    )
-    
-    # Setup and run LDSC using Prefect tasks
-    ldsc_dir = setup_ldsc_environment.submit(f"{work_dir}/ldsc_analysis").result()
-    output_prefix = f"{work_dir}/ldsc_results_{causal_gene}"
-    
-    # Run LDSC analysis
-    ldsc_success = run_ldsc_analysis.submit(ldsc_dir, munged_file, output_prefix).result()
-    if not ldsc_success:
-        raise RuntimeError("LDSC analysis failed")
-    
-    # Process results
-    top_tissues, ldsc_results_data = process_ldsc_results.submit(
-        work_dir, f"ldsc_results_{causal_gene}", 10
-    ).result()
-    
-    # Save results to database
-    gene_expression.save_ldsc_results(analysis_run_id, ldsc_results_data)
-    gene_expression.update_gene_expression_run_status(analysis_run_id, 'ldsc_completed')
-    
-    logger.info(f"LDSC analysis completed for {causal_gene}")
-    return ldsc_results_data
-
-
-
-@task(log_prints=True)
-def run_coexpression_pipeline(current_user_id, project_id, causal_gene, tissue_rankings):
-    """Run co-expression analysis pipeline using Prefect tasks"""
-    
-    work_dir = f"data/gene_expression/{current_user_id}/{project_id}/{causal_gene}"
-    os.makedirs(work_dir, exist_ok=True)
-    
-    # Load ontology mappings
-    gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology = load_ontology_mappings.submit(work_dir).result()
-    
-    # Map tissues to CellxGene format
-    tissue_names = [t.get('tissue_name', t.get('Name', '')) for t in tissue_rankings]
-    ontology_mapping_results = map_tissues_to_cellxgene.submit(
-        tissue_names, gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology
-    ).result()
-    
-    # Run co-expression analysis
-    cellxgene_coexp_results = run_coexpression_analysis.submit(
-        causal_gene, ontology_mapping_results, 100
-    ).result()
-    
-    # Convert gene IDs
-    hgnc_converted_results, conversion_successful = convert_ensembl_to_hgnc.submit(
-        cellxgene_coexp_results, work_dir
-    ).result()
-    
-    # Extract co-expressed genes for enrichment
-    tissue_enhanced_genes = extract_coexpressed_genes_for_enrichment.submit(
-        hgnc_converted_results
-    ).result()
-    
-    logger.info(f"Co-expression analysis completed. Found {len(tissue_enhanced_genes)} co-expressed genes")
-    return tissue_enhanced_genes
-
-
 @task(log_prints=True, cache_policy=None)
 def run_combined_ldsc_tissue_analysis(gene_expression, projects_handler, munged_file, output_dir, project_id, user_id):
     """Combined LDSC + tissue analysis as part of main analysis pipeline"""
@@ -976,10 +566,7 @@ def run_combined_ldsc_tissue_analysis(gene_expression, projects_handler, munged_
             tissue_names, gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology
         ).result()
         
-        # Step 5: Save comprehensive results to database
-        logger.info("[PIPELINE] Saving LDSC and tissue mapping results...")
-        
-        # Save LDSC results
+        # Step 5: Save comprehensive results to database        
         gene_expression.save_ldsc_results(analysis_run_id, ldsc_results_data)
         
         # Save tissue mappings
@@ -988,11 +575,9 @@ def run_combined_ldsc_tissue_analysis(gene_expression, projects_handler, munged_
         # Update status to completed
         gene_expression.update_gene_expression_run_status(analysis_run_id, 'ldsc_tissue_completed')
         
-    
         significant_count = len([t for t in ldsc_results_data if t.get('Coefficient_P_value', 1) < 0.05])
         
-        logger.info(f"[PIPELINE] Combined LDSC + tissue analysis completed successfully!")
-        logger.info(f"[PIPELINE] Analyzed {len(ldsc_results_data)} tissues, found {significant_count} significant")
+        logger.info(f"[PIPELINE] LDSC + tissue analysis completed successfully!, Analyzed {len(ldsc_results_data)} tissues, found {significant_count} significant")
         
         return {
             "success": True,
@@ -1007,54 +592,3 @@ def run_combined_ldsc_tissue_analysis(gene_expression, projects_handler, munged_
         if analysis_run_id:
             gene_expression.update_gene_expression_run_status(analysis_run_id, 'failed')
         raise
-
-
-@task(log_prints=True, cache_policy=None)
-def run_background_ldsc_analysis(munged_file, output_dir, project_id, user_id, gene_expression):
-    """Background LDSC analysis as a Prefect task - DEPRECATED, use run_combined_ldsc_tissue_analysis"""
-    analysis_run_id = None
-    try:
-        logger.info("[PIPELINE] Starting LDSC analysis in background")
-        
-        # Create work directory for LDSC
-        ldsc_work_dir = f"{output_dir}/ldsc_analysis"
-        os.makedirs(ldsc_work_dir, exist_ok=True)
-        
-        # Create analysis run record
-        analysis_run_id = gene_expression.create_gene_expression_run(
-            gwas_file=munged_file,
-            gene_of_interest="pending",
-            project_id=project_id,
-            user_id=user_id
-        )
-        
-        # Update status to running
-        gene_expression.update_gene_expression_run_status(analysis_run_id, 'running')
-        
-        # Setup LDSC environment
-        ldsc_dir = setup_ldsc_environment.submit(ldsc_work_dir).result()
-        
-        # Run LDSC analysis
-        output_prefix = f"{output_dir}/ldsc_project_analysis"
-        ldsc_success = run_ldsc_analysis.submit(ldsc_dir, munged_file, output_prefix).result()
-        
-        if not ldsc_success:
-            raise RuntimeError("LDSC analysis failed")
-        
-        # Process LDSC results
-        top_tissues, ldsc_results_data = process_ldsc_results.submit(
-            output_dir, "ldsc_project_analysis", 10
-        ).result()
-        
-        # Save results to database
-        gene_expression.save_ldsc_results(analysis_run_id, ldsc_results_data)
-        gene_expression.update_gene_expression_run_status(analysis_run_id, 'ldsc_completed')
-        
-        logger.info(f"[PIPELINE] LDSC analysis completed successfully!")
-        return True
-        
-    except Exception as e:
-        logger.error(f"[PIPELINE] LDSC analysis failed: {str(e)}")
-        if analysis_run_id:
-            gene_expression.update_gene_expression_run_status(analysis_run_id, 'failed')
-        return False

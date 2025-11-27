@@ -1,12 +1,7 @@
-import asyncio
-import os
-import time
-from flask import json
 from loguru import logger
 from prefect import flow
 from status_tracker import TaskState
 import multiprocessing as mp
-from uuid import uuid4
 
 from tasks import (
     check_enrich, create_enrich_data, get_candidate_genes,
@@ -39,7 +34,6 @@ from utils import emit_task_update
 from config import Config, create_dependencies
 from threading import Thread
 import traceback
-from utils import transform_credible_sets_to_locuszoom
 
 
 ### Enrichment Flow
@@ -281,9 +275,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
     graph = causal_graph_data["graph"]
     graph_index = causal_graph_data.get("graph_index", 0)
     total_graphs = causal_graph_data.get("total_graphs", 1)
-    
-    logger.info(f"Processing graph {graph_index + 1}/{total_graphs} from Prolog server")
-    
+        
     graph_prob = graph.get('prob', {}).get('value', 1.0)
     logger.info(f"Processing graph {graph_index + 1}/{total_graphs} with probability {graph_prob}")
     
@@ -560,15 +552,19 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
                 
                 logger.info(f"[PIPELINE] LDSC + tissue analysis completed successfully!")
                 logger.info(f"[PIPELINE] - Analysis run ID: {ldsc_tissue_result['analysis_run_id']}")
-                logger.info(f"[PIPELINE] - Tissues analyzed: {ldsc_tissue_result['tissues_analyzed']}")
-                logger.info(f"[PIPELINE] - Significant tissues: {ldsc_tissue_result['significant_tissues']}")
-                
                 ldsc_status = "completed"
                 
             except Exception as ldsc_e:
                 logger.error(f"[PIPELINE] LDSC + tissue analysis failed: {str(ldsc_e)}")
-                ldsc_status = "failed"
-                # Continue with pipeline completion even if LDSC fails
+                # LDSC results are required for tissue selection and enrichment - fail the pipeline
+                failed_ldsc_state = {
+                    "status": "Failed",
+                    "stage": "LDSC_Analysis",
+                    "progress": 90,
+                    "message": f"LDSC tissue analysis failed: {str(ldsc_e)}. Tissue-specific enrichment will not be available.",
+                }
+                save_analysis_state_task.submit(projects_handler, user_id, project_id, failed_ldsc_state).result()
+                raise RuntimeError(f"LDSC tissue analysis failed - required for enrichment: {str(ldsc_e)}")
             
             # Save completed analysis state
             completed_state = {

@@ -18,10 +18,6 @@ from loguru import logger
 from werkzeug.utils import secure_filename
 from tasks import extract_probability, get_related_hypotheses
 from project_tasks import count_gwas_records, get_project_with_full_data, extract_gwas_file_metadata
-import re
-from config import Config
-import pandas as pd
-import gzip
 import glob
 
 
@@ -197,9 +193,6 @@ class HypothesisAPI(Resource):
             confidence = extract_probability(hypothesis, self.enrichment, current_user_id)
             related_hypotheses = get_related_hypotheses(hypothesis, self.hypotheses, self.enrichment, current_user_id)
             
-            # Log for debugging
-            logger.info(f"Hypothesis {hypothesis_id}: confidence={confidence}, variant_hypotheses_count={len(related_hypotheses)}")
-
             if is_complete:
                 enrich_id = hypothesis.get('enrich_id')
                 enrich_data = self.enrichment.get_enrich(current_user_id, enrich_id)
@@ -897,63 +890,6 @@ class AnalysisPipelineAPI(Resource):
         except Exception as e:
             logger.error(f"[API] Error starting analysis pipeline: {str(e)}")
             return {"error": f"Error starting analysis pipeline: {str(e)}"}, 500
-        
-class LDSCResultsAPI(Resource):
-    """API endpoint for getting LDSC tissue analysis results"""
-    
-    def __init__(self, gene_expression, projects):
-        self.gene_expression = gene_expression
-        self.projects = projects
-    
-    @token_required
-    def get(self, current_user_id):
-        """Get LDSC results for a project"""
-        project_id = request.args.get('project_id')
-        
-        if not project_id:
-            return {"error": "project_id is required"}, 400
-        
-        try:
-            # Validate project access
-            project = self.projects.get_projects(current_user_id, project_id)
-            if not project:
-                return {"error": "Project not found or access denied"}, 404
-            
-            # Get LDSC analysis status and results
-            status = self.gene_expression.check_gene_expression_status(project_id, current_user_id)
-            
-            response_data = {
-                "project_id": project_id,
-                "ldsc_status": status['status'],
-                "has_results": status['has_data'],
-                "analysis_date": status.get('created_at')
-            }
-            
-            if status['has_data']:
-                # Get detailed LDSC results
-                ldsc_results = self.gene_expression.get_gene_expression_results(
-                    project_id=project_id,
-                    user_id=current_user_id
-                )
-                
-                if ldsc_results and ldsc_results[0]['ldsc_results']:
-                    tissue_results = ldsc_results[0]['ldsc_results']
-                    
-                    response_data.update({
-                        "total_tissues": len(tissue_results),
-                        "significant_tissues": len([t for t in tissue_results if t.get('p_value', 1) < 0.05]),
-                        "top_10_tissues": tissue_results[:10],
-                        "all_tissues": tissue_results
-                    })
-                else:
-                    response_data["tissues"] = []
-            
-            return serialize_datetime_fields(response_data), 200
-            
-        except Exception as e:
-            logger.error(f"Error getting LDSC results: {str(e)}")
-            return {"error": f"Error retrieving LDSC results: {str(e)}"}, 500
-
 class CredibleSetsAPI(Resource):
     """
     API endpoint for fetching credible sets

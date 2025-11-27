@@ -74,14 +74,6 @@ class HypothesisHandler(BaseHandler):
 
         return hypothesis
 
-    def get_hypothesis_by_phenotype_and_variant(self, user_id, phenotype, variant):
-        """Get hypothesis by phenotype and variant"""
-        return self.hypothesis_collection.find_one({
-            'user_id': user_id,
-            'phenotype': phenotype,
-            'variant': variant
-        })
-
     def get_hypothesis_by_enrich(self, user_id, enrich_id):
         """Get hypothesis by enrichment ID"""
         return self.hypothesis_collection.find_one({

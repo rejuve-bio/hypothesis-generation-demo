@@ -27,15 +27,6 @@ class EnrichmentHandler(BaseHandler):
         result = self.enrich_collection.insert_one(enrich_data)
         return enrich_data['id']
 
-    def get_enrich_by_lead_variant(self, user_id, lead_variant_id, variant, phenotype):
-        """Check if enrichment exists for lead variant, variant, and phenotype"""
-        return self.enrich_collection.find_one({
-            'user_id': user_id,
-            'lead_variant_id': lead_variant_id,
-            'variant': variant,
-            'phenotype': phenotype
-        })
-
     def check_enrich(self, user_id=None, phenotype=None, variant_id=None):
         """Check if enrichment exists for given parameters"""
         query = {}
