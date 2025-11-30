@@ -50,6 +50,20 @@ RUN mkdir -p /opt/gcta && \
     find /opt/gcta -name "gcta64" -type f -exec ln -sf {} /usr/local/bin/gcta64 \; && \
     rm /tmp/gcta.zip
 
+# Install htslib (bgzip, tabix), bcftools, samtools, and Java (required by Nextflow)
+RUN apt-get update && apt-get install -y \
+    tabix \
+    bcftools \
+    samtools \
+    openjdk-17-jre-headless \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install Nextflow for harmonization workflow (requires Java)
+RUN cd /tmp && \
+    wget -qO- https://get.nextflow.io | bash && \
+    mv nextflow /usr/local/bin/ && \
+    chmod +x /usr/local/bin/nextflow
+
 RUN pip install --upgrade pip setuptools wheel
 
 # Install BiocManager first
@@ -94,17 +108,11 @@ RUN Rscript -e " \
     "
 
 # Install other R packages WITHOUT updating susieR
+#  Nextflow harmonizer
 RUN Rscript -e " \
     options(repos = c(CRAN = 'https://cloud.r-project.org/')); \
     options(Ncpus = parallel::detectCores()); \
     BiocManager::install(c('dplyr', 'readr', 'data.table', 'Rfast', 'devtools'), ask=FALSE, update=FALSE); \
-    BiocManager::install(c('MungeSumstats'), ask=FALSE, update=FALSE); \
-    BiocManager::install(c('SNPlocs.Hsapiens.dbSNP155.GRCh37', 'SNPlocs.Hsapiens.dbSNP155.GRCh38'), ask=FALSE, update=FALSE); \
-    BiocManager::install(c( \
-        'BSgenome.Hsapiens.UCSC.hg19', \
-        'BSgenome.Hsapiens.UCSC.hg38', \
-        'BSgenome.Hsapiens.1000genomes.hs37d5' \
-    ), ask=FALSE, update=FALSE); \
     "
 
 # Install vautils from GitHub
@@ -165,6 +173,9 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/flask-venv
 ENV PATH="/opt/flask-venv/bin:$PATH"
 RUN uv sync
 RUN uv pip install '.[r-integration]'
+
+# Install pyarrow for harmonizer workflow (need version compatible with NumPy 2.0)
+RUN uv pip install 'pyarrow>=17.0.0'
 
 # Copy application
 COPY . .

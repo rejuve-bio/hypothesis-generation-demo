@@ -5,7 +5,6 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
-    "numpy==1.26.0",
     "outlines",
     "Flask",
     "flask-restful",
@@ -27,23 +26,29 @@ dependencies = [
     "eventlet",
     "python-socketio",
     "Flask-JWT-Extended==4.6.0",
-    "loguru",
     "requests",
     "gwaslab",
     "cyvcf2",
     "polars",
     "websocket-client",
-    "optuna",
     "tzlocal",
-    "pandas",
     "PyYAML",
     "psutil",
-    "scipy",
     "pronto",
     "tiledbsoma",
     "cellxgene-census",
+    "loguru>=0.7.3",
+    "marimo[lsp]>=0.16.5",
+    "numpy>=2.2.6",
+    "optuna>=4.3.0",
+    "pandas>=2.2.3",
+    "pysam>=0.23.1",
+    "ruff>=0.11.12",
+    "scikit-learn>=1.6.1",
+    "scipy>=1.15.3",
+    "watchdog>=6.0.0",
 
 ]
 
 [project.optional-dependencies]
-r-integration = ["rpy2"]
+r-integration = ["rpy2>=3.6.0"]

@@ -5,7 +5,7 @@ services:
   mongo:
     image: mongo:latest
     ports:
-      - "27016:27017"
+      - "27096:27017"
     volumes:
       - mongo-data:/data/db
     networks:
@@ -16,7 +16,7 @@ services:
       context: .
       dockerfile: Dockerfile.prolog
     ports:
-      - "4241:4242"
+      - "4291:4242"
     volumes:
       - ./pl:/app/pl
       - /mnt/hdd_1/tesnim/version1/prolog_out_v2:/mnt/prolog_out_v2
@@ -29,11 +29,13 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "5008:5000"
+      - "5098:5000"
     environment:
       - FLASK_ENV=development
       - PREFECT_API_URL=http://prefect-service:4200/api
       - OPENAI_API_KEY=${OpenAI}
+      - HARMONIZER_REF_DIR=/app/data/harmonizer_ref
+      - HARMONIZER_CODE_REPO=/app/scripts/gwas-sumstats-harmoniser
     env_file:
       - .env
     volumes:
@@ -57,7 +59,7 @@ services:
       context: .
       dockerfile: Dockerfile.prefect
     ports:
-      - "4221:4200"
+      - "4292:4200"
     volumes:
       - .:/app
       - prefect-data:/root/.prefect 
