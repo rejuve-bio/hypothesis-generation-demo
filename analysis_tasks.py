@@ -11,6 +11,7 @@ import numpy as np
 import gzip
 import subprocess
 import tempfile
+import shutil
 from cyvcf2 import VCF, Writer
 from prefect import flow
 import multiprocessing as mp
@@ -113,110 +114,257 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
         raise Exception(f"Command failed with exit code {result.returncode}")
     return result
 
-# === MUNGESUMSTATS PREPROCESSING ===
+# === NEXTFLOW HARMONIZATION ===
 @task(cache_policy=None)
-def munge_sumstats_preprocessing(gwas_file_path, output_dir, ref_genome="GRCh37", n_threads=14):
+def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh37", 
+                                     ref_dir=None, code_repo=None, threshold=0.99, 
+                                     sample_size=None, timeout_seconds=14400, 
+                                     cleanup_upload=True):
     """
-    Preprocess GWAS data using R's MungeSumstats package for standardization and QC.
-    """
-    if not HAS_RPY2:
-        logging.error("rpy2 not available for MungeSumstats preprocessing")
-        raise RuntimeError("rpy2 not available")
+    Harmonize GWAS summary statistics using Nextflow-based harmonization pipeline.
     
-    logger.info(f"[MUNGE] Starting MungeSumstats preprocessing for {gwas_file_path}")
+    This replaces MungeSumstats with a bash/Nextflow workflow that:
+    - Converts to GWAS-SSF format
+    - Filters X, Y, MT chromosomes
+    - Harmonizes against reference panel
+    - Outputs standardized format for finemapping
+    - Cleans up intermediate files to save disk space
+    
+    Args:
+        gwas_file_path: Path to input GWAS summary statistics
+        output_dir: Output directory for harmonized results
+        ref_genome: Reference genome build (GRCh37 or GRCh38)
+        ref_dir: Reference data directory (if None, uses Config)
+        code_repo: Path to Nextflow workflow repo (if None, uses Config)
+        threshold: Threshold for palindromic variants (default 0.99)
+        sample_size: Sample size for GWAS study (REQUIRED if not in input file)
+        timeout_seconds: Timeout for harmonization in seconds (default 14400 = 4 hours)
+        cleanup_upload: If True, removes original uploaded file after harmonization (default True)
+    
+    Returns:
+        harmonized_df: DataFrame with harmonized columns
+        harmonized_file_path: Path to harmonized output file (in output_dir)
+    """
+    logger.info(f"[HARMONIZE] Starting Nextflow harmonization for {gwas_file_path}")
     start_time = datetime.now()
+    
+    # Convert gwas_file_path to absolute path
+    gwas_file_path = os.path.abspath(gwas_file_path)
+    logger.info(f"[HARMONIZE] Resolved absolute path: {gwas_file_path}")
+    
+    # Get configuration
+    config = Config.from_env()
+    if ref_dir is None:
+        ref_dir = getattr(config, 'harmonizer_ref_dir', '/data/harmonizer_ref')
+    if code_repo is None:
+        code_repo = getattr(config, 'harmonizer_code_repo', 
+                           '/mnt/hdd_1/hypothesis/hypothesis-gen/hypothesis-generation-demo/scripts/1000Genomes_phase3')
     
     # Create output paths
     os.makedirs(output_dir, exist_ok=True)
-    munged_output_path = os.path.join(output_dir, "munged_sumstats.tsv")
     log_dir = os.path.join(output_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     
     try:
-        # Set up conversion context for both import and execution
-        with localconverter(default_converter + pandas2ri.converter):
-            # Import MungeSumstats within conversion context
-            try:
-                mungesumstats = importr('MungeSumstats')
-                logger.info("[MUNGE] MungeSumstats package loaded successfully")
-            except Exception as e:
-                logger.error(f"[MUNGE] Error importing MungeSumstats: {e}")
-                raise RuntimeError("MungeSumstats package not available. Install with: BiocManager::install('MungeSumstats')")
-            
-            # Run MungeSumstats formatting 
-            logger.info(f"[MUNGE] Processing with ref_genome={ref_genome}, threads={n_threads}")
-            formatted_file_path_r = mungesumstats.format_sumstats(
-                path=gwas_file_path,
-                ref_genome=ref_genome,
-                save_path=munged_output_path,
-                drop_indels=True,
-                nThread=n_threads,
-                log_folder=log_dir,
-                log_mungesumstats_msgs=True,
-                save_format="LDSC",
-                # force_new=False
+        # Path to harmonizer script - use code_repo to find it
+        harmonizer_script = os.path.join(code_repo, "6_harmoniser.sh")
+        
+        if not os.path.exists(harmonizer_script):
+            raise FileNotFoundError(f"Harmonizer script not found: {harmonizer_script}")
+        
+        # Build harmonizer command
+        harmonizer_cmd = [
+            "bash", harmonizer_script,
+            "--input", gwas_file_path,
+            "--build", ref_genome,
+            "--threshold", str(threshold),
+            "--ref", ref_dir,
+            "--code-repo", code_repo
+        ]
+        
+        logger.info(f"[HARMONIZE] Running command: {' '.join(harmonizer_cmd)}")
+        
+        # Run harmonizer (from /app directory, not output_dir)
+        result = subprocess.run(
+            harmonizer_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds
+            # No cwd specified - bash script handles its own directory changes
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"[HARMONIZE] Harmonizer failed with exit code {result.returncode}")
+            logger.error(f"[HARMONIZE] STDOUT: {result.stdout}")
+            logger.error(f"[HARMONIZE] STDERR: {result.stderr}")
+            raise RuntimeError(f"Harmonization failed with exit code {result.returncode}")
+        
+        logger.info(f"[HARMONIZE] Harmonizer completed successfully")
+        logger.info(f"[HARMONIZE] Last 20 lines of output:")
+        for line in result.stdout.strip().split('\n')[-20:]:
+            logger.info(f"  {line}")
+        
+        # Parse harmonized output path from bash script output
+        # The bash script outputs: "HARMONIZED_OUTPUT_PATH=/path/to/harmonized.tsv.gz"
+        harmonized_file_path = None
+        for line in result.stdout.strip().split('\n'):
+            if line.startswith('HARMONIZED_OUTPUT_PATH='):
+                harmonized_file_path = line.split('=', 1)[1]
+                logger.info(f"[HARMONIZE] Found harmonized file from script output: {harmonized_file_path}")
+                break
+        
+        if not harmonized_file_path:
+            logger.error(f"[HARMONIZE] Bash script did not output HARMONIZED_OUTPUT_PATH")
+            logger.error(f"[HARMONIZE] This means the harmonizer may have failed to find its output")
+            raise FileNotFoundError(
+                "Harmonizer script did not output harmonized file path. "
+                "Check harmonizer logs for errors."
             )
-            
-            formatted_file_path_raw = str(formatted_file_path_r[0])
-            path_match = re.search(r'"([^"]+)"', formatted_file_path_raw)
-            if path_match:
-                formatted_file_path = path_match.group(1)
-            else:
-                # Fallback: try to clean it manually
-                formatted_file_path = formatted_file_path_raw.strip().replace('[1] "', '').replace('"', '').strip()
         
-        logger.info(f"[MUNGE] MungeSumstats completed. Output: {formatted_file_path}")
-            
-        # Load and post-process the munged data
-        logger.info("[MUNGE] Loading and post-processing munged data")
-        munged_df = pd.read_csv(formatted_file_path, sep='\t', low_memory=False)
-        logger.info(f"[MUNGE] Loaded {munged_df.shape[0]} variants with {munged_df.shape[1]} columns")
-        logger.info(f"[MUNGE] Available columns: {list(munged_df.columns)}")
+        if not os.path.exists(harmonized_file_path):
+            raise FileNotFoundError(f"Harmonized file not found at path: {harmonized_file_path}")
         
-        # Preserve rs_id information if available
-        if 'SNP' in munged_df.columns:
-            logger.info(f"[MUNGE] Found SNP column with rs_ids, preserving as RS_ID")
-            munged_df['RS_ID'] = munged_df['SNP']
-        elif 'RSID' in munged_df.columns:
-            logger.info(f"[MUNGE] Found RSID column, preserving as RS_ID")
-            munged_df['RS_ID'] = munged_df['RSID']
+        # Move harmonized file to output directory (don't leave in upload temp dir)
+        # Use shutil.move instead of copy to avoid duplication
+        harmonized_output_path = os.path.join(output_dir, os.path.basename(harmonized_file_path))
+        upload_dir = os.path.dirname(harmonized_file_path)
+        
+        if os.path.abspath(harmonized_file_path) != os.path.abspath(harmonized_output_path):
+            shutil.move(harmonized_file_path, harmonized_output_path)
+            logger.info(f"[HARMONIZE] Moved harmonized file to: {harmonized_output_path}")
+            
+            # Cleanup intermediate files from upload directory to save space
+            # The bash script creates: SSF files, YAML metadata, logs, Nextflow work dirs
+            try:
+                gwas_basename = os.path.splitext(os.path.basename(gwas_file_path))[0]
+                
+                # 1. Remove SSF intermediate files
+                for pattern in [f"{gwas_basename}.tsv*", f"{gwas_basename}*-meta.yaml"]:
+                    for f in glob.glob(os.path.join(upload_dir, pattern)):
+                        if os.path.exists(f) and f != gwas_file_path:  # Don't delete original
+                            os.remove(f)
+                            logger.info(f"[HARMONIZE] Cleaned up: {f}")
+                
+                # 2. Move logs to output_dir instead of deleting
+                upload_log_dir = os.path.join(upload_dir, "logs")
+                if os.path.exists(upload_log_dir):
+                    output_log_dir = os.path.join(output_dir, "logs")
+                    if not os.path.exists(output_log_dir):
+                        shutil.move(upload_log_dir, output_log_dir)
+                        logger.info(f"[HARMONIZE] Moved logs to: {output_log_dir}")
+                
+                # 3. Remove Nextflow work directories (can be HUGE - GB of temp files)
+                nextflow_work_dir = os.path.join(upload_dir, "work")
+                if os.path.exists(nextflow_work_dir):
+                    shutil.rmtree(nextflow_work_dir)
+                    logger.info(f"[HARMONIZE] Removed Nextflow work directory: {nextflow_work_dir}")
+                
+                # 4. Remove Nextflow timestamp directories (after moving harmonized output)
+                # These are like: 20240101_120000/final/harmonized.tsv.gz
+                for item in os.listdir(upload_dir):
+                    item_path = os.path.join(upload_dir, item)
+                    # Remove directories that look like timestamps or nextflow outputs
+                    if os.path.isdir(item_path) and (
+                        item.startswith('2') or  # Timestamp directories
+                        item == '.nextflow' or   # Nextflow metadata
+                        item.startswith('results')  # Nextflow results dirs
+                    ):
+                        shutil.rmtree(item_path)
+                        logger.info(f"[HARMONIZE] Removed Nextflow directory: {item_path}")
+                
+                # 5. Remove .nextflow.log files
+                for f in glob.glob(os.path.join(upload_dir, ".nextflow.log*")):
+                    os.remove(f)
+                    logger.info(f"[HARMONIZE] Removed: {f}")
+                
+                # 6. Optionally remove original uploaded file (we have harmonized version)
+                if cleanup_upload and os.path.exists(gwas_file_path):
+                    os.remove(gwas_file_path)
+                    logger.info(f"[HARMONIZE] Removed original uploaded file: {gwas_file_path}")
+                elif not cleanup_upload:
+                    logger.info(f"[HARMONIZE] Keeping original uploaded file: {gwas_file_path}")
+                
+                logger.info(f"[HARMONIZE] Cleanup complete for upload directory: {upload_dir}")
+                
+            except Exception as cleanup_error:
+                logger.warning(f"[HARMONIZE] Error during cleanup: {cleanup_error}")
+            
+            harmonized_file_path = harmonized_output_path
         else:
-            logger.info(f"[MUNGE] No rs_id column found, will use positional ID only")
-            munged_df['RS_ID'] = None
+            logger.info(f"[HARMONIZE] File already in output directory: {harmonized_file_path}")
+            
+        # Load harmonized data
+        logger.info("[HARMONIZE] Loading harmonized SSF data")
         
-        # Create CHR:BP:A2:A1 ID format
-        munged_df["ID"] = (munged_df["CHR"].astype(str) + ":" + 
-                          munged_df["BP"].astype(str) + ":" + 
-                          munged_df["A2"] + ":" + 
-                          munged_df["A1"])
+        # Read gzipped TSV with harmonized columns
+        harmonized_df = pd.read_csv(harmonized_file_path, sep='\t', compression='gzip', low_memory=False)
+        logger.info(f"[HARMONIZE] Loaded {harmonized_df.shape[0]} variants with {harmonized_df.shape[1]} columns")
+        logger.info(f"[HARMONIZE] Available columns: {list(harmonized_df.columns)}")
         
-        # Set ID as index but keep RS_ID as a column
-        munged_df.reset_index(drop=True, inplace=True)
-        munged_df.set_index(["ID"], inplace=True)
+        # Expected harmonized columns from 6_harmoniser.sh:
+        # chromosome, base_pair_location, effect_allele, other_allele, beta, 
+        # standard_error, p_value, effect_allele_frequency, rsid, variant_id
         
-        # Save the processed data
-        final_output_path = os.path.join(output_dir, "munged_sumstats_processed.tsv")
-        munged_df.to_csv(final_output_path, sep='\t', index=False)
+        # Validate required columns
+        required_cols = ['chromosome', 'base_pair_location', 'effect_allele', 'other_allele', 
+                        'beta', 'standard_error', 'p_value']
+        missing_cols = [col for col in required_cols if col not in harmonized_df.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns in harmonized output: {missing_cols}")
         
-        # Calculate processing time and stats
+        # Add N column if not present (required for downstream analysis)
+        if 'N' not in harmonized_df.columns:
+            if sample_size is None:
+                raise ValueError(
+                    "[HARMONIZE] Sample size (N) not found in input file and not provided as parameter. "
+                    "Please provide sample_size parameter or ensure input file has N column."
+                )
+            logger.info(f"[HARMONIZE] Adding sample size N={sample_size} from parameter")
+            harmonized_df['N'] = sample_size
+        else:
+            logger.info(f"[HARMONIZE] Using sample size from input file: N={harmonized_df['N'].iloc[0]}")
+        
+        # Set variant_id as index
+        if 'variant_id' in harmonized_df.columns:
+            harmonized_df.set_index('variant_id', inplace=True)
+        else:
+            # Create variant_id if not present
+            harmonized_df['variant_id'] = (
+                harmonized_df['chromosome'].astype(str) + ':' +
+                harmonized_df['base_pair_location'].astype(str) + ':' +
+                harmonized_df['other_allele'] + ':' +
+                harmonized_df['effect_allele']
+            )
+            harmonized_df.set_index('variant_id', inplace=True)
+        
+        # Calculate processing time
         elapsed_time = (datetime.now() - start_time).total_seconds()
-
-        logger.info(f"[MUNGE] Processing completed in {elapsed_time:.2f} seconds")
-        return munged_df, final_output_path
+        logger.info(f"[HARMONIZE] Processing completed in {elapsed_time:.2f} seconds")
         
+        # Return DataFrame (for immediate use) and file path (for LDSC and persistence)
+        # No need to save a separate "processed" version - we have the DataFrame in memory
+        # and the harmonized file on disk for tools that need files
+        return harmonized_df, harmonized_file_path
+        
+    except subprocess.TimeoutExpired:
+        logger.error(f"[HARMONIZE] Harmonization timeout after {timeout_seconds} seconds")
+        raise RuntimeError(f"Harmonization timeout after {timeout_seconds} seconds")
     except Exception as e:
-        logger.error(f"[MUNGE] Error in MungeSumstats preprocessing: {str(e)}")
+        logger.error(f"[HARMONIZE] Error in harmonization: {str(e)}")
         raise
 
 
 @task(cache_policy=None)
-def filter_significant_variants(munged_df, output_dir, p_threshold=5e-8):
-    """Filter significant variants from munged sumstats."""
-    logger.info(f"[FILTER] Filtering variants with p < {p_threshold}")
+def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
+    """Filter significant variants from harmonized sumstats."""
+    logger.info(f"[FILTER] Filtering variants with p_value < {p_threshold}")
 
-    significant_df = munged_df[munged_df['P'] < p_threshold].copy()
+    # Support both old (P) and new (p_value) column names
+    p_col = 'p_value' if 'p_value' in harmonized_df.columns else 'P'
+    
+    significant_df = harmonized_df[harmonized_df[p_col] < p_threshold].copy()
     sig_output_path = os.path.join(output_dir, "significant_variants.tsv")
-    significant_df.to_csv(sig_output_path, sep='\t', index=False)
+    significant_df.to_csv(sig_output_path, sep='\t', index=True)
     
     return significant_df, sig_output_path
 
@@ -233,14 +381,32 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
     with tempfile.TemporaryDirectory(prefix="cojo_analysis_") as temp_dir:
         logger.info(f"[COJO] Using temporary directory: {temp_dir}")
         
-        # Prepare COJO input format
-        cojo_df = significant_df[["A1", "A2", "FRQ", "BETA", "SE", "P", "N"]].copy()
-        cojo_df["SNP"] = significant_df.index  # Use index since ID is set as index
+        # Support both old and new column names
+        a1_col = 'effect_allele' if 'effect_allele' in significant_df.columns else 'A1'
+        a2_col = 'other_allele' if 'other_allele' in significant_df.columns else 'A2'
+        frq_col = 'effect_allele_frequency' if 'effect_allele_frequency' in significant_df.columns else 'FRQ'
+        beta_col = 'beta' if 'beta' in significant_df.columns else 'BETA'
+        se_col = 'standard_error' if 'standard_error' in significant_df.columns else 'SE'
+        p_col = 'p_value' if 'p_value' in significant_df.columns else 'P'
+        
+        # Prepare COJO input format (space-separated as per boss's convention)
+        cojo_df = significant_df[[a1_col, a2_col, frq_col, beta_col, se_col, p_col, "N"]].copy()
+        cojo_df["SNP"] = significant_df.index  # Use index (variant_id or ID)
+        
+        # Rename to GCTA expected column names
+        cojo_df = cojo_df.rename(columns={
+            a1_col: 'A1',
+            a2_col: 'A2',
+            frq_col: 'FRQ',
+            beta_col: 'BETA',
+            se_col: 'SE',
+            p_col: 'P'
+        })
         cojo_df = cojo_df[['SNP', 'A1', 'A2', 'FRQ', 'BETA', 'SE', 'P', 'N']]
         
-        # Save COJO input file
+        # Save COJO input file (space-separated to match boss's convention)
         cojo_input_path = os.path.join(temp_dir, "cojo_input.txt")
-        cojo_df.to_csv(cojo_input_path, sep='\t', index=False)
+        cojo_df.to_csv(cojo_input_path, sep=' ', index=False)
         logger.info(f"[COJO] COJO input prepared: {len(cojo_df)} variants")
         
         def run_cojo_for_chromosome(chrom):
@@ -400,15 +566,16 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         start = lead_variant_position - window_bp
         end = lead_variant_position + window_bp
         
-        filtered_region = sumstats[(sumstats["CHR"] == chr_num) &
-                                  (sumstats["BP"] >= start) &
-                                  (sumstats["BP"] <= end)]
+        # Support both old (CHR/BP) and new (chromosome/base_pair_location) column names
+        chr_col = 'chromosome' if 'chromosome' in sumstats.columns else 'CHR'
+        bp_col = 'base_pair_location' if 'base_pair_location' in sumstats.columns else 'BP'
         
-        # Handle both indexed and column-based ID
-        if 'ID' in filtered_region.columns:
-            filtered_ids = filtered_region["ID"].tolist()
-        else:
-            filtered_ids = filtered_region.index.tolist()
+        filtered_region = sumstats[(sumstats[chr_col] == chr_num) &
+                                  (sumstats[bp_col] >= start) &
+                                  (sumstats[bp_col] <= end)]
+        
+        # Use index (variant_id or ID)
+        filtered_ids = filtered_region.index.tolist()
         logger.info(f"[FINEMAP] Filtered {len(filtered_ids)} SNPs in region")
         
         if len(filtered_ids) < 2:
@@ -425,16 +592,19 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt') as tmp_file_ld:
                 tmp_file_ld_path = tmp_file_ld.name
                 
+            # Use PLINK 1 for LD calculation (matching boss's finemap.py)
             plink_cmd = [
-                "plink2",
+                "plink",
                 "--bfile", f"{plink_dir}/{population}/{population}.{chr_num}.1000Gp3.20130502",
                 "--keep-allele-order",
-                "--r-unphased", "square", 
+                "--r", "square",  # PLINK 1 correlation matrix
                 "--extract", tmp_file_path,
+                "--maf", "0.01",  # MAF threshold
+                "--write-snplist",  # Write list of SNPs that passed QC
                 "--out", tmp_file_ld_path
             ]
             
-            logger.info(f"[FINEMAP] Running LD: {' '.join(plink_cmd)}")
+            logger.info(f"[FINEMAP] Running LD with PLINK 1: {' '.join(plink_cmd)}")
             ld_run_res = run_command(' '.join(plink_cmd))
             
             if ld_run_res.returncode != 0:
@@ -446,29 +616,47 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                     pass
                 return None
             
-            # Read LD matrix 
-            ld_out_path = f"{tmp_file_ld_path}.unphased.vcor1"
-            ld_vars_path = f"{ld_out_path}.vars"
+            # Read LD matrix from PLINK 1 output
+            ld_out_path = f"{tmp_file_ld_path}.ld"
+            ld_snplist_path = f"{tmp_file_ld_path}.snplist"
             
-            if not os.path.exists(ld_out_path) or not os.path.exists(ld_vars_path):
-                logger.error(f"[FINEMAP] PLINK output files not found")
+            if not os.path.exists(ld_out_path):
+                logger.error(f"[FINEMAP] PLINK LD output not found: {ld_out_path}")
                 try:
                     os.remove(tmp_file_path)
                 except:
                     pass
                 return None
             
+            # Read SNP list that passed QC
             snp_ids = []
-            with open(ld_vars_path, 'r') as f:
-                for line in f:
-                    snp_ids.append(line.strip())
+            if os.path.exists(ld_snplist_path):
+                with open(ld_snplist_path, 'r') as f:
+                    for line in f:
+                        snp_ids.append(line.strip())
+            else:
+                logger.warning(f"[FINEMAP] SNP list not found, using filtered_ids")
+                snp_ids = filtered_ids
             
-            ld_df = pd.read_csv(ld_out_path, sep='\t', header=None)
+            # Read LD matrix (space/tab separated, no header)
+            ld_df = pd.read_csv(ld_out_path, sep=r'\s+', header=None)
+            
+            # Ensure we have the right number of SNPs
+            if len(snp_ids) != ld_df.shape[0]:
+                logger.warning(f"[FINEMAP] SNP count mismatch: {len(snp_ids)} IDs vs {ld_df.shape[0]} rows")
+                snp_ids = snp_ids[:ld_df.shape[0]]  # Truncate if needed
+            
             ld_df.index = snp_ids
+            ld_df.columns = snp_ids
             ld_df.fillna(0, inplace=True)
             
             # Clean up files safely
-            for cleanup_file in [tmp_file_path, tmp_file_ld_path, ld_out_path, ld_vars_path]:
+            cleanup_files = [tmp_file_path, tmp_file_ld_path + ".log", 
+                           tmp_file_ld_path + ".nosex", ld_out_path]
+            if os.path.exists(ld_snplist_path):
+                cleanup_files.append(ld_snplist_path)
+                
+            for cleanup_file in cleanup_files:
                 try:
                     if os.path.exists(cleanup_file):
                         os.remove(cleanup_file)
@@ -484,10 +672,13 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         LD_mat = ld_df.values
         
         # Prepare SNP dataframe for check_ld_dimensions function
+        chr_col = 'chromosome' if 'chromosome' in sub_region_sumstats_ld.columns else 'CHR'
+        bp_col = 'base_pair_location' if 'base_pair_location' in sub_region_sumstats_ld.columns else 'BP'
+        
         snp_df_for_check = pd.DataFrame({
             'SNPID': sub_region_sumstats_ld.index,
-            'CHR': sub_region_sumstats_ld['CHR'],
-            'BP': sub_region_sumstats_ld['BP']
+            'CHR': sub_region_sumstats_ld[chr_col],
+            'BP': sub_region_sumstats_ld[bp_col]
         })
         
         # Use check_ld_dimensions to reconcile any mismatches
@@ -514,13 +705,17 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         logger.info(f"[FINEMAP] Sub-region shape after LD filtering: {sub_region_sumstats_ld.shape}")
 
         # Get Z-scores after LD filtering - calculate if not available
+        # Support both old (BETA/SE) and new (beta/standard_error) column names
+        beta_col = 'beta' if 'beta' in sub_region_sumstats_ld.columns else 'BETA'
+        se_col = 'standard_error' if 'standard_error' in sub_region_sumstats_ld.columns else 'SE'
+        
         if "Z" in sub_region_sumstats_ld.columns:
             zhat = sub_region_sumstats_ld["Z"].values.reshape(len(sub_region_sumstats_ld), 1)
-        elif "BETA" in sub_region_sumstats_ld.columns and "SE" in sub_region_sumstats_ld.columns:
-            logger.info(f"[FINEMAP] Z-scores not available, calculating from BETA/SE")
-            zhat = (sub_region_sumstats_ld["BETA"] / sub_region_sumstats_ld["SE"]).values.reshape(len(sub_region_sumstats_ld), 1)
+        elif beta_col in sub_region_sumstats_ld.columns and se_col in sub_region_sumstats_ld.columns:
+            logger.info(f"[FINEMAP] Calculating Z-scores from {beta_col}/{se_col}")
+            zhat = (sub_region_sumstats_ld[beta_col] / sub_region_sumstats_ld[se_col]).values.reshape(len(sub_region_sumstats_ld), 1)
         else:
-            logger.error(f"[FINEMAP] Neither Z-scores nor BETA/SE available for Z-score calculation")
+            logger.error(f"[FINEMAP] Neither Z-scores nor beta/standard_error available for Z-score calculation")
             return None
         
         if LD_mat.shape[0] != len(zhat):
@@ -715,7 +910,9 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                         # Log per-credible-set stats
                         for cs_num in sorted(credible_snps['cs'].unique()):
                             cs_subset = credible_snps[credible_snps['cs'] == cs_num]
-                            logger.info(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - Credible set {cs_num}: {len(cs_subset)} variants, PIP range: {cs_subset['PIP'].min():.6f}-{cs_subset['PIP'].max():.6f}")
+                            pip_min = cs_subset['PIP'].min()
+                            pip_max = cs_subset['PIP'].max()
+                            logger.info(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - Credible set {cs_num}: {len(cs_subset)} variants, PIP range: {pip_min:.6f}-{pip_max:.6f}")
                         
                         # Format for LocusZoom and return
                         return credible_snps 

@@ -13,7 +13,7 @@ from tasks import (
 )
 
 from analysis_tasks import (
-    munge_sumstats_preprocessing, filter_significant_variants, run_cojo_per_chromosome, create_region_batches, finemap_region_batch_worker,
+    harmonize_sumstats_with_nextflow, filter_significant_variants, run_cojo_per_chromosome, create_region_batches, finemap_region_batch_worker,
     save_sumstats_for_workers, cleanup_sumstats_file
 )
 
@@ -364,42 +364,44 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
         # Save initial analysis state
         initial_state = {
             "status": "Running",
-            "stage": "Preprocessing",
+            "stage": "Harmonization",
             "progress": 10,
-            "message": "Starting MungeSumstats preprocessing",
+            "message": "Starting Nextflow harmonization",
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
         save_analysis_state_task.submit(projects_handler, user_id, project_id, initial_state).result()
         
-        logger.info(f"[PIPELINE] Stage 1: MungeSumstats preprocessing")
-        munged_file_result = munge_sumstats_preprocessing.submit(gwas_file_path, output_dir, ref_genome=ref_genome, n_threads=14).result()
+        logger.info(f"[PIPELINE] Stage 1: Nextflow harmonization")
+        harmonized_file_result = harmonize_sumstats_with_nextflow.submit(
+            gwas_file_path, output_dir, ref_genome=ref_genome
+        ).result()
         
         # Extract the actual file path from the result
-        if isinstance(munged_file_result, tuple):
-            munged_df, munged_file = munged_file_result
+        if isinstance(harmonized_file_result, tuple):
+            harmonized_df, harmonized_file = harmonized_file_result
         else:
-            munged_file = munged_file_result
-            munged_df = pd.read_csv(munged_file, sep='\t')
+            harmonized_file = harmonized_file_result
+            harmonized_df = pd.read_csv(harmonized_file, sep='\t', index_col=0)
 
-        # Start LDSC + tissue analysis immediately after munging (runs in parallel)
-        logger.info(f"[PIPELINE] Starting LDSC + tissue analysis in parallel after munging")
+        # Start LDSC + tissue analysis immediately after harmonization (runs in parallel)
+        logger.info(f"[PIPELINE] Starting LDSC + tissue analysis in parallel after harmonization")
         ldsc_tissue_future = run_combined_ldsc_tissue_analysis.submit(gene_expression, projects_handler,
-            munged_file, output_dir, project_id, user_id
+            harmonized_file, output_dir, project_id, user_id
         )
         logger.info(f"[PIPELINE] LDSC + tissue analysis started in background")
         
-        # Update analysis state after preprocessing
-        preprocessing_state = {
+        # Update analysis state after harmonization
+        harmonization_state = {
             "status": "Running",
             "stage": "Filtering",
             "progress": 30,
-            "message": "Preprocessing completed, filtering significant variants",
+            "message": "Harmonization completed, filtering significant variants",
             "started_at": initial_state["started_at"]
         }
-        save_analysis_state_task.submit(projects_handler, user_id, project_id, preprocessing_state).result()
+        save_analysis_state_task.submit(projects_handler, user_id, project_id, harmonization_state).result()
         
         logger.info(f"[PIPELINE] Stage 2: Loading and filtering variants")
-        significant_df_result = filter_significant_variants.submit(munged_df, output_dir).result()
+        significant_df_result = filter_significant_variants.submit(harmonized_df, output_dir).result()
         
         # Extract the actual DataFrame
         if isinstance(significant_df_result, tuple):

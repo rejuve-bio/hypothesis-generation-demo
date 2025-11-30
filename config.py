@@ -25,6 +25,9 @@ class Config:
         self.ontology_cache_dir = "./data/ontology"
         self.host = "0.0.0.0"
         self.port = 5000
+        # Harmonization workflow configuration
+        self.harmonizer_ref_dir = "/data/harmonizer_ref"
+        self.harmonizer_code_repo = "./scripts/1000Genomes_phase3"
 
     @classmethod
     def from_args(cls, args):
@@ -59,6 +62,9 @@ class Config:
         config.plink_dir = os.getenv("PLINK_DIR", "./data/1000Genomes_phase3/plink_format_b37")
         config.data_dir = os.getenv("DATA_DIR", "./data")
         config.ontology_cache_dir = os.getenv("ONTOLOGY_CACHE_DIR", "./data/ontology")
+        # Harmonization workflow configuration
+        config.harmonizer_ref_dir = os.getenv("HARMONIZER_REF_DIR", "/data/harmonizer_ref")
+        config.harmonizer_code_repo = os.getenv("HARMONIZER_CODE_REPO", "./scripts/1000Genomes_phase3")
         return config
 
 
