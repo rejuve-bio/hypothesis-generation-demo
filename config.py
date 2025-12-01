@@ -27,7 +27,8 @@ class Config:
         self.port = 5000
         # Harmonization workflow configuration
         self.harmonizer_ref_dir = "/data/harmonizer_ref"
-        self.harmonizer_code_repo = "./scripts/1000Genomes_phase3"
+        self.harmonizer_code_repo = "./gwas-sumstats-harmoniser"  # Nextflow workflow
+        self.harmonizer_script_dir = "./scripts/1000Genomes_phase3"  # Shell scripts
 
     @classmethod
     def from_args(cls, args):
@@ -64,7 +65,8 @@ class Config:
         config.ontology_cache_dir = os.getenv("ONTOLOGY_CACHE_DIR", "./data/ontology")
         # Harmonization workflow configuration
         config.harmonizer_ref_dir = os.getenv("HARMONIZER_REF_DIR", "/data/harmonizer_ref")
-        config.harmonizer_code_repo = os.getenv("HARMONIZER_CODE_REPO", "./scripts/1000Genomes_phase3")
+        config.harmonizer_code_repo = os.getenv("HARMONIZER_CODE_REPO", "./gwas-sumstats-harmoniser")  # Nextflow workflow
+        config.harmonizer_script_dir = os.getenv("HARMONIZER_SCRIPT_DIR", "./scripts/1000Genomes_phase3")  # Shell scripts
         return config
 
 

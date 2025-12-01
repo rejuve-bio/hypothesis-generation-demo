@@ -34,8 +34,6 @@ services:
       - FLASK_ENV=development
       - PREFECT_API_URL=http://prefect-service:4200/api
       - OPENAI_API_KEY=${OpenAI}
-      - HARMONIZER_REF_DIR=/app/data/harmonizer_ref
-      - HARMONIZER_CODE_REPO=/app/scripts/gwas-sumstats-harmoniser
     env_file:
       - .env
     volumes:

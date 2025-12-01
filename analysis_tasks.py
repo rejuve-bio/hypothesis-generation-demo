@@ -117,8 +117,8 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
 # === NEXTFLOW HARMONIZATION ===
 @task(cache_policy=None)
 def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh37", 
-                                     ref_dir=None, code_repo=None, threshold=0.99, 
-                                     sample_size=None, timeout_seconds=14400, 
+                                     ref_dir=None, code_repo=None, script_dir=None,
+                                     threshold=0.99, sample_size=None, timeout_seconds=14400, 
                                      cleanup_upload=True):
     """
     Harmonize GWAS summary statistics using Nextflow-based harmonization pipeline.
@@ -135,7 +135,8 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         output_dir: Output directory for harmonized results
         ref_genome: Reference genome build (GRCh37 or GRCh38)
         ref_dir: Reference data directory (if None, uses Config)
-        code_repo: Path to Nextflow workflow repo (if None, uses Config)
+        code_repo: Path to Nextflow workflow repo (if None, uses Config) - passed to script as --code-repo
+        script_dir: Directory containing 6_harmoniser.sh script (if None, uses Config)
         threshold: Threshold for palindromic variants (default 0.99)
         sample_size: Sample size for GWAS study (REQUIRED if not in input file)
         timeout_seconds: Timeout for harmonization in seconds (default 14400 = 4 hours)
@@ -157,8 +158,11 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
     if ref_dir is None:
         ref_dir = getattr(config, 'harmonizer_ref_dir', '/data/harmonizer_ref')
     if code_repo is None:
-        code_repo = getattr(config, 'harmonizer_code_repo', 
-                           '/mnt/hdd_1/hypothesis/hypothesis-gen/hypothesis-generation-demo/scripts/1000Genomes_phase3')
+        # This is the Nextflow workflow directory (contains main.nf)
+        code_repo = getattr(config, 'harmonizer_code_repo', '/app/gwas-sumstats-harmoniser')
+    if script_dir is None:
+        # This is where the 6_harmoniser.sh script lives
+        script_dir = getattr(config, 'harmonizer_script_dir', '/app/scripts/1000Genomes_phase3')
     
     # Create output paths
     os.makedirs(output_dir, exist_ok=True)
@@ -166,20 +170,20 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
     os.makedirs(log_dir, exist_ok=True)
     
     try:
-        # Path to harmonizer script - use code_repo to find it
-        harmonizer_script = os.path.join(code_repo, "6_harmoniser.sh")
+        # Path to harmonizer script
+        harmonizer_script = os.path.join(script_dir, "6_harmoniser.sh")
         
         if not os.path.exists(harmonizer_script):
             raise FileNotFoundError(f"Harmonizer script not found: {harmonizer_script}")
         
-        # Build harmonizer command
+        # Build harmonizer command - pass code_repo (Nextflow workflow dir) to the script
         harmonizer_cmd = [
             "bash", harmonizer_script,
             "--input", gwas_file_path,
             "--build", ref_genome,
             "--threshold", str(threshold),
             "--ref", ref_dir,
-            "--code-repo", code_repo
+            "--code-repo", code_repo  # This points to the Nextflow workflow
         ]
         
         logger.info(f"[HARMONIZE] Running command: {' '.join(harmonizer_cmd)}")
