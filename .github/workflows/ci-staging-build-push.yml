@@ -29,23 +29,28 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
     
-    - name: Create .env file
+    - name: Create .env file for testing
       run: |
-        echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" >> .env
-        echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
-        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
-        echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
-        echo "HF_TOKEN=${{ secrets.HF_TOKEN }}" >> .env
-        echo "JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}" >> .env
-        echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
-        echo "MONGO_PORT_HOST=${{ secrets.MONGO_PORT_HOST }}" >> .env
-        echo "MONGO_PORT_INTERNAL=${{ secrets.MONGO_PORT_INTERNAL }}" >> .env
-        echo "PREFECT_PORT_HOST=${{ secrets.PREFECT_PORT_HOST }}" >> .env
-        echo "PREFECT_PORT_INTERNAL=${{ secrets.PREFECT_PORT_INTERNAL }}" >> .env
-        echo "PROLOG_PORT_HOST=${{ secrets.PROLOG_PORT_HOST }}" >> .env
-        echo "PROLOG_PORT_INTERNAL=${{ secrets.PROLOG_PORT_INTERNAL }}" >> .env
-        echo "FLASK_PORT_HOST=${{ secrets.FLASK_PORT_HOST }}" >> .env
-        echo "FLASK_PORT_INTERNAL=${{ secrets.FLASK_PORT_INTERNAL }}" >> .env
+        cat > .env << 'EOF'
+        MONGODB_URI=mongodb://mongo:27017
+        DB_NAME=default
+        OPENAI_API_KEY=sk-test-dummy-key-for-ci-testing-only
+        ANTHROPIC_API_KEY=sk-ant-test-dummy-key-for-ci-testing
+        HF_TOKEN=hf_dummy_token_for_testing_purposes
+        JWT_SECRET_KEY=test-secret-key-for-ci-only-not-production
+        JWT_SECRET=test-secret-for-ci-only-not-production
+        HF_TOKEN=hf_dummy_token_for_testing_purposes
+        JWT_SECRET_KEY=test-secret-key-for-ci-only-not-production
+        JWT_SECRET=test-secret-for-ci-only-not-production
+        MONGO_PORT_HOST=27012
+        MONGO_PORT_INTERNAL=27017
+        PREFECT_PORT_HOST=4223
+        PREFECT_PORT_INTERNAL=4200
+        PROLOG_PORT_HOST=4262
+        PROLOG_PORT_INTERNAL=4242
+        FLASK_PORT_HOST=5030
+        FLASK_PORT_INTERNAL=5000
+        EOF
     - name: Create test docker-compose
       run: |
         cat > docker-compose.ci.yml << 'EOF'
