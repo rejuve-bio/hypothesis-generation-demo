@@ -180,4 +180,7 @@ RUN uv pip install 'pyarrow>=17.0.0'
 # Copy application
 COPY . .
 
+# Install harmonizer workflow dependencies (only missing packages, avoid version downgrades)
+RUN uv pip install 'duckdb>=0.9.2' 'gwas-sumstats-tools>=3.0.0' 'pyliftover>=0.4'
+
 EXPOSE 5000

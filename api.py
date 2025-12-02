@@ -665,6 +665,15 @@ class AnalysisPipelineAPI(Resource):
             min_abs_corr = float(request.form.get('min_abs_corr', 0.5))
             batch_size = int(request.form.get('batch_size', 5))
             
+            # Sample size parameter (optional, but recommended for accuracy)
+            sample_size = request.form.get('sample_size')
+            if sample_size is not None:
+                sample_size = int(sample_size)
+            else:
+                # Use a default but log a warning
+                sample_size = 10000  # default
+                logger.warning(f"[API] No sample_size provided, using default N={sample_size}. This may affect fine-mapping accuracy.")
+            
             # Validate required fields
             if not project_name:
                 return {"error": "project_name is required"}, 400
@@ -862,7 +871,8 @@ class AnalysisPipelineAPI(Resource):
                         window=window,
                         L=L,
                         coverage=coverage,
-                        min_abs_corr=min_abs_corr
+                        min_abs_corr=min_abs_corr,
+                        sample_size=sample_size
                     )
                     
                     logger.info(f"[API] Analysis pipeline for project {project_id} completed successfully")

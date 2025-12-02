@@ -343,7 +343,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
 def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, mongodb_uri, db_name, user_id, project_id, gwas_file_path, ref_genome="GRCh37", 
                            population="EUR", batch_size=5, max_workers=3,
                            maf_threshold=0.01, seed=42, window=2000, L=-1, 
-                           coverage=0.95, min_abs_corr=0.5):
+                           coverage=0.95, min_abs_corr=0.5, sample_size=None):
     """
     Complete analysis pipeline flow using Prefect for orchestration
     but multiprocessing for fine-mapping batches (R safety)
@@ -354,7 +354,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
     logger.info(f"[PIPELINE] File: {gwas_file_path}")
     logger.info(f"[PIPELINE] Batch size: {batch_size} regions per worker process")
     logger.info(f"[PIPELINE] Max workers: {max_workers}")
-    logger.info(f"[PIPELINE] Parameters: maf={maf_threshold}, seed={seed}, window={window}kb, L={L}, coverage={coverage}, min_abs_corr={min_abs_corr}")
+    logger.info(f"[PIPELINE] Parameters: maf={maf_threshold}, seed={seed}, window={window}kb, L={L}, coverage={coverage}, min_abs_corr={min_abs_corr}, N={sample_size}")
     
     try:
         # Get project-specific output directory (using Prefect task)
@@ -373,7 +373,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
         
         logger.info(f"[PIPELINE] Stage 1: Nextflow harmonization")
         harmonized_file_result = harmonize_sumstats_with_nextflow.submit(
-            gwas_file_path, output_dir, ref_genome=ref_genome
+            gwas_file_path, output_dir, ref_genome=ref_genome, sample_size=sample_size
         ).result()
         
         # Extract the actual file path from the result
