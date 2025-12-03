@@ -317,6 +317,7 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
             raise ValueError(f"Missing required columns in harmonized output: {missing_cols}")
         
         # Add N column if not present (required for downstream analysis)
+        n_was_added = False
         if 'N' not in harmonized_df.columns:
             if sample_size is None:
                 raise ValueError(
@@ -325,14 +326,24 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
                 )
             logger.info(f"[HARMONIZE] Adding sample size N={sample_size} from parameter")
             harmonized_df['N'] = sample_size
+            n_was_added = True
         else:
             logger.info(f"[HARMONIZE] Using sample size from input file: N={harmonized_df['N'].iloc[0]}")
         
         # Set variant_id as index
+        needs_resave = False
         if 'variant_id' in harmonized_df.columns:
             harmonized_df.set_index('variant_id', inplace=True)
+            # Convert variant_id format: 1_1589057_T_C -> 1:1589057:T:C
+            # This matches 1000G PLINK BIM format (chr:pos:ref:alt)
+            if '_' in harmonized_df.index[0]:
+                harmonized_df.index = harmonized_df.index.str.replace('_', ':', regex=False)
+                logger.info(f"[HARMONIZE] Converted variant_id format from underscores to colons (e.g., {harmonized_df.index[0]})")
+                needs_resave = True
+            else:
+                logger.info(f"[HARMONIZE] variant_id already in colon format (e.g., {harmonized_df.index[0]})")
         else:
-            # Create variant_id if not present
+            # Create variant_id if not present (already in colon format)
             harmonized_df['variant_id'] = (
                 harmonized_df['chromosome'].astype(str) + ':' +
                 harmonized_df['base_pair_location'].astype(str) + ':' +
@@ -340,6 +351,19 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
                 harmonized_df['effect_allele']
             )
             harmonized_df.set_index('variant_id', inplace=True)
+            logger.info(f"[HARMONIZE] Created variant_id in colon format (e.g., {harmonized_df.index[0]})")
+            needs_resave = True
+        
+        # Save the updated DataFrame back to file if N was added or format was converted
+        if n_was_added or needs_resave:
+            reasons = []
+            if n_was_added:
+                reasons.append("N column added")
+            if needs_resave:
+                reasons.append("variant_id format converted to colons")
+            logger.info(f"[HARMONIZE] Saving updated harmonized file ({', '.join(reasons)}) to: {harmonized_file_path}")
+            harmonized_df.to_csv(harmonized_file_path, sep='\t', compression='gzip', index=True)
+            logger.info(f"[HARMONIZE] Updated file saved successfully")
         
         # Calculate processing time
         elapsed_time = (datetime.now() - start_time).total_seconds()
@@ -393,9 +417,12 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
         se_col = 'standard_error' if 'standard_error' in significant_df.columns else 'SE'
         p_col = 'p_value' if 'p_value' in significant_df.columns else 'P'
         
-        # Prepare COJO input format (space-separated as per boss's convention)
+        # Prepare COJO input format
         cojo_df = significant_df[[a1_col, a2_col, frq_col, beta_col, se_col, p_col, "N"]].copy()
-        cojo_df["SNP"] = significant_df.index  # Use index (variant_id or ID)
+        
+        # Use variant_id as SNP (already in colon format: chr:pos:ref:alt after harmonization)
+        cojo_df["SNP"] = significant_df.index
+        logger.info(f"[COJO] Using variant_id as SNP identifier (sample: {cojo_df['SNP'].iloc[0]})")
         
         # Rename to GCTA expected column names
         cojo_df = cojo_df.rename(columns={
@@ -408,10 +435,15 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
         })
         cojo_df = cojo_df[['SNP', 'A1', 'A2', 'FRQ', 'BETA', 'SE', 'P', 'N']]
         
-        # Save COJO input file (space-separated to match boss's convention)
+        # Save COJO input file
         cojo_input_path = os.path.join(temp_dir, "cojo_input.txt")
         cojo_df.to_csv(cojo_input_path, sep=' ', index=False)
         logger.info(f"[COJO] COJO input prepared: {len(cojo_df)} variants")
+        
+        # Debug: Show first few rows
+        logger.info(f"[COJO] Sample input (first 3 rows):")
+        for i, row in cojo_df.head(3).iterrows():
+            logger.info(f"  {row['SNP']} | A1={row['A1']} A2={row['A2']} | N={row['N']}")
         
         def run_cojo_for_chromosome(chrom):
             """Run COJO analysis for a single chromosome"""
@@ -444,7 +476,9 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
                 result = subprocess.run(cojo_cmd, capture_output=True, text=True, timeout=1800)
                 
                 if result.returncode != 0:
-                    logger.warning(f"[COJO] GCTA failed for chromosome {chrom}: {result.stderr}")
+                    logger.warning(f"[COJO] GCTA failed for chromosome {chrom}")
+                    logger.warning(f"[COJO] STDOUT (full): {result.stdout}")  # Full output
+                    logger.warning(f"[COJO] STDERR (full): {result.stderr}")  # Full output
                     return None
                 
                 # Read COJO results for this chromosome  
@@ -596,7 +630,7 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt') as tmp_file_ld:
                 tmp_file_ld_path = tmp_file_ld.name
                 
-            # Use PLINK 1 for LD calculation (matching boss's finemap.py)
+            # Use PLINK 1 for LD calculation
             plink_cmd = [
                 "plink",
                 "--bfile", f"{plink_dir}/{population}/{population}.{chr_num}.1000Gp3.20130502",

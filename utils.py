@@ -206,20 +206,30 @@ def transform_credible_sets_to_locuszoom(credible_sets_data):
                         "ref_allele": [], "ref_allele_freq": [], "variant": [], 
                         "posterior_prob": [], "is_member": [], "rs_id": []}, "lastPage": None}
     
+    # Handle both uppercase (COJO format) and lowercase (harmonized format) column names
+    beta_col = 'beta' if 'beta' in df.columns else 'BETA'
+    chr_col = 'CHR' if 'CHR' in df.columns else 'chromosome'
+    p_col = 'P' if 'P' in df.columns else 'p_value'
+    bp_col = 'BP' if 'BP' in df.columns else 'base_pair_location'
+    a1_col = 'A1' if 'A1' in df.columns else 'effect_allele'
+    a2_col = 'A2' if 'A2' in df.columns else 'other_allele'
+    frq_col = 'FRQ' if 'FRQ' in df.columns else 'effect_allele_frequency'
+    rsid_col = 'RS_ID' if 'RS_ID' in df.columns else 'rsid'
+    
     # Create LocusZoom format
     return {
         "data": {
-            "beta": df['BETA'].astype(float).tolist(),
-            "chromosome": df['CHR'].astype(int).tolist(), 
-            "log_pvalue": (-np.log10(df['P'].astype(float).clip(lower=1e-300))).tolist(),  # Clip to avoid log(0)
-            "position": df['BP'].astype(int).tolist(),
-            "ref_allele": df['A2'].astype(str).tolist(),
-            "minor_allele": df['A1'].astype(str).tolist(),
-            "ref_allele_freq": df['FRQ'].astype(float).tolist(),
-            "variant": [f"{row['CHR']}:{row['BP']}:{row['A2']}:{row['A1']}" for _, row in df.iterrows()],
+            "beta": df[beta_col].astype(float).tolist(),
+            "chromosome": df[chr_col].astype(int).tolist(), 
+            "log_pvalue": (-np.log10(df[p_col].astype(float).clip(lower=1e-300))).tolist(),  # Clip to avoid log(0)
+            "position": df[bp_col].astype(int).tolist(),
+            "ref_allele": df[a2_col].astype(str).tolist(),
+            "minor_allele": df[a1_col].astype(str).tolist(),
+            "ref_allele_freq": df[frq_col].astype(float).tolist(),
+            "variant": [f"{row[chr_col]}:{row[bp_col]}:{row[a2_col]}:{row[a1_col]}" for _, row in df.iterrows()],
             "posterior_prob": df['PIP'].astype(float).tolist(),
             "is_member": (df.get('cs', 0) != 0).tolist(),
-            "rs_id": df['RS_ID'].fillna('').astype(str).tolist() if 'RS_ID' in df.columns else [''] * len(df)
+            "rs_id": df[rsid_col].fillna('').astype(str).tolist() if rsid_col in df.columns else [''] * len(df)
         },
         "lastPage": None
     }

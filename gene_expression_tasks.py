@@ -50,11 +50,49 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
     # Use the LDSC data directory
     ldsc_data_dir = "data/ldsc"
     
-    # Always copy the GWAS file to ensure we use the latest version
+    # Convert SSF format to LDSC format
     gwas_filename = os.path.basename(gwas_file)
-    local_gwas_path = os.path.join(ldsc_data_dir, gwas_filename)
-    shutil.copy2(gwas_file, local_gwas_path)
-    logger.info(f"Copied GWAS file to: {local_gwas_path}")
+    ldsc_gwas_filename = gwas_filename.replace('.tsv.gz', '.ldsc.tsv.gz').replace('.h.tsv.gz', '.ldsc.tsv.gz')
+    local_gwas_path = os.path.join(ldsc_data_dir, ldsc_gwas_filename)
+    
+    logger.info(f"Converting SSF format to LDSC format...")
+    try:
+        df = pd.read_csv(gwas_file, sep='\t', compression='gzip')
+        logger.info(f"Loaded {len(df)} variants from {gwas_file}")
+        logger.info(f"Available columns: {df.columns.tolist()}")
+        
+        # Convert to LDSC format: needs SNP, Z, N columns
+        ldsc_df = pd.DataFrame()
+        ldsc_df['SNP'] = df['rsid'] if 'rsid' in df.columns else df['variant_id']
+        ldsc_df['Z'] = df['beta'] / df['standard_error']  # Calculate Z-score
+        
+        # Handle N column - might not be in file yet if added only in memory
+        if 'N' in df.columns:
+            ldsc_df['N'] = df['N']
+        else:
+            # Use a default or extract from environment
+            logger.warning("N column not found in harmonized file, using default N=10000")
+            ldsc_df['N'] = 10000
+            
+        ldsc_df['A1'] = df['effect_allele']
+        ldsc_df['A2'] = df['other_allele']
+        
+        # Remove rows with missing rsid/SNP
+        ldsc_df = ldsc_df.dropna(subset=['SNP'])
+        ldsc_df = ldsc_df[ldsc_df['SNP'] != '.']  # Remove missing rs IDs
+        
+        logger.info(f"After filtering missing SNPs: {len(ldsc_df)} variants")
+        
+        ldsc_df.to_csv(local_gwas_path, sep='\t', index=False, compression='gzip')
+        logger.info(f"Converted GWAS file saved to: {local_gwas_path}")
+        
+        gwas_filename = ldsc_gwas_filename  # Use the converted file
+        
+    except Exception as e:
+        logger.error(f"Failed to convert SSF to LDSC format: {e}")
+        # Fallback: just copy the file as-is
+        shutil.copy2(gwas_file, local_gwas_path)
+        logger.warning(f"Using original file without conversion: {local_gwas_path}")
     
     # Use the wrapper script from Dockerfile
     cmd = [
