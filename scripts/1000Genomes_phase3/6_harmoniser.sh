@@ -329,7 +329,17 @@ REF_DIR_ABS="$(resolve_path "$REF_DIR")"
 cd $SUMSTATS_DIR
 
 echo "==== HARMONISE SUMSTATS ===="
+
+# Use custom config if it exists (for overriding Python environment)
+CUSTOM_CONFIG="/app/config/harmonizer_custom.config"
+CUSTOM_CONFIG_FLAG=""
+if [[ -f "$CUSTOM_CONFIG" ]]; then
+  CUSTOM_CONFIG_FLAG="-c $CUSTOM_CONFIG"
+  echo "Using custom Nextflow config: $CUSTOM_CONFIG"
+fi
+
 nextflow run "$CODE_REPO" -profile standard \
+  $CUSTOM_CONFIG_FLAG \
   --harm \
   --ref "$REF_DIR_ABS" \
   --file "$OUT_GZ" \

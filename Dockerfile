@@ -180,7 +180,14 @@ RUN uv pip install 'pyarrow>=17.0.0'
 # Copy application
 COPY . .
 
-# Install harmonizer workflow dependencies (only missing packages, avoid version downgrades)
-RUN uv pip install 'duckdb>=0.9.2' 'gwas-sumstats-tools>=3.0.0' 'pyliftover>=0.4'
+# Create separate Python environment for harmonizer
+RUN python3 -m venv /opt/harmonizer-venv
+
+# Install harmonizer dependencies using uv for better performance
+ENV UV_HARMONIZER_VENV=/opt/harmonizer-venv
+RUN uv pip install --python=/opt/harmonizer-venv/bin/python -r gwas-sumstats-harmoniser/environments/requirements.txt
+
+# Also install minimal harmonizer deps in main venv (without gwas-sumstats-tools to avoid pydantic conflict)
+RUN uv pip install 'duckdb>=0.9.2' 'pyliftover>=0.4'
 
 EXPOSE 5000
