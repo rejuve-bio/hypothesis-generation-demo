@@ -18,10 +18,11 @@ server_stop(Port) :- http_stop_server(Port, []).
 handle_hypgen(Request) :-
     http_parameters(Request, 
               [rsid(RsId, [optional(false)]), 
+               seed(Seed, [integer, optional(false)]),
                samples(Samples, [integer, optional(false)])]),
 
         Snp = snp(RsId),
-        ((proof_tree(relevant_gene(Gene, Snp), Samples, Graph)) -> 
+        ((proof_tree(relevant_gene(Gene, Snp), Seed, Samples, Graph)) -> 
             reply_json(json{
                 rsid: RsId,
                 response: Graph

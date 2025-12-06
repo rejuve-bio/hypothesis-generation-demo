@@ -21,8 +21,8 @@ class PrologQuery:
         genes = [g.upper() for g in result["candidate_genes"]]
         return genes
     
-    def get_relevant_gene_proof(self, variant_id, samples):
-        payload = {"rsid": variant_id, "samples": samples}
+    def get_relevant_gene_proof(self, variant_id, seed, samples):
+        payload = {"rsid": variant_id, "seed": seed,  "samples": samples}
         res = requests.get(f"{self.server}/api/hypgen", params=payload)
         if not res.ok:
             raise RuntimeError(f"get_relevant_gene_proof failed. Prolog server response: {res.text}")
