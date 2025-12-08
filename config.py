@@ -20,7 +20,7 @@ class Config:
         self.mongodb_uri = None
         self.db_name = None
         self.embedding_model = "w601sxs/b1ade-embed-kd"
-        self.plink_dir = "./data/1000Genomes_phase3/plink_format_b37"
+        self.plink_dir = "./data/1000Genomes_phase3/plink_format_b38"
         self.data_dir = "./data"
         self.ontology_cache_dir = "./data/ontology"
         self.host = "0.0.0.0"
@@ -60,7 +60,7 @@ class Config:
         config.mongodb_uri = os.getenv("MONGODB_URI")
         config.db_name = os.getenv("DB_NAME")
         config.embedding_model = os.getenv("EMBEDDING_MODEL", "w601sxs/b1ade-embed-kd")
-        config.plink_dir = os.getenv("PLINK_DIR", "./data/1000Genomes_phase3/plink_format_b37")
+        config.plink_dir = os.getenv("PLINK_DIR", "./data/1000Genomes_phase3/plink_format_b38")
         config.data_dir = os.getenv("DATA_DIR", "./data")
         config.ontology_cache_dir = os.getenv("ONTOLOGY_CACHE_DIR", "./data/ontology")
         # Harmonization workflow configuration

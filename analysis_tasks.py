@@ -451,7 +451,7 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
                 logger.info(f"[COJO] Processing chromosome {chrom}")
                 
                 # Define paths for this chromosome
-                plink_prefix = os.path.join(plink_dir, population, f"{population}.{chrom}.1000Gp3.20130502")
+                plink_prefix = os.path.join(plink_dir, population, f"{population}.chr{chrom}.1KG.GRCh38")
                 
                 # Check if PLINK files exist
                 if not os.path.exists(f"{plink_prefix}.bed"):
@@ -631,9 +631,10 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                 tmp_file_ld_path = tmp_file_ld.name
                 
             # Use PLINK 1 for LD calculation
+            # Scripts create: {POP}.chr{CHR}.1KG.GRCh38 (e.g., EUR.chr1.1KG.GRCh38)
             plink_cmd = [
                 "plink",
-                "--bfile", f"{plink_dir}/{population}/{population}.{chr_num}.1000Gp3.20130502",
+                "--bfile", f"{plink_dir}/{population}/{population}.chr{chr_num}.1KG.GRCh38",
                 "--keep-allele-order",
                 "--r", "square",  # PLINK 1 correlation matrix
                 "--extract", tmp_file_path,
@@ -720,7 +721,8 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         })
         
         # Use check_ld_dimensions to reconcile any mismatches
-        bim_file_path = f"{plink_dir}/{population}/{population}.{chr_num}.1000Gp3.20130502.bim"
+        # Scripts create: {POP}.chr{CHR}.1KG.GRCh38 (e.g., EUR.chr1.1KG.GRCh38)
+        bim_file_path = f"{plink_dir}/{population}/{population}.chr{chr_num}.1KG.GRCh38.bim"
         
         if os.path.exists(bim_file_path):
             try:
