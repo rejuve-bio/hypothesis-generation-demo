@@ -35,7 +35,6 @@ echo ""
 # STEP 1: Download VCFs (SKIPPED - already downloaded)
 # ============================================
 echo "[1/4] Downloading VCF files from 1000 Genomes..."
-echo "This will download ~500 GB of data (may take 2-4 hours)"
 read -p "Continue? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -51,7 +50,6 @@ echo ""
 # STEP 2: Normalize VCFs (SKIPPED - already complete)
 # ============================================
 echo "[2/4] Normalizing VCF files..."
-echo "This processes all VCFs (may take 4-8 hours with $CORES cores)"
 read -p "Continue? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -75,7 +73,6 @@ echo ""
 # STEP 4: Convert to PLINK Format
 # ============================================
 echo "[4/4] Converting to PLINK format..."
-echo "This creates the final PLINK files used by the code (may take 2-4 hours with $CORES cores)"
 read -p "Continue? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
