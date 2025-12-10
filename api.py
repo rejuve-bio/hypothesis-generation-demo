@@ -73,6 +73,8 @@ class EnrichAPI(Resource):
         
         variant = json_data.get('variant')
         project_id = json_data.get('project_id')
+        seed = int(json_data.get('seed', 42))
+
         
         if not project_id:
             return {"error": "project_id is required"}, 400
@@ -119,7 +121,8 @@ class EnrichAPI(Resource):
                 phenotype=phenotype, 
                 variant=variant, 
                 hypothesis_id=existing_hypothesis['id'],
-                project_id=project_id
+                project_id=project_id,
+                seed=seed
             )
             return {"hypothesis_id": existing_hypothesis['id'], "project_id": project_id}, 202
         
@@ -142,7 +145,8 @@ class EnrichAPI(Resource):
             phenotype=phenotype, 
             variant=variant, 
             hypothesis_id=hypothesis_id,
-            project_id=project_id
+            project_id=project_id,
+            seed=seed
         )
         
         return {"hypothesis_id": hypothesis_id, "project_id": project_id}, 202

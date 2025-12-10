@@ -38,7 +38,7 @@ import traceback
 
 ### Enrichment Flow
 @flow(log_prints=True, persist_result=False, task_runner=ThreadPoolTaskRunner(max_workers=4))
-def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id):
+def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id, seed):
     """
     Fully project-based enrichment flow that initializes dependencies from centralized config
     """
@@ -65,10 +65,10 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
             return {"id": enrich['id']}, 200
 
         candidate_genes = get_candidate_genes.submit(prolog_query, variant, hypothesis_id).result()
-        graphs_list = get_relevant_gene_proof.submit(prolog_query, variant, hypothesis_id).result()
+        graphs_list = get_relevant_gene_proof.submit(prolog_query, variant, hypothesis_id, seed).result()
 
         if not graphs_list or len(graphs_list) == 0:
-            graphs_list = retry_get_relevant_gene_proof.submit(prolog_query, variant, hypothesis_id).result()
+            graphs_list = retry_get_relevant_gene_proof.submit(prolog_query, variant, hypothesis_id, seed).result()
             logger.info(f"Retried graphs: {len(graphs_list) if graphs_list else 0} graphs received")
         
         # If still no graphs after retry, fail the enrichment

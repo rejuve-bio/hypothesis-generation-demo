@@ -344,7 +344,7 @@ def predict_causal_gene(llm, phenotype, candidate_genes, hypothesis_id):
         raise
 
 @task(retries=2)
-def get_relevant_gene_proof(prolog_query, variant, hypothesis_id):
+def get_relevant_gene_proof(prolog_query, variant, hypothesis_id, seed):
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -354,7 +354,7 @@ def get_relevant_gene_proof(prolog_query, variant, hypothesis_id):
         )
 
         logger.info("Executing: get relevant gene proof")
-        raw_response = prolog_query.get_relevant_gene_proof(variant, samples=10)
+        raw_response = prolog_query.get_relevant_gene_proof(variant, seed, samples=10)
         graphs_list = parse_prolog_graphs(raw_response)
 
         emit_task_update(
@@ -404,7 +404,7 @@ def retry_predict_causal_gene(llm, phenotype, candidate_genes, proof, causal_gen
         raise
 
 @task(retries=2)
-def retry_get_relevant_gene_proof(prolog_query, variant, hypothesis_id):
+def retry_get_relevant_gene_proof(prolog_query, variant, hypothesis_id, seed):
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -414,7 +414,7 @@ def retry_get_relevant_gene_proof(prolog_query, variant, hypothesis_id):
         )
 
         logger.info("Retrying get relevant gene proof")
-        raw_response = prolog_query.get_relevant_gene_proof(variant, samples=10)
+        raw_response = prolog_query.get_relevant_gene_proof(variant, seed, samples=10)
         graphs_list = parse_prolog_graphs(raw_response)
        
         emit_task_update(
