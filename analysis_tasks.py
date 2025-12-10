@@ -286,10 +286,6 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         logger.info(f"[HARMONIZE] Loaded {harmonized_df.shape[0]} variants with {harmonized_df.shape[1]} columns")
         logger.info(f"[HARMONIZE] Available columns: {list(harmonized_df.columns)}")
         
-        # Expected harmonized columns from 6_harmoniser.sh:
-        # chromosome, base_pair_location, effect_allele, other_allele, beta, 
-        # standard_error, p_value, effect_allele_frequency, rsid, variant_id
-        
         # Validate required columns
         required_cols = ['chromosome', 'base_pair_location', 'effect_allele', 'other_allele', 
                         'beta', 'standard_error', 'p_value']
@@ -347,10 +343,7 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         # Calculate processing time
         elapsed_time = (datetime.now() - start_time).total_seconds()
         logger.info(f"[HARMONIZE] Processing completed in {elapsed_time:.2f} seconds")
-        
-        # Return DataFrame (for immediate use) and file path (for LDSC and persistence)
-        # No need to save a separate "processed" version - we have the DataFrame in memory
-        # and the harmonized file on disk for tools that need files
+
         return harmonized_df, harmonized_file_path
         
     except subprocess.TimeoutExpired:
@@ -712,7 +705,7 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         LD_mat = check_ld_semidefiniteness(LD_mat)
         logger.info(f"[FINEMAP] Sub-region shape after LD filtering: {sub_region_sumstats_ld.shape}")
  
-        # Compute Z-scores (always beta / SE, reference behavior)
+        # Compute Z-scores
         beta_col = "BETA" if "BETA" in sub_region_sumstats_ld.columns else "beta"
         se_col = "SE" if "SE" in sub_region_sumstats_ld.columns else "standard_error"
 

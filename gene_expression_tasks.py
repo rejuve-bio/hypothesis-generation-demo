@@ -65,15 +65,6 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
         ldsc_df = pd.DataFrame()
         ldsc_df['SNP'] = df['rsid'] if 'rsid' in df.columns else df['variant_id']
         ldsc_df['Z'] = df['beta'] / df['standard_error']  # Calculate Z-score
-        
-        # Handle N column - might not be in file yet if added only in memory
-        if 'N' in df.columns:
-            ldsc_df['N'] = df['N']
-        else:
-            # Use a default or extract from environment
-            logger.warning("N column not found in harmonized file, using default N=10000")
-            ldsc_df['N'] = 10000
-            
         ldsc_df['A1'] = df['effect_allele']
         ldsc_df['A2'] = df['other_allele']
         
@@ -90,7 +81,6 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
         
     except Exception as e:
         logger.error(f"Failed to convert SSF to LDSC format: {e}")
-        # Fallback: just copy the file as-is
         shutil.copy2(gwas_file, local_gwas_path)
         logger.warning(f"Using original file without conversion: {local_gwas_path}")
     
