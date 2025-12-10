@@ -122,29 +122,6 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
                                      cleanup_upload=True):
     """
     Harmonize GWAS summary statistics using Nextflow-based harmonization pipeline.
-    
-    This replaces MungeSumstats with a bash/Nextflow workflow that:
-    - Converts to GWAS-SSF format
-    - Filters X, Y, MT chromosomes
-    - Harmonizes against reference panel
-    - Outputs standardized format for finemapping
-    - Cleans up intermediate files to save disk space
-    
-    Args:
-        gwas_file_path: Path to input GWAS summary statistics
-        output_dir: Output directory for harmonized results
-        ref_genome: Reference genome build (GRCh37 or GRCh38)
-        ref_dir: Reference data directory (if None, uses Config)
-        code_repo: Path to Nextflow workflow repo (if None, uses Config) - passed to script as --code-repo
-        script_dir: Directory containing 6_harmoniser.sh script (if None, uses Config)
-        threshold: Threshold for palindromic variants (default 0.99)
-        sample_size: Sample size for GWAS study (REQUIRED if not in input file)
-        timeout_seconds: Timeout for harmonization in seconds (default 14400 = 4 hours)
-        cleanup_upload: If True, removes original uploaded file after harmonization (default True)
-    
-    Returns:
-        harmonized_df: DataFrame with harmonized columns
-        harmonized_file_path: Path to harmonized output file (in output_dir)
     """
     logger.info(f"[HARMONIZE] Starting Nextflow harmonization for {gwas_file_path}")
     start_time = datetime.now()
@@ -158,10 +135,8 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
     if ref_dir is None:
         ref_dir = getattr(config, 'harmonizer_ref_dir', '/data/harmonizer_ref')
     if code_repo is None:
-        # This is the Nextflow workflow directory (contains main.nf)
         code_repo = getattr(config, 'harmonizer_code_repo', '/app/gwas-sumstats-harmoniser')
     if script_dir is None:
-        # This is where the 6_harmoniser.sh script lives
         script_dir = getattr(config, 'harmonizer_script_dir', '/app/scripts/1000Genomes_phase3')
     
     # Create output paths
@@ -176,25 +151,23 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         if not os.path.exists(harmonizer_script):
             raise FileNotFoundError(f"Harmonizer script not found: {harmonizer_script}")
         
-        # Build harmonizer command - pass code_repo (Nextflow workflow dir) to the script
         harmonizer_cmd = [
             "bash", harmonizer_script,
             "--input", gwas_file_path,
             "--build", ref_genome,
             "--threshold", str(threshold),
             "--ref", ref_dir,
-            "--code-repo", code_repo  # This points to the Nextflow workflow
+            "--code-repo", code_repo
         ]
         
         logger.info(f"[HARMONIZE] Running command: {' '.join(harmonizer_cmd)}")
         
-        # Run harmonizer (from /app directory, not output_dir)
+        # Run harmonizer
         result = subprocess.run(
             harmonizer_cmd,
             capture_output=True,
             text=True,
             timeout=timeout_seconds
-            # No cwd specified - bash script handles its own directory changes
         )
         
         if result.returncode != 0:
@@ -208,8 +181,6 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         for line in result.stdout.strip().split('\n')[-20:]:
             logger.info(f"  {line}")
         
-        # Parse harmonized output path from bash script output
-        # The bash script outputs: "HARMONIZED_OUTPUT_PATH=/path/to/harmonized.tsv.gz"
         harmonized_file_path = None
         for line in result.stdout.strip().split('\n'):
             if line.startswith('HARMONIZED_OUTPUT_PATH='):
@@ -222,80 +193,90 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
             logger.error(f"[HARMONIZE] This means the harmonizer may have failed to find its output")
             raise FileNotFoundError(
                 "Harmonizer script did not output harmonized file path. "
-                "Check harmonizer logs for errors."
             )
         
         if not os.path.exists(harmonized_file_path):
             raise FileNotFoundError(f"Harmonized file not found at path: {harmonized_file_path}")
         
-        # Move harmonized file to output directory (don't leave in upload temp dir)
-        # Use shutil.move instead of copy to avoid duplication
         harmonized_output_path = os.path.join(output_dir, os.path.basename(harmonized_file_path))
         upload_dir = os.path.dirname(harmonized_file_path)
+        parent_upload_dir = os.path.dirname(gwas_file_path)
         
         if os.path.abspath(harmonized_file_path) != os.path.abspath(harmonized_output_path):
             shutil.move(harmonized_file_path, harmonized_output_path)
             logger.info(f"[HARMONIZE] Moved harmonized file to: {harmonized_output_path}")
+        
+        try:
+            gwas_basename = os.path.splitext(os.path.basename(gwas_file_path))[0]
             
-            # Cleanup intermediate files from upload directory to save space
-            # The bash script creates: SSF files, YAML metadata, logs, Nextflow work dirs
-            try:
-                gwas_basename = os.path.splitext(os.path.basename(gwas_file_path))[0]
-                
-                # 1. Remove SSF intermediate files
-                for pattern in [f"{gwas_basename}.tsv*", f"{gwas_basename}*-meta.yaml"]:
-                    for f in glob.glob(os.path.join(upload_dir, pattern)):
-                        if os.path.exists(f) and f != gwas_file_path:  # Don't delete original
-                            os.remove(f)
-                            logger.info(f"[HARMONIZE] Cleaned up: {f}")
-                
-                # 2. Move logs to output_dir instead of deleting
-                upload_log_dir = os.path.join(upload_dir, "logs")
-                if os.path.exists(upload_log_dir):
-                    output_log_dir = os.path.join(output_dir, "logs")
-                    if not os.path.exists(output_log_dir):
-                        shutil.move(upload_log_dir, output_log_dir)
-                        logger.info(f"[HARMONIZE] Moved logs to: {output_log_dir}")
-                
-                # 3. Remove Nextflow work directories (can be HUGE - GB of temp files)
-                nextflow_work_dir = os.path.join(upload_dir, "work")
-                if os.path.exists(nextflow_work_dir):
-                    shutil.rmtree(nextflow_work_dir)
-                    logger.info(f"[HARMONIZE] Removed Nextflow work directory: {nextflow_work_dir}")
-                
-                # 4. Remove Nextflow timestamp directories (after moving harmonized output)
-                # These are like: 20240101_120000/final/harmonized.tsv.gz
-                for item in os.listdir(upload_dir):
-                    item_path = os.path.join(upload_dir, item)
-                    # Remove directories that look like timestamps or nextflow outputs
-                    if os.path.isdir(item_path) and (
-                        item.startswith('2') or  # Timestamp directories
-                        item == '.nextflow' or   # Nextflow metadata
-                        item.startswith('results')  # Nextflow results dirs
-                    ):
+            # 1. Remove SSF intermediate files (including .tbi tabix index files)
+            for pattern in [f"{gwas_basename}.tsv*", f"{gwas_basename}*-meta.yaml", f"{gwas_basename}*.tbi"]:
+                for f in glob.glob(os.path.join(upload_dir, pattern)):
+                    if os.path.exists(f) and f != gwas_file_path:
+                        os.remove(f)
+                        logger.info(f"[HARMONIZE] Cleaned up: {f}")
+                # Also check parent directory
+                for f in glob.glob(os.path.join(parent_upload_dir, pattern)):
+                    if os.path.exists(f) and f != gwas_file_path:
+                        os.remove(f)
+                        logger.info(f"[HARMONIZE] Cleaned up: {f}")
+            
+            # 2. Move logs to output_dir instead of deleting
+            upload_log_dir = os.path.join(upload_dir, "logs")
+            if os.path.exists(upload_log_dir):
+                output_log_dir = os.path.join(output_dir, "logs")
+                if not os.path.exists(output_log_dir):
+                    shutil.move(upload_log_dir, output_log_dir)
+                    logger.info(f"[HARMONIZE] Moved logs to: {output_log_dir}")
+            
+            # 3. Remove Nextflow work directories 
+            nextflow_work_dir = os.path.join(upload_dir, "work")
+            if os.path.exists(nextflow_work_dir):
+                shutil.rmtree(nextflow_work_dir)
+                logger.info(f"[HARMONIZE] Removed Nextflow work directory: {nextflow_work_dir}")
+            # Also check parent directory for work dir
+            parent_work_dir = os.path.join(parent_upload_dir, "work")
+            if os.path.exists(parent_work_dir):
+                shutil.rmtree(parent_work_dir)
+                logger.info(f"[HARMONIZE] Removed Nextflow work directory: {parent_work_dir}")
+            
+            # 4. Remove Nextflow timestamp directories 
+            for item in os.listdir(upload_dir):
+                item_path = os.path.join(upload_dir, item)
+                if os.path.isdir(item_path) and (
+                    len(item.split('_')) >= 2 or  
+                    item.startswith('2') or  
+                    item == '.nextflow' or  
+                    item.startswith('results') 
+                ):
+                    try:
                         shutil.rmtree(item_path)
-                        logger.info(f"[HARMONIZE] Removed Nextflow directory: {item_path}")
-                
-                # 5. Remove .nextflow.log files
-                for f in glob.glob(os.path.join(upload_dir, ".nextflow.log*")):
-                    os.remove(f)
-                    logger.info(f"[HARMONIZE] Removed: {f}")
-                
-                # 6. Optionally remove original uploaded file (we have harmonized version)
-                if cleanup_upload and os.path.exists(gwas_file_path):
-                    os.remove(gwas_file_path)
-                    logger.info(f"[HARMONIZE] Removed original uploaded file: {gwas_file_path}")
-                elif not cleanup_upload:
-                    logger.info(f"[HARMONIZE] Keeping original uploaded file: {gwas_file_path}")
-                
-                logger.info(f"[HARMONIZE] Cleanup complete for upload directory: {upload_dir}")
-                
-            except Exception as cleanup_error:
-                logger.warning(f"[HARMONIZE] Error during cleanup: {cleanup_error}")
+                        logger.info(f"[HARMONIZE] Removed directory: {item_path}")
+                    except Exception as e:
+                        logger.warning(f"[HARMONIZE] Could not remove directory {item_path}: {e}")
             
-            harmonized_file_path = harmonized_output_path
-        else:
-            logger.info(f"[HARMONIZE] File already in output directory: {harmonized_file_path}")
+            # 5. Remove .nextflow.log files from both upload_dir and parent_upload_dir
+            for log_dir in [upload_dir, parent_upload_dir]:
+                for f in glob.glob(os.path.join(log_dir, ".nextflow.log*")):
+                    try:
+                        os.remove(f)
+                        logger.info(f"[HARMONIZE] Removed: {f}")
+                    except Exception as e:
+                        logger.warning(f"[HARMONIZE] Could not remove {f}: {e}")
+            
+            # 6.  remove original uploaded file
+            if cleanup_upload and os.path.exists(gwas_file_path):
+                os.remove(gwas_file_path)
+                logger.info(f"[HARMONIZE] Removed original uploaded file: {gwas_file_path}")
+            elif not cleanup_upload:
+                logger.info(f"[HARMONIZE] Keeping original uploaded file: {gwas_file_path}")
+            
+            logger.info(f"[HARMONIZE] Cleanup complete for upload directory: {upload_dir}")
+            
+        except Exception as cleanup_error:
+            logger.warning(f"[HARMONIZE] Error during cleanup: {cleanup_error}")
+        
+        harmonized_file_path = harmonized_output_path
             
         # Load harmonized data
         logger.info("[HARMONIZE] Loading harmonized SSF data")
@@ -334,8 +315,6 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         needs_resave = False
         if 'variant_id' in harmonized_df.columns:
             harmonized_df.set_index('variant_id', inplace=True)
-            # Convert variant_id format: 1_1589057_T_C -> 1:1589057:T:C
-            # This matches 1000G PLINK BIM format (chr:pos:ref:alt)
             if '_' in harmonized_df.index[0]:
                 harmonized_df.index = harmonized_df.index.str.replace('_', ':', regex=False)
                 logger.info(f"[HARMONIZE] Converted variant_id format from underscores to colons (e.g., {harmonized_df.index[0]})")
@@ -591,7 +570,7 @@ def check_ld_semidefiniteness(R_df):
 # === FINE-MAPPING SINGLE REGION ===
 @task(cache_policy=None)
 def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000, 
-                                 population="EUR", L=-1, coverage=0.95, min_abs_corr=0.5):
+                                 population="EUR", L=-1, coverage=0.95, min_abs_corr=0.5, maf=0.01):
     try:     
         logger.info(f"[FINEMAP] Fine-mapping chr{chr_num}:{lead_variant_position} ±{window}kb")
         
@@ -630,35 +609,30 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt') as tmp_file_ld:
                 tmp_file_ld_path = tmp_file_ld.name
                 
-            # Use PLINK 1 for LD calculation
-            # Scripts create: {POP}.chr{CHR}.1KG.GRCh38 (e.g., EUR.chr1.1KG.GRCh38)
             plink_cmd = [
                 "plink",
                 "--bfile", f"{plink_dir}/{population}/{population}.chr{chr_num}.1KG.GRCh38",
                 "--keep-allele-order",
-                "--r", "square",  # PLINK 1 correlation matrix
+                "--r", "square",
                 "--extract", tmp_file_path,
-                "--maf", "0.01",  # MAF threshold
-                "--write-snplist",  # Write list of SNPs that passed QC
+                "--maf", str(maf),  
+                "--write-snplist",
                 "--out", tmp_file_ld_path
             ]
             
-            logger.info(f"[FINEMAP] Running LD with PLINK 1: {' '.join(plink_cmd)}")
+            logger.info(f"[FINEMAP] Running LD: {' '.join(plink_cmd)}")
             ld_run_res = run_command(' '.join(plink_cmd))
             
             if ld_run_res.returncode != 0:
                 logger.error(f"[FINEMAP] PLINK LD failed: {ld_run_res.stderr}")
-                # Clean up and return None
                 try:
                     os.remove(tmp_file_path)
                 except:
                     pass
                 return None
             
-            # Read LD matrix from PLINK 1 output
             ld_out_path = f"{tmp_file_ld_path}.ld"
             ld_snplist_path = f"{tmp_file_ld_path}.snplist"
-            
             if not os.path.exists(ld_out_path):
                 logger.error(f"[FINEMAP] PLINK LD output not found: {ld_out_path}")
                 try:
@@ -666,35 +640,31 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                 except:
                     pass
                 return None
-            
-            # Read SNP list that passed QC
+            # Read SNP list
             snp_ids = []
             if os.path.exists(ld_snplist_path):
                 with open(ld_snplist_path, 'r') as f:
                     for line in f:
                         snp_ids.append(line.strip())
             else:
-                logger.warning(f"[FINEMAP] SNP list not found, using filtered_ids")
+                logger.warning(f"[FINEMAP] SNP list not found: {ld_snplist_path}")
                 snp_ids = filtered_ids
-            
-            # Read LD matrix (space/tab separated, no header)
+
+            # Read LD matrix
             ld_df = pd.read_csv(ld_out_path, sep=r'\s+', header=None)
-            
-            # Ensure we have the right number of SNPs
+
+            # Ensure dimensions match
             if len(snp_ids) != ld_df.shape[0]:
                 logger.warning(f"[FINEMAP] SNP count mismatch: {len(snp_ids)} IDs vs {ld_df.shape[0]} rows")
-                snp_ids = snp_ids[:ld_df.shape[0]]  # Truncate if needed
-            
+                snp_ids = snp_ids[:ld_df.shape[0]]
+
             ld_df.index = snp_ids
             ld_df.columns = snp_ids
             ld_df.fillna(0, inplace=True)
-            
-            # Clean up files safely
-            cleanup_files = [tmp_file_path, tmp_file_ld_path + ".log", 
-                           tmp_file_ld_path + ".nosex", ld_out_path]
-            if os.path.exists(ld_snplist_path):
-                cleanup_files.append(ld_snplist_path)
-                
+
+            # Clean up files
+            cleanup_files = [tmp_file_path, f"{tmp_file_ld_path}.log", 
+                            f"{tmp_file_ld_path}.nosex", ld_out_path, ld_snplist_path]
             for cleanup_file in cleanup_files:
                 try:
                     if os.path.exists(cleanup_file):
@@ -720,8 +690,6 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             'BP': sub_region_sumstats_ld[bp_col]
         })
         
-        # Use check_ld_dimensions to reconcile any mismatches
-        # Scripts create: {POP}.chr{CHR}.1KG.GRCh38 (e.g., EUR.chr1.1KG.GRCh38)
         bim_file_path = f"{plink_dir}/{population}/{population}.chr{chr_num}.1KG.GRCh38.bim"
         
         if os.path.exists(bim_file_path):
@@ -743,19 +711,18 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         # Check and fix LD matrix semi-definiteness
         LD_mat = check_ld_semidefiniteness(LD_mat)
         logger.info(f"[FINEMAP] Sub-region shape after LD filtering: {sub_region_sumstats_ld.shape}")
+ 
+        # Compute Z-scores (always beta / SE, reference behavior)
+        beta_col = "BETA" if "BETA" in sub_region_sumstats_ld.columns else "beta"
+        se_col = "SE" if "SE" in sub_region_sumstats_ld.columns else "standard_error"
 
-        # Get Z-scores after LD filtering - calculate if not available
-        # Support both old (BETA/SE) and new (beta/standard_error) column names
-        beta_col = 'beta' if 'beta' in sub_region_sumstats_ld.columns else 'BETA'
-        se_col = 'standard_error' if 'standard_error' in sub_region_sumstats_ld.columns else 'SE'
-        
-        if "Z" in sub_region_sumstats_ld.columns:
-            zhat = sub_region_sumstats_ld["Z"].values.reshape(len(sub_region_sumstats_ld), 1)
-        elif beta_col in sub_region_sumstats_ld.columns and se_col in sub_region_sumstats_ld.columns:
+        if beta_col in sub_region_sumstats_ld.columns and se_col in sub_region_sumstats_ld.columns:
             logger.info(f"[FINEMAP] Calculating Z-scores from {beta_col}/{se_col}")
-            zhat = (sub_region_sumstats_ld[beta_col] / sub_region_sumstats_ld[se_col]).values.reshape(len(sub_region_sumstats_ld), 1)
+            beta = sub_region_sumstats_ld[beta_col].values
+            se = sub_region_sumstats_ld[se_col].values
+            zhat = (beta / se).reshape(len(sub_region_sumstats_ld), 1)
         else:
-            logger.error(f"[FINEMAP] Neither Z-scores nor beta/standard_error available for Z-score calculation")
+            logger.error(f"[FINEMAP] Missing BETA or SE columns for Z-score calculation")
             return None
         
         if LD_mat.shape[0] != len(zhat):
@@ -858,7 +825,7 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                     return -np.inf
             
             study = optuna.create_study(direction="maximize")
-            study.optimize(objective_susie, n_trials=10)
+            study.optimize(objective_susie, n_trials=20)
             L = study.best_params["L"]
             logger.info(f"[FINEMAP] Best L found: {L} with ELBO {study.best_value}")
         
@@ -1121,7 +1088,8 @@ def finemap_region_batch_worker(batch_data):
                     population=population,
                     L=L,
                     coverage=coverage,
-                    min_abs_corr=min_abs_corr
+                    min_abs_corr=min_abs_corr,
+                    maf=maf_threshold
                 )
                 
                 if result is not None and len(result) > 0:
