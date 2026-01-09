@@ -190,7 +190,13 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         
         if not harmonized_file_path:
             logger.error(f"[HARMONIZE] Bash script did not output HARMONIZED_OUTPUT_PATH")
-            logger.error(f"[HARMONIZE] This means the harmonizer may have failed to find its output")
+            # Log the path to nextflow log for inspection
+            input_dir = os.path.dirname(gwas_file_path)
+            nextflow_log = os.path.join(input_dir, ".nextflow.log")
+            if os.path.exists(nextflow_log):
+                logger.error(f"[HARMONIZE] Nextflow log found at: {nextflow_log}")
+            else:
+                logger.error(f"[HARMONIZE] Nextflow log not found at: {nextflow_log}")
             raise FileNotFoundError(
                 "Harmonizer script did not output harmonized file path. "
             )
@@ -565,123 +571,89 @@ def check_ld_semidefiniteness(R_df):
     
     return R_df
 
-# === FINE-MAPPING SINGLE REGION ===
-@task(cache_policy=None)
-def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000, 
-                                 population="EUR", L=-1, coverage=0.95, min_abs_corr=0.5, maf=0.01, 
-                                 ref_genome="GRCh38", plink_dir=None):
-    try:     
-        logger.info(f"[FINEMAP] Fine-mapping chr{chr_num}:{lead_variant_position} ±{window}kb")
+# === FINE-MAPPING HELPER FUNCTIONS ===
 
-        # Get config for file pattern
-        config = Config.from_env()
-        
-        # Calculate LD 
-        window_bp = window * 1000
-        start = lead_variant_position - window_bp
-        end = lead_variant_position + window_bp
-        
-        # Support both old (CHR/BP) and new (chromosome/base_pair_location) column names
-        chr_col = 'chromosome' if 'chromosome' in sumstats.columns else 'CHR'
-        bp_col = 'base_pair_location' if 'base_pair_location' in sumstats.columns else 'BP'
-        
-        filtered_region = sumstats[(sumstats[chr_col] == chr_num) &
-                                  (sumstats[bp_col] >= start) &
-                                  (sumstats[bp_col] <= end)]
-        
-        # Use index (variant_id or ID)
-        filtered_ids = filtered_region.index.tolist()
-        logger.info(f"[FINEMAP] Filtered {len(filtered_ids)} SNPs in region")
-        
-        if len(filtered_ids) < 2:
-            logger.warning(f"[FINEMAP] Insufficient SNPs for chr{chr_num}:{lead_variant_position}")
-            return None
-         
-        # Calculate LD
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt') as tmp_file:
-                for snp_id in filtered_ids:
-                    tmp_file.write(f"{snp_id}\n")
-                tmp_file_path = tmp_file.name
-                
-            with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt') as tmp_file_ld:
-                tmp_file_ld_path = tmp_file_ld.name
-                
-            # Get file pattern for this build
-            file_pattern = config.get_plink_file_pattern(ref_genome, population, chr_num)
+def calculate_ld_matrix(chr_num, filtered_ids, sumstats, plink_dir, population, ref_genome, maf, config):
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt') as tmp_file:
+            for snp_id in filtered_ids:
+                tmp_file.write(f"{snp_id}\n")
+            tmp_file_path = tmp_file.name
             
-            plink_cmd = [
-                "plink",
-                "--bfile", f"{plink_dir}/{population}/{file_pattern}",
-                "--keep-allele-order",
-                "--r", "square",
-                "--extract", tmp_file_path,
-                "--maf", str(maf),  
-                "--write-snplist",
-                "--out", tmp_file_ld_path
-            ]
+        with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt') as tmp_file_ld:
+            tmp_file_ld_path = tmp_file_ld.name
             
-            logger.info(f"[FINEMAP] Running LD: {' '.join(plink_cmd)}")
-            ld_run_res = run_command(' '.join(plink_cmd))
-            
-            if ld_run_res.returncode != 0:
-                logger.error(f"[FINEMAP] PLINK LD failed: {ld_run_res.stderr}")
-                try:
-                    os.remove(tmp_file_path)
-                except:
-                    pass
-                return None
-            
-            ld_out_path = f"{tmp_file_ld_path}.ld"
-            ld_snplist_path = f"{tmp_file_ld_path}.snplist"
-            if not os.path.exists(ld_out_path):
-                logger.error(f"[FINEMAP] PLINK LD output not found: {ld_out_path}")
-                try:
-                    os.remove(tmp_file_path)
-                except:
-                    pass
-                return None
-            # Read SNP list
-            snp_ids = []
-            if os.path.exists(ld_snplist_path):
-                with open(ld_snplist_path, 'r') as f:
-                    for line in f:
-                        snp_ids.append(line.strip())
-            else:
-                logger.warning(f"[FINEMAP] SNP list not found: {ld_snplist_path}")
-                snp_ids = filtered_ids
-
-            # Read LD matrix
-            ld_df = pd.read_csv(ld_out_path, sep=r'\s+', header=None)
-
-            # Ensure dimensions match
-            if len(snp_ids) != ld_df.shape[0]:
-                logger.warning(f"[FINEMAP] SNP count mismatch: {len(snp_ids)} IDs vs {ld_df.shape[0]} rows")
-                snp_ids = snp_ids[:ld_df.shape[0]]
-
-            ld_df.index = snp_ids
-            ld_df.columns = snp_ids
-            ld_df.fillna(0, inplace=True)
-
-            # Clean up files
-            cleanup_files = [tmp_file_path, f"{tmp_file_ld_path}.log", 
-                            f"{tmp_file_ld_path}.nosex", ld_out_path, ld_snplist_path]
-            for cleanup_file in cleanup_files:
-                try:
-                    if os.path.exists(cleanup_file):
-                        os.remove(cleanup_file)
-                except Exception as e:
-                    logger.warning(f"[FINEMAP] Could not remove temp file {cleanup_file}: {e}")
+        # Get file pattern for this build
+        file_pattern = config.get_plink_file_pattern(ref_genome, population, chr_num)
         
-        except Exception as e:
-            logger.error(f"[FINEMAP] Error in LD calculation: {str(e)}")
-            return None
+        plink_cmd = [
+            "plink",
+            "--bfile", f"{plink_dir}/{population}/{file_pattern}",
+            "--keep-allele-order",
+            "--r", "square",
+            "--extract", tmp_file_path,
+            "--maf", str(maf),  
+            "--write-snplist",
+            "--out", tmp_file_ld_path
+        ]
+        
+        logger.info(f"[LD] Running PLINK: {' '.join(plink_cmd)}")
+        ld_run_res = run_command(' '.join(plink_cmd))
+        
+        if ld_run_res.returncode != 0:
+            logger.error(f"[LD] PLINK failed: {ld_run_res.stderr}")
+            try:
+                os.remove(tmp_file_path)
+            except:
+                pass
+            return None, None
+        
+        ld_out_path = f"{tmp_file_ld_path}.ld"
+        ld_snplist_path = f"{tmp_file_ld_path}.snplist"
+        if not os.path.exists(ld_out_path):
+            logger.error(f"[LD] PLINK output not found: {ld_out_path}")
+            try:
+                os.remove(tmp_file_path)
+            except:
+                pass
+            return None, None
+            
+        # Read SNP list
+        snp_ids = []
+        if os.path.exists(ld_snplist_path):
+            with open(ld_snplist_path, 'r') as f:
+                for line in f:
+                    snp_ids.append(line.strip())
+        else:
+            logger.warning(f"[LD] SNP list not found: {ld_snplist_path}")
+            snp_ids = filtered_ids
+
+        # Read LD matrix
+        ld_df = pd.read_csv(ld_out_path, sep=r'\s+', header=None)
+
+        # Ensure dimensions match
+        if len(snp_ids) != ld_df.shape[0]:
+            logger.warning(f"[LD] SNP count mismatch: {len(snp_ids)} IDs vs {ld_df.shape[0]} rows")
+            snp_ids = snp_ids[:ld_df.shape[0]]
+
+        ld_df.index = snp_ids
+        ld_df.columns = snp_ids
+        ld_df.fillna(0, inplace=True)
+
+        # Clean up files
+        cleanup_files = [tmp_file_path, f"{tmp_file_ld_path}.log", 
+                        f"{tmp_file_ld_path}.nosex", ld_out_path, ld_snplist_path]
+        for cleanup_file in cleanup_files:
+            try:
+                if os.path.exists(cleanup_file):
+                    os.remove(cleanup_file)
+            except Exception as e:
+                logger.warning(f"[LD] Could not remove temp file {cleanup_file}: {e}")
         
         # Get sub-region sumstats matching LD
         sub_region_sumstats_ld = sumstats.loc[ld_df.index]
-        LD_mat = ld_df.values
         
-        # Prepare SNP dataframe for check_ld_dimensions function
+        # Perform LD dimension check
         chr_col = 'chromosome' if 'chromosome' in sub_region_sumstats_ld.columns else 'CHR'
         bp_col = 'base_pair_location' if 'base_pair_location' in sub_region_sumstats_ld.columns else 'BP'
         
@@ -696,112 +668,118 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         
         if os.path.exists(bim_file_path):
             try:
-                filtered_snp_df = check_ld_dimensions(LD_mat, snp_df_for_check, bim_file_path)
+                filtered_snp_df = check_ld_dimensions(ld_df.values, snp_df_for_check, bim_file_path)
                 
                 if len(filtered_snp_df) != len(snp_df_for_check):
-                    logger.info(f"[FINEMAP] LD dimensions check filtered SNPs: {len(snp_df_for_check)} → {len(filtered_snp_df)}")
+                    logger.info(f"[LD] Dimension check filtered SNPs: {len(snp_df_for_check)} → {len(filtered_snp_df)}")
                     # Re-filter LD matrix and sumstats to match filtered SNPs
                     kept_snp_ids = filtered_snp_df['SNPID'].tolist()
-                    LD_mat = ld_df.loc[kept_snp_ids].values
+                    ld_df = ld_df.loc[kept_snp_ids, kept_snp_ids]
                     sub_region_sumstats_ld = sumstats.loc[kept_snp_ids]
             except Exception as e:
-                logger.warning(f"[FINEMAP] check_ld_dimensions failed: {str(e)}, proceeding without filtering")
+                logger.warning(f"[LD] check_ld_dimensions failed: {str(e)}, proceeding without filtering")
         else:
-            logger.warning(f"[FINEMAP] BIM file not found: {bim_file_path}, skipping LD dimension check")
+            logger.warning(f"[LD] BIM file not found: {bim_file_path}, skipping dimension check")
         
-            
         # Check and fix LD matrix semi-definiteness
-        LD_mat = check_ld_semidefiniteness(LD_mat)
-        logger.info(f"[FINEMAP] Sub-region shape after LD filtering: {sub_region_sumstats_ld.shape}")
- 
+        LD_mat = check_ld_semidefiniteness(ld_df.values)
+        ld_df = pd.DataFrame(LD_mat, index=ld_df.index, columns=ld_df.columns)
+        
+        logger.info(f"[LD] Final LD matrix shape: {ld_df.shape}")
+        return ld_df, sub_region_sumstats_ld
+        
+    except Exception as e:
+        logger.error(f"[LD] Error in LD calculation: {str(e)}")
+        return None, None
+
+
+def run_susie_finemapping(seed, ld_df, sub_region_sumstats_ld, chr_num, lead_variant_position, 
+                          L=-1, coverage=0.95, min_abs_corr=0.5):
+    try:
+        # Validate inputs
+        LD_mat = ld_df.values
+        
         # Compute Z-scores
         beta_col = "BETA" if "BETA" in sub_region_sumstats_ld.columns else "beta"
         se_col = "SE" if "SE" in sub_region_sumstats_ld.columns else "standard_error"
 
         if beta_col in sub_region_sumstats_ld.columns and se_col in sub_region_sumstats_ld.columns:
-            logger.info(f"[FINEMAP] Calculating Z-scores from {beta_col}/{se_col}")
+            logger.info(f"[SUSIE] Calculating Z-scores from {beta_col}/{se_col}")
             beta = sub_region_sumstats_ld[beta_col].values
             se = sub_region_sumstats_ld[se_col].values
             zhat = (beta / se).reshape(len(sub_region_sumstats_ld), 1)
         else:
-            logger.error(f"[FINEMAP] Missing BETA or SE columns for Z-score calculation")
+            logger.error(f"[SUSIE] Missing BETA or SE columns for Z-score calculation")
             return None
         
         if LD_mat.shape[0] != len(zhat):
-            logger.error(f"[FINEMAP] Dimension mismatch: LD={LD_mat.shape}, Z-scores={len(zhat)}")
+            logger.error(f"[SUSIE] Dimension mismatch: LD={LD_mat.shape}, Z-scores={len(zhat)}")
             return None
         
         num_samples = int(sub_region_sumstats_ld["N"].iloc[0])
         
         # Check for invalid data
         if np.isnan(LD_mat).any() or np.isinf(LD_mat).any():
-            logger.error(f"[DEBUG] Invalid LD matrix detected - contains NaN or inf values")
+            logger.error(f"[SUSIE] Invalid LD matrix - contains NaN or inf values")
             return None
         if np.isnan(zhat).any() or np.isinf(zhat).any():
-            logger.error(f"[DEBUG] Invalid Z-scores detected - contains NaN or inf values")
+            logger.error(f"[SUSIE] Invalid Z-scores - contains NaN or inf values")
             return None
         
-        # Simplified susieR availability check
+        # Check susieR availability
         try:
-            # Quick check if susieR is available
             if not check_r_package_available('susieR'):
-                logger.error(f"[FINEMAP] susieR package not available for chr{chr_num}:{lead_variant_position}")
+                logger.error(f"[SUSIE] susieR package not available")
                 return None
-            logger.info(f"[FINEMAP] susieR package available for chr{chr_num}:{lead_variant_position}")
+            logger.info(f"[SUSIE] susieR package available")
         except Exception as e:
-            logger.error(f"[FINEMAP] Error checking susieR availability: {e}")
+            logger.error(f"[SUSIE] Error checking susieR availability: {e}")
             return None
         
-        # Set up R conversions properly for multithreading
+        # Set R seed
         try:
             ro.r(f'set.seed({seed})')
         except Exception as e:
-            logger.error(f"[FINEMAP] Error setting R seed: {str(e)}")
+            logger.error(f"[SUSIE] Error setting R seed: {str(e)}")
             return None
         
-        # Convert data within context, then exit context
+        # Convert data to R objects
         with (ro.default_converter + numpy2ri.converter).context():
             try:
                 zhat_r = ro.conversion.get_conversion().py2rpy(zhat)
                 R_r = ro.conversion.get_conversion().py2rpy(LD_mat)
-                    
             except Exception as e:
-                logger.error(f"[FINEMAP] Error converting data to R objects: {str(e)}")
+                logger.error(f"[SUSIE] Error converting data to R objects: {str(e)}")
                 return None
         
-        # All SuSiE operations happen outside conversion context
-        
-        # Import susieR once for all operations
+        # Import susieR
         try:
             local_susieR = importr('susieR')
-            logger.info(f"[FINEMAP] susieR imported for chr{chr_num}:{lead_variant_position}")
+            logger.info(f"[SUSIE] susieR imported successfully")
         except Exception as e:
-            logger.error(f"[FINEMAP] Error importing susieR: {e}")
+            logger.error(f"[SUSIE] Error importing susieR: {e}")
             return None
         
-        # Optuna hyperparameter optimization
+        # Hyperparameter optimization if L not specified
         if L <= 0:
             def objective_susie(trial):
                 L_trial = trial.suggest_int("L", 1, 20)
-                logger.info(f"[DEBUG] Starting SuSiE trial with L={L_trial}")                
+                logger.info(f"[SUSIE] Starting trial with L={L_trial}")                
                 
                 try:
-                    # Use the local susieR instance
                     susie_fit = local_susieR.susie_rss(z=zhat_r, R=R_r, L=L_trial, n=num_samples)
-                    logger.info(f"[DEBUG] SuSiE execution completed for L={L_trial}")
+                    logger.info(f"[SUSIE] Execution completed for L={L_trial}")
                 except Exception as e:
-                    logger.error(f"[DEBUG] SuSiE execution failed for L={L_trial}: {str(e)}")
+                    logger.error(f"[SUSIE] Execution failed for L={L_trial}: {str(e)}")
                     return -np.inf
                 
                 # Extract ELBO and convergence
                 try:
-                    # Primary method: ListVector conversion (known to work reliably)
                     try:
                         susie_fit_r = ListVector(susie_fit)
                         elbo = susie_fit_r.rx2('elbo')[-1]
                         converged = susie_fit_r.rx2('converged')[0]
                     except Exception:
-                        # Fallback: R-based extraction
                         ro.globalenv['temp_fit'] = susie_fit
                         elbo_r = ro.r('tail(temp_fit$elbo, 1)')
                         converged_r = ro.r('temp_fit$converged')
@@ -809,62 +787,56 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                         elbo = float(elbo_r[0])
                         converged = int(converged_r[0])
                     
-                    # Validate ELBO is reasonable
                     if np.isnan(elbo) or np.isinf(elbo) or elbo > 0:
-                        logger.warning(f"[DEBUG] L={L_trial} invalid ELBO: {elbo}")
+                        logger.warning(f"[SUSIE] L={L_trial} invalid ELBO: {elbo}")
                         return -np.inf
                     
-                    # Check convergence
                     if converged == 1:
-                        logger.info(f"[DEBUG] L={L_trial} converged with ELBO {elbo:.6f}")
+                        logger.info(f"[SUSIE] L={L_trial} converged with ELBO {elbo:.6f}")
                         return elbo
                     else:
-                        logger.warning(f"[DEBUG] L={L_trial} did not converge")
+                        logger.warning(f"[SUSIE] L={L_trial} did not converge")
                         return -np.inf
                         
                 except Exception as e:
-                    logger.error(f"[DEBUG] Error extracting results for L={L_trial}: {str(e)}")
+                    logger.error(f"[SUSIE] Error extracting results for L={L_trial}: {str(e)}")
                     return -np.inf
             
             study = optuna.create_study(direction="maximize")
             study.optimize(objective_susie, n_trials=20)
             L = study.best_params["L"]
-            logger.info(f"[FINEMAP] Best L found: {L} with ELBO {study.best_value}")
+            logger.info(f"[SUSIE] Best L found: {L} with ELBO {study.best_value}")
         
         # Run SuSiE with final L
-        logger.info(f"[FINEMAP] Running SuSiE with L={L}")
+        logger.info(f"[SUSIE] Running SuSiE with L={L}")
         try:
-            # Use the local susieR instance
             susie_fit = local_susieR.susie_rss(z=zhat_r, R=R_r, L=L, n=num_samples)
         except Exception as e:
-            logger.error(f"[FINEMAP] SuSiE execution failed: {str(e)}")
+            logger.error(f"[SUSIE] SuSiE execution failed: {str(e)}")
             return None
         
         # Extract credible sets and PIPs
-        logger.info(f"[FINEMAP] Extracting credible sets and PIPs...")
+        logger.info(f"[SUSIE] Extracting credible sets and PIPs...")
         
-        # Step 1: Extract credible sets
+        # Extract credible sets
         try:
-            # Use the local susieR instance
             credible_sets = local_susieR.susie_get_cs(susie_fit, coverage=coverage, min_abs_corr=min_abs_corr, Xcorr=R_r)
         except Exception as e:
-            logger.error(f"[FINEMAP] Error extracting credible sets: {str(e)}")
+            logger.error(f"[SUSIE] Error extracting credible sets: {str(e)}")
             credible_sets = None
 
-        # Step 2: Extract PIPs - Using the local susieR instance
-        logger.info(f"[FINEMAP] Extracting PIPs using local susieR instance...")
+        # Extract PIPs
+        logger.info(f"[SUSIE] Extracting PIPs...")
         try:
-            # Use the local susieR instance
             pips = np.array(local_susieR.susie_get_pip(susie_fit), dtype=np.float64)
-            logger.info(f"[DEBUG] susie_get_pip SUCCESS: {len(pips)} PIPs")
-            
+            logger.info(f"[SUSIE] Extracted {len(pips)} PIPs")
         except Exception as e:
-            logger.error(f"[DEBUG] susie_get_pip failed: {type(e).__name__}: {e}")
+            logger.error(f"[SUSIE] susie_get_pip failed: {type(e).__name__}: {e}")
             return None
         
         # Ensure PIP array has correct length
         if len(pips) != len(sub_region_sumstats_ld):
-            logger.warning(f"[DEBUG] Adjusting PIP length: {len(pips)} -> {len(sub_region_sumstats_ld)}")
+            logger.warning(f"[SUSIE] Adjusting PIP length: {len(pips)} -> {len(sub_region_sumstats_ld)}")
             if len(pips) < len(sub_region_sumstats_ld):
                 pips = np.pad(pips, (0, len(sub_region_sumstats_ld) - len(pips)), constant_values=0.01)
             else:
@@ -872,24 +844,23 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
         
         # Validate PIPs
         if len(pips) != len(sub_region_sumstats_ld):
-            logger.error(f"[DEBUG] PIP length mismatch: {len(pips)} vs {len(sub_region_sumstats_ld)}")
+            logger.error(f"[SUSIE] PIP length mismatch: {len(pips)} vs {len(sub_region_sumstats_ld)}")
             return None
             
-        # Check PIP validity
         if np.any(pips < 0) or np.any(pips > 1):
-            logger.warning(f"[FINEMAP] Invalid PIPs detected, clipping to [0,1]")
+            logger.warning(f"[SUSIE] Invalid PIPs detected, clipping to [0,1]")
             pips = np.clip(pips, 0, 1)
         
-        # Explicit memory cleanup for large R objects
+        # Force R garbage collection
         try:
-            ro.r('gc()')  # Force R garbage collection
+            ro.r('gc()')
         except:
             pass
         
         # Add PIPs to results and initialize cs column
-        sub_region_sumstats_ld = sub_region_sumstats_ld.copy()
-        sub_region_sumstats_ld["PIP"] = pips
-        sub_region_sumstats_ld["cs"] = 0
+        result_df = sub_region_sumstats_ld.copy()
+        result_df["PIP"] = pips
+        result_df["cs"] = 0
         
         # Process credible sets
         try:
@@ -901,12 +872,12 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                         # Convert R 1-based indices to Python 0-based indices  
                         python_indices = np.array(cs_variants) - 1
                         # Validate indices
-                        valid_indices = python_indices[(python_indices >= 0) & (python_indices < len(sub_region_sumstats_ld))]
+                        valid_indices = python_indices[(python_indices >= 0) & (python_indices < len(result_df))]
                         if len(valid_indices) > 0:
-                            sub_region_sumstats_ld.iloc[valid_indices, sub_region_sumstats_ld.columns.get_loc("cs")] = cs_idx + 1
+                            result_df.iloc[valid_indices, result_df.columns.get_loc("cs")] = cs_idx + 1
                     
-                    credible_mask = sub_region_sumstats_ld["cs"] > 0
-                    credible_snps = sub_region_sumstats_ld[credible_mask].copy()
+                    credible_mask = result_df["cs"] > 0
+                    credible_snps = result_df[credible_mask].copy()
                     
                     if len(credible_snps) > 0:
                         # Add metadata
@@ -921,24 +892,94 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
                             cs_subset = credible_snps[credible_snps['cs'] == cs_num]
                             pip_min = cs_subset['PIP'].min()
                             pip_max = cs_subset['PIP'].max()
-                            logger.info(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - Credible set {cs_num}: {len(cs_subset)} variants, PIP range: {pip_min:.6f}-{pip_max:.6f}")
+                            logger.info(f"[SUSIE] Credible set {cs_num}: {len(cs_subset)} variants, PIP range: {pip_min:.6f}-{pip_max:.6f}")
                         
                         # Format for LocusZoom and return
                         return credible_snps 
                     else:
-                        logger.warning(f"[FINEMAP] No variants in credible sets")
+                        logger.warning(f"[SUSIE] No variants in credible sets")
                 else:
-                    logger.warning(f"[FINEMAP] Empty or invalid credible sets data")
+                    logger.warning(f"[SUSIE] Empty or invalid credible sets data")
             else:
-                logger.warning(f"[FINEMAP] No credible sets found")
+                logger.warning(f"[SUSIE] No credible sets found")
                 
         except Exception as e:
-            logger.warning(f"[FINEMAP] Error processing credible sets: {str(e)}")
+            logger.warning(f"[SUSIE] Error processing credible sets: {str(e)}")
         
-        logger.warning(f"[FINEMAP] Chr{chr_num}:{lead_variant_position} - No credible sets identified")
-        
-            
+        logger.warning(f"[SUSIE] No credible sets identified")
         return None
+        
+    except Exception as e:
+        logger.error(f"[SUSIE] Error in fine-mapping: {str(e)}")
+        return None
+
+
+# === FINE-MAPPING ORCHESTRATION ===
+@task(cache_policy=None)
+def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000, 
+                                 population="EUR", L=-1, coverage=0.95, min_abs_corr=0.5, maf=0.01, 
+                                 ref_genome="GRCh38", plink_dir=None):
+    try:     
+        logger.info(f"[FINEMAP] Fine-mapping chr{chr_num}:{lead_variant_position} ±{window}kb")
+
+        # Get config
+        config = Config.from_env()
+        
+        # Step 1: Filter variants in the region
+        window_bp = window * 1000
+        start = lead_variant_position - window_bp
+        end = lead_variant_position + window_bp
+        
+        chr_col = 'chromosome' if 'chromosome' in sumstats.columns else 'CHR'
+        bp_col = 'base_pair_location' if 'base_pair_location' in sumstats.columns else 'BP'
+        
+        filtered_region = sumstats[(sumstats[chr_col] == chr_num) &
+                                  (sumstats[bp_col] >= start) &
+                                  (sumstats[bp_col] <= end)]
+        
+        filtered_ids = filtered_region.index.tolist()
+        logger.info(f"[FINEMAP] Filtered {len(filtered_ids)} SNPs in region")
+        
+        if len(filtered_ids) < 2:
+            logger.warning(f"[FINEMAP] Insufficient SNPs for chr{chr_num}:{lead_variant_position}")
+            return None
+        
+        # Step 2: Calculate LD matrix
+        ld_df, sub_region_sumstats_ld = calculate_ld_matrix(
+            chr_num=chr_num,
+            filtered_ids=filtered_ids,
+            sumstats=sumstats,
+            plink_dir=plink_dir,
+            population=population,
+            ref_genome=ref_genome,
+            maf=maf,
+            config=config
+        )
+        
+        if ld_df is None or sub_region_sumstats_ld is None:
+            logger.error(f"[FINEMAP] LD calculation failed for chr{chr_num}:{lead_variant_position}")
+            return None
+        
+        logger.info(f"[FINEMAP] LD matrix calculated: {ld_df.shape}")
+        
+        # Step 3: Run SuSiE fine-mapping
+        result = run_susie_finemapping(
+            seed=seed,
+            ld_df=ld_df,
+            sub_region_sumstats_ld=sub_region_sumstats_ld,
+            chr_num=chr_num,
+            lead_variant_position=lead_variant_position,
+            L=L,
+            coverage=coverage,
+            min_abs_corr=min_abs_corr
+        )
+        
+        if result is not None:
+            logger.info(f"[FINEMAP] Successfully fine-mapped chr{chr_num}:{lead_variant_position}")
+        else:
+            logger.warning(f"[FINEMAP] No credible sets identified for chr{chr_num}:{lead_variant_position}")
+        
+        return result
             
     except Exception as e:
         logger.error(f"[FINEMAP] Error in fine-mapping chr{chr_num}:{lead_variant_position}: {str(e)}")
@@ -1274,5 +1315,6 @@ def cleanup_sumstats_file(temp_path):
             logger.warning(f"[MEMORY] Temporary file not found for cleanup: {temp_path}")
     except Exception as e:
         logger.error(f"[MEMORY] Error cleaning up temporary file {temp_path}: {e}")
+
 
 
