@@ -116,7 +116,7 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
 
 # === NEXTFLOW HARMONIZATION ===
 @task(cache_policy=None)
-def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh37", 
+def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh38", 
                                      ref_dir=None, code_repo=None, script_dir=None,
                                      threshold=0.99, sample_size=None, timeout_seconds=14400, 
                                      cleanup_upload=True):

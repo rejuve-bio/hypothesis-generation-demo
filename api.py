@@ -653,7 +653,7 @@ class AnalysisPipelineAPI(Resource):
             # Get form data and file
             project_name = request.form.get('project_name')
             phenotype = request.form.get('phenotype')
-            ref_genome = request.form.get('ref_genome', 'GRCh37')
+            ref_genome = request.form.get('ref_genome', 'GRCh38')
             population = request.form.get('population', 'EUR')
             max_workers = int(request.form.get('max_workers', 3))
             
