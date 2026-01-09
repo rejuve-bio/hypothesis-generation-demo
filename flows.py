@@ -421,8 +421,8 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
         logger.info(f"[PIPELINE] Stage 3: COJO analysis")
        
         config = Config.from_env()
-        plink_dir = config.plink_dir
-        cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, maf_threshold=maf_threshold, population=population).result()
+        plink_dir = config.get_plink_dir(ref_genome)
+        cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, maf_threshold=maf_threshold, population=population, ref_genome=ref_genome).result()
         
         # Extract the actual DataFrame
         if isinstance(cojo_result, tuple):
@@ -478,7 +478,8 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
                     'min_abs_corr': min_abs_corr,
                     'population': population,
                     'ref_genome': ref_genome,
-                    'maf_threshold': maf_threshold
+                    'maf_threshold': maf_threshold,
+                    'plink_dir': plink_dir
                 }
             })
             batch_data_list.append(batch_data)

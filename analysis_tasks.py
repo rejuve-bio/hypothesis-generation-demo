@@ -133,7 +133,7 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
     # Get configuration
     config = Config.from_env()
     if ref_dir is None:
-        ref_dir = getattr(config, 'harmonizer_ref_dir', '/data/harmonizer_ref')
+        ref_dir = config.get_harmonizer_ref_dir(ref_genome)
     if code_repo is None:
         code_repo = getattr(config, 'harmonizer_code_repo', '/app/gwas-sumstats-harmoniser')
     if script_dir is None:
@@ -371,11 +371,13 @@ def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
 
 # ===  COJO ANALYSIS ===
 @task(cache_policy=None)
-def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold=0.01, population="EUR"):
+def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold=0.01, population="EUR", ref_genome="GRCh38"):
     """
     Run GCTA COJO analysis per chromosome and combine results.
     """
     logger.info(f"[COJO] Starting per-chromosome COJO analysis for population {population}")
+
+    config = Config.from_env()
     
     # Create temporary directory for COJO processing
     with tempfile.TemporaryDirectory(prefix="cojo_analysis_") as temp_dir:
@@ -422,8 +424,11 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
             try:
                 logger.info(f"[COJO] Processing chromosome {chrom}")
                 
+                # Get file pattern for this build
+                file_pattern = config.get_plink_file_pattern(ref_genome, population, chrom)
+                
                 # Define paths for this chromosome
-                plink_prefix = os.path.join(plink_dir, population, f"{population}.chr{chrom}.1KG.GRCh38")
+                plink_prefix = os.path.join(plink_dir, population, file_pattern)
                 
                 # Check if PLINK files exist
                 if not os.path.exists(f"{plink_prefix}.bed"):
@@ -563,13 +568,13 @@ def check_ld_semidefiniteness(R_df):
 # === FINE-MAPPING SINGLE REGION ===
 @task(cache_policy=None)
 def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000, 
-                                 population="EUR", L=-1, coverage=0.95, min_abs_corr=0.5, maf=0.01):
+                                 population="EUR", L=-1, coverage=0.95, min_abs_corr=0.5, maf=0.01, 
+                                 ref_genome="GRCh38", plink_dir=None):
     try:     
         logger.info(f"[FINEMAP] Fine-mapping chr{chr_num}:{lead_variant_position} ±{window}kb")
-        
 
+        # Get config for file pattern
         config = Config.from_env()
-        plink_dir = config.plink_dir
         
         # Calculate LD 
         window_bp = window * 1000
@@ -602,9 +607,12 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt') as tmp_file_ld:
                 tmp_file_ld_path = tmp_file_ld.name
                 
+            # Get file pattern for this build
+            file_pattern = config.get_plink_file_pattern(ref_genome, population, chr_num)
+            
             plink_cmd = [
                 "plink",
-                "--bfile", f"{plink_dir}/{population}/{population}.chr{chr_num}.1KG.GRCh38",
+                "--bfile", f"{plink_dir}/{population}/{file_pattern}",
                 "--keep-allele-order",
                 "--r", "square",
                 "--extract", tmp_file_path,
@@ -683,7 +691,8 @@ def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000,
             'BP': sub_region_sumstats_ld[bp_col]
         })
         
-        bim_file_path = f"{plink_dir}/{population}/{population}.chr{chr_num}.1KG.GRCh38.bim"
+        file_pattern = config.get_plink_file_pattern(ref_genome, population, chr_num)
+        bim_file_path = f"{plink_dir}/{population}/{file_pattern}.bim"
         
         if os.path.exists(bim_file_path):
             try:
@@ -999,8 +1008,9 @@ def finemap_region_batch_worker(batch_data):
         coverage = finemap_params['coverage']
         min_abs_corr = finemap_params['min_abs_corr']
         population = finemap_params['population']
-        ref_genome = finemap_params.get('ref_genome', 'Unknown')
+        ref_genome = finemap_params.get('ref_genome', 'GRCh38')
         maf_threshold = finemap_params.get('maf_threshold', 0.01)
+        plink_dir = finemap_params.get('plink_dir', None)
         
         # Recreate database connection in worker process
         if db_params:
@@ -1082,7 +1092,9 @@ def finemap_region_batch_worker(batch_data):
                     L=L,
                     coverage=coverage,
                     min_abs_corr=min_abs_corr,
-                    maf=maf_threshold
+                    maf=maf_threshold,
+                    ref_genome=ref_genome,
+                    plink_dir=plink_dir
                 )
                 
                 if result is not None and len(result) > 0:
