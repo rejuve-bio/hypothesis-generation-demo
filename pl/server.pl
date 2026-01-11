@@ -77,12 +77,7 @@ handle_query(Request) :-
                 findall(Term, term_name(Term, Name), RawResults),
                 % Extract IDs from compound terms like efo(ID)
                 maplist(extract_term_id, RawResults, Results)
-            ;   Query = maplist(Pred, List, X) ->
-                (call(Query) -> 
-                    Results = X
-                ;   Results = []
-                )
-            ;   % Unknown query pattern
+            ;   % Unknown query pattern - reject to prevent arbitrary code execution
                 Results = []
             ),
             reply_json(Results)
