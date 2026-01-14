@@ -12,7 +12,8 @@ def __():
     import subprocess
     import pandas as pd
     import tarfile
-    return mo, urllib, os, subprocess, pd, tarfile
+    from pathlib import Path
+    return mo, urllib, os, subprocess, pd, tarfile, Path
 
 
 @app.cell
@@ -22,8 +23,44 @@ def __(mo):
 
 This notebook reproduces the LDSC cell-type–specific heritability analysis  
 from *Epigenomic dissection of Alzheimer’s disease pinpoints causal variants and reveals epigenome erosion*.
+
+All analyses are performed using **GRCh38 / hg38** coordinates.
 """)
     return
+
+
+
+@app.cell
+def __(mo):
+    mo.md("## 0. Setup: Download and configure LDSC")
+    return
+
+
+@app.cell
+def __(Path, subprocess):
+    TOOLS_DIR = Path("tools")
+    LDSC_DIR = TOOLS_DIR / "ldsc"
+    TOOLS_DIR.mkdir(exist_ok=True)
+    LDSC_DIR.mkdir(exist_ok=True)
+
+    ldsc_script = LDSC_DIR / "ldsc.py"
+
+    if not ldsc_script.exists():
+        subprocess.run([
+            "git", "clone",
+            "https://github.com/bulik/ldsc.git",
+            str(LDSC_DIR)
+        ], check=True)
+
+        req = LDSC_DIR / "requirements.txt"
+        if req.exists():
+            subprocess.run(["pip", "install", "-r", str(req)], check=True)
+
+    subprocess.run(["chmod", "+x", str(ldsc_script)], check=True)
+
+    ldsc_script
+    return ldsc_script
+
 
 
 @app.cell
@@ -43,9 +80,9 @@ def __(os, urllib):
 
     for ct in cell_types:
         url = f"{base_url}{ct}.peak.annotation.txt"
-        output = f"data/peaks/{ct}.peak.annotation.txt"
-        if not os.path.exists(output):
-            urllib.request.urlretrieve(url, output)
+        out = f"data/peaks/{ct}.peak.annotation.txt"
+        if not os.path.exists(out):
+            urllib.request.urlretrieve(url, out)
 
     if not os.path.exists("data/reference/GRCh38.tgz"):
         urllib.request.urlretrieve(
@@ -64,7 +101,9 @@ def __(os, urllib):
             "http://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST90027001-GCST90028000/GCST90027158/GCST90027158_buildGRCh38.tsv.gz",
             "data/gwas/AD_bellenguez_2022_hg38.tsv.gz"
         )
-    return base_url, cell_types
+
+    return cell_types
+
 
 
 @app.cell
@@ -77,12 +116,13 @@ def __(mo):
 def __(tarfile, os):
     if not os.path.exists("data/reference/GRCh38"):
         with tarfile.open("data/reference/GRCh38.tgz", "r:gz") as tar:
-            tar.extractall("data/reference/")
+            tar.extractall("data/reference")
 
     if not os.path.exists("data/reference/1000G_Phase3_baselineLD_v2.2_ldscores"):
         with tarfile.open("data/reference/baseline_ldscores.tgz", "r:gz") as tar:
-            tar.extractall("data/reference/")
+            tar.extractall("data/reference")
     return
+
 
 
 @app.cell
@@ -96,7 +136,7 @@ def __(subprocess, os):
     os.makedirs("data/munged", exist_ok=True)
 
     subprocess.run([
-        "python", "ldsc/ldsc.py",
+        "python", "tools/ldsc/ldsc.py",
         "--sumstats", "data/gwas/AD_bellenguez_2022_hg38.tsv.gz",
         "--out", "data/munged/AD_bellenguez_2022_hg38_munged",
         "--a1", "effect_allele",
@@ -106,6 +146,7 @@ def __(subprocess, os):
         "--N-col", "n_total"
     ], check=True)
     return
+
 
 
 @app.cell
@@ -124,15 +165,16 @@ def __(pd, subprocess, os, cell_types):
         bed.columns = ['chr', 'start', 'end']
         bed_file = f"data/annotations/{ct}.bed"
         bed.to_csv(bed_file, sep="\t", index=False, header=False)
-        
+
         for chrom in range(1, 23):
             subprocess.run([
-                "python", "ldsc/make_annot.py",
+                "python", "tools/ldsc/make_annot.py",
                 "--bed-file", bed_file,
                 "--bimfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{chrom}.bim",
                 "--annot-file", f"data/annotations/{ct}.{chrom}.annot.gz"
             ], check=True)
-    return bed, bed_file, chrom, ct, peaks
+    return
+
 
 
 @app.cell
@@ -147,10 +189,9 @@ def __(subprocess, os, cell_types):
 
     for ct in cell_types:
         os.makedirs(f"data/ldscores/{ct}", exist_ok=True)
-        
         for chrom in range(1, 23):
             subprocess.run([
-                "python", "ldsc/ldsc.py",
+                "python", "tools/ldsc/ldsc.py",
                 "--l2",
                 "--bfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{chrom}",
                 "--ld-wind-cm", "1.0",
@@ -159,6 +200,7 @@ def __(subprocess, os, cell_types):
                 "--out", f"data/ldscores/{ct}/{ct}.{chrom}"
             ], check=True)
     return
+
 
 
 @app.cell
@@ -170,11 +212,11 @@ def __(mo):
 @app.cell
 def __(os, cell_types):
     os.makedirs("results", exist_ok=True)
-
     with open("data/cell_types.cts", "w") as f:
         for ct in cell_types:
             f.write(f"{ct}    data/ldscores/{ct}/{ct}.\n")
-    return f,
+    return
+
 
 
 @app.cell
@@ -186,7 +228,7 @@ def __(mo):
 @app.cell
 def __(subprocess):
     subprocess.run([
-        "python", "ldsc/ldsc.py",
+        "python", "tools/ldsc/ldsc.py",
         "--h2-cts", "data/munged/AD_bellenguez_2022_hg38_munged.sumstats.gz",
         "--ref-ld-chr", "data/reference/GRCh38/baselineLD_v2.2/baselineLD.",
         "--ref-ld-chr-cts", "data/cell_types.cts",
@@ -204,11 +246,13 @@ def __(mo):
 
 @app.cell
 def __(pd):
-    results = pd.read_csv("results/AD_CellTypeSpecific.cell_type_results.txt", sep="\t")
-    results_sorted = results.sort_values("Coefficient_P_value")
-    results_sorted.to_csv("results/AD_CellTypeSpecific_ranked.csv", index=False)
-    results_sorted
-    return results, results_sorted
+    results = pd.read_csv(
+        "results/AD_CellTypeSpecific.cell_type_results.txt", sep="\t"
+    )
+    ranked = results.sort_values("Coefficient_P_value")
+    ranked.to_csv("results/AD_CellTypeSpecific_ranked.csv", index=False)
+    ranked
+    return
 
 
 if __name__ == "__main__":
