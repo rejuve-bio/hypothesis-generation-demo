@@ -75,9 +75,9 @@ def __(os, urllib):
     cell_types = ["Ast", "Ex", "In", "Microglia", "OPC", "Oligo", "PerEndo"]
     base_url = "https://personal.broadinstitute.org/bjames/AD_snATAC/major_celltype_matrices/"
 
-    for ct in cell_types:
-        url = f"{base_url}{ct}.peak.annotation.txt"
-        out = f"data/peaks/{ct}.peak.annotation.txt"
+    for _ct in cell_types:
+        url = f"{base_url}{_ct}.peak.annotation.txt"
+        out = f"data/peaks/{_ct}.peak.annotation.txt"
         if not os.path.exists(out):
             urllib.request.urlretrieve(url, out)
 
@@ -153,11 +153,11 @@ def __(mo):
 def __(pd, subprocess, os, cell_types):
     os.makedirs("data/annotations", exist_ok=True)
 
-    for ct in cell_types:
-        peaks = pd.read_csv(f"data/peaks/{ct}.peak.annotation.txt", sep="\t")
+    for _ct in cell_types:
+        peaks = pd.read_csv(f"data/peaks/{_ct}.peak.annotation.txt", sep="\t")
         _bed = peaks[['seqnames', 'start', 'end']].copy()
         _bed.columns = ['chr', 'start', 'end']
-        _bed_file = f"data/annotations/{ct}.bed"
+        _bed_file = f"data/annotations/{_ct}.bed"
         _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
         
         for _chrom in range(1, 23):
@@ -165,7 +165,7 @@ def __(pd, subprocess, os, cell_types):
                 "python", "tools/ldsc/make_annot.py",
                 "--bed-file", _bed_file,
                 "--bimfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{_chrom}.bim",
-                "--annot-file", f"data/annotations/{ct}.{_chrom}.annot.gz"
+                "--annot-file", f"data/annotations/{_ct}.{_chrom}.annot.gz"
             ], check=True)
     return
 
@@ -180,17 +180,17 @@ def __(mo):
 def __(subprocess, os, cell_types):
     os.makedirs("data/ldscores", exist_ok=True)
 
-    for ct in cell_types:
-        os.makedirs(f"data/ldscores/{ct}", exist_ok=True)
+    for _ct in cell_types:
+        os.makedirs(f"data/ldscores/{_ct}", exist_ok=True)
         for _chrom in range(1, 23):
             subprocess.run([
                 "python", "tools/ldsc/ldsc.py",
                 "--l2",
                 "--bfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{_chrom}",
                 "--ld-wind-cm", "1.0",
-                "--annot", f"data/annotations/{ct}.{_chrom}.annot.gz",
+                "--annot", f"data/annotations/{_ct}.{_chrom}.annot.gz",
                 "--thin-annot",
-                "--out", f"data/ldscores/{ct}/{ct}.{_chrom}"
+                "--out", f"data/ldscores/{_ct}/{_ct}.{_chrom}"
             ], check=True)
     return
 
