@@ -216,8 +216,8 @@ def __(tarfile, os):
     print("Checking GRCh38.tgz contents...")
     
     if os.path.exists("data/reference/GRCh38.tgz"):
-        with tarfile.open("data/reference/GRCh38.tgz", "r:gz") as tar:
-            members = tar.getmembers()
+        with tarfile.open("data/reference/GRCh38.tgz", "r:gz") as _tar:
+            members = _tar.getmembers()
             print(f"Archive contains {len(members)} items")
             print("\nTop-level structure:")
             seen = set()
@@ -238,8 +238,8 @@ def __(tarfile, os):
     if not os.path.exists("data/reference/GRCh38"):
         try:
             print("  Verifying GRCh38.tgz integrity...")
-            with tarfile.open("data/reference/GRCh38.tgz", "r:gz") as tar:
-                tar.getmembers()
+            with tarfile.open("data/reference/GRCh38.tgz", "r:gz") as _tar:
+                _tar.getmembers()
             print("  ✓ File integrity verified")
         except (EOFError, tarfile.ReadError) as e:
             print(f"\n  ✗ Error: GRCh38.tgz is corrupted!")
@@ -247,8 +247,8 @@ def __(tarfile, os):
             raise
         
         print("  Extracting (this may take a few minutes)...")
-        with tarfile.open("data/reference/GRCh38.tgz", "r:gz") as tar:
-            tar.extractall("data/reference")
+        with tarfile.open("data/reference/GRCh38.tgz", "r:gz") as _tar:
+            _tar.extractall("data/reference")
         print("✓ GRCh38 reference extracted successfully")
     else:
         print("✓ GRCh38 directory exists")
@@ -268,11 +268,10 @@ def __(tarfile, os):
             
         if os.path.exists(tar_file):
             print(f"  Extracting {os.path.basename(tar_file)}...")
-            with tarfile.open(tar_file, "r:gz") as tar:
-                tar.extractall(extract_to)
+            with tarfile.open(tar_file, "r:gz") as _tar:
+                _tar.extractall(extract_to)
             print(f"  ✓ {os.path.basename(tar_file)} extracted")
             
-          
             if not os.path.exists(check_path):
                 print(f" Warning: Expected file {check_path} not found after extraction")
         else:
@@ -288,8 +287,8 @@ def __(tarfile, os):
         if os.path.exists("data/reference/GRCh38"):
             files = os.listdir("data/reference/GRCh38")
             print(f"  Found {len(files)} files/directories")
-            for f in sorted(files)[:10]:  
-                print(f"    - {f}")
+            for _f in sorted(files)[:10]:  
+                print(f"    - {_f}")
         else:
             print("  Directory doesn't exist!")
     
@@ -453,7 +452,7 @@ def __(os, cell_types):
     os.makedirs("results", exist_ok=True)
     with open("data/cell_types.cts", "w") as f:
         for _ct in cell_types:
-            f.write(f"{_ct}    data/ldscores/{_ct}/{_ct}.\n")
+            _f.write(f"{_ct}    data/ldscores/{_ct}/{_ct}.\n")
     print("✓ CTS reference file created")
     return
 
