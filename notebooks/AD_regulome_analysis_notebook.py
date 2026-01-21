@@ -19,15 +19,14 @@ def __():
 @app.cell
 def __(mo):
     mo.md("""
-# LDSC Cell-Type Analysis – Alzheimer’s Disease
+# LDSC Cell-Type Analysis – Alzheimer's Disease
 
 This notebook reproduces the LDSC cell-type–specific heritability analysis  
-from *Epigenomic dissection of Alzheimer’s disease pinpoints causal variants and reveals epigenome erosion*.
+from *Epigenomic dissection of Alzheimer's disease pinpoints causal variants and reveals epigenome erosion*.
 
 All analyses are performed using **GRCh38 / hg38** coordinates.
 """)
     return
-
 
 
 @app.cell
@@ -58,9 +57,7 @@ def __(Path, subprocess):
 
     subprocess.run(["chmod", "+x", str(ldsc_script)], check=True)
 
-    ldsc_script
-    return ldsc_script
-
+    return (ldsc_script,)
 
 
 @app.cell
@@ -102,8 +99,7 @@ def __(os, urllib):
             "data/gwas/AD_bellenguez_2022_hg38.tsv.gz"
         )
 
-    return cell_types
-
+    return (cell_types,)
 
 
 @app.cell
@@ -124,10 +120,9 @@ def __(tarfile, os):
     return
 
 
-
 @app.cell
 def __(mo):
-    mo.md("## 3. Munge Alzheimer’s disease GWAS summary statistics")
+    mo.md("## 3. Munge Alzheimer's disease GWAS summary statistics")
     return
 
 
@@ -148,7 +143,6 @@ def __(subprocess, os):
     return
 
 
-
 @app.cell
 def __(mo):
     mo.md("## 4. Generate cell-type–specific binary annotations (BED → .annot.gz)")
@@ -159,22 +153,21 @@ def __(mo):
 def __(pd, subprocess, os, cell_types):
     os.makedirs("data/annotations", exist_ok=True)
 
-for ct in cell_types:
-    peaks = pd.read_csv(f"data/peaks/{ct}.peak.annotation.txt", sep="\t")
-    _bed = peaks[['seqnames', 'start', 'end']].copy()
-    _bed.columns = ['chr', 'start', 'end']
-    _bed_file = f"data/annotations/{ct}.bed"
-    _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
-    
-    for _chrom in range(1, 23):
-        subprocess.run([
-            "python", "tools/ldsc/make_annot.py",
-            "--bed-file", _bed_file,
-            "--bimfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{_chrom}.bim",
-            "--annot-file", f"data/annotations/{ct}.{_chrom}.annot.gz"
-        ], check=True)
+    for ct in cell_types:
+        peaks = pd.read_csv(f"data/peaks/{ct}.peak.annotation.txt", sep="\t")
+        _bed = peaks[['seqnames', 'start', 'end']].copy()
+        _bed.columns = ['chr', 'start', 'end']
+        _bed_file = f"data/annotations/{ct}.bed"
+        _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
+        
+        for _chrom in range(1, 23):
+            subprocess.run([
+                "python", "tools/ldsc/make_annot.py",
+                "--bed-file", _bed_file,
+                "--bimfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{_chrom}.bim",
+                "--annot-file", f"data/annotations/{ct}.{_chrom}.annot.gz"
+            ], check=True)
     return
-
 
 
 @app.cell
@@ -187,21 +180,19 @@ def __(mo):
 def __(subprocess, os, cell_types):
     os.makedirs("data/ldscores", exist_ok=True)
 
-for ct in cell_types:
-    os.makedirs(f"data/ldscores/{ct}", exist_ok=True)
-    for _chrom in range(1, 23):
-        subprocess.run([
-            "python", "tools/ldsc/ldsc.py",
-            "--l2",
-            "--bfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{_chrom}",
-            "--ld-wind-cm", "1.0",
-            "--annot", f"data/annotations/{ct}.{_chrom}.annot.gz",
-            "--thin-annot",
-            "--out", f"data/ldscores/{ct}/{ct}.{_chrom}"
-        ], check=True)
-
+    for ct in cell_types:
+        os.makedirs(f"data/ldscores/{ct}", exist_ok=True)
+        for _chrom in range(1, 23):
+            subprocess.run([
+                "python", "tools/ldsc/ldsc.py",
+                "--l2",
+                "--bfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{_chrom}",
+                "--ld-wind-cm", "1.0",
+                "--annot", f"data/annotations/{ct}.{_chrom}.annot.gz",
+                "--thin-annot",
+                "--out", f"data/ldscores/{ct}/{ct}.{_chrom}"
+            ], check=True)
     return
-
 
 
 @app.cell
@@ -214,11 +205,9 @@ def __(mo):
 def __(os, cell_types):
     os.makedirs("results", exist_ok=True)
     with open("data/cell_types.cts", "w") as f:
-      for _ct in cell_types:
-        f.write(f"{_ct}    data/ldscores/{_ct}/{_ct}.\n")
-
+        for _ct in cell_types:
+            f.write(f"{_ct}    data/ldscores/{_ct}/{_ct}.\n")
     return
-
 
 
 @app.cell
@@ -253,8 +242,7 @@ def __(pd):
     )
     ranked = results.sort_values("Coefficient_P_value")
     ranked.to_csv("results/AD_CellTypeSpecific_ranked.csv", index=False)
-    ranked
-    return
+    return (ranked,)
 
 
 if __name__ == "__main__":
