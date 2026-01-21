@@ -48,7 +48,6 @@ def __(Path, subprocess, os):
     LDSC_DIR = TOOLS_DIR / "ldsc"
     TOOLS_DIR.mkdir(exist_ok=True)
     
-    # Check if ldsc27 environment exists
     env_check = subprocess.run(
         ["conda", "env", "list"],
         capture_output=True,
@@ -56,7 +55,6 @@ def __(Path, subprocess, os):
     )
     ldsc_env_exists = "ldsc27" in env_check.stdout
     
-    # Create Python 2.7 environment for LDSC if it doesn't exist
     if not ldsc_env_exists:
         print("Creating Python 2.7 conda environment for LDSC...")
         subprocess.run([
@@ -64,7 +62,7 @@ def __(Path, subprocess, os):
             "python=2.7", "-y"
         ], check=True)
     
-    # Get conda environment paths
+
     conda_prefix = subprocess.run(
         ["conda", "env", "list", "--json"],
         capture_output=True,
@@ -75,7 +73,6 @@ def __(Path, subprocess, os):
     envs = json.loads(conda_prefix.stdout)["envs"]
     ldsc27_path = [e for e in envs if "ldsc27" in e][0]
     
-    # Check if BEDTools is installed
     bedtools_check = subprocess.run(
         [os.path.join(ldsc27_path, "bin", "bedtools"), "--version"],
         capture_output=True,
@@ -91,7 +88,7 @@ def __(Path, subprocess, os):
     else:
         print(f"✓ BEDTools already installed: {bedtools_check.stdout.strip()}")
     
-    # Clone LDSC if not exists
+  
     if not LDSC_DIR.exists():
         print("Cloning LDSC repository...")
         subprocess.run([
@@ -100,7 +97,6 @@ def __(Path, subprocess, os):
             str(LDSC_DIR)
         ], check=True)
     
-    # Check if dependencies are installed
     check_numpy = subprocess.run(
         [os.path.join(ldsc27_path, "bin", "python"), "-c", "import numpy"],
         capture_output=True
@@ -225,7 +221,7 @@ def __(tarfile, os):
             print(f"Archive contains {len(members)} items")
             print("\nTop-level structure:")
             seen = set()
-            for m in members[:50]:  # First 50 items
+            for m in members[:50]:  
                 parts = m.name.split('/')
                 if len(parts) > 1:
                     top = parts[0] + "/" + parts[1]
@@ -257,7 +253,7 @@ def __(tarfile, os):
     else:
         print("✓ GRCh38 directory exists")
     
-    # Extract nested tar files with verification
+
     nested_files = [
         ("data/reference/GRCh38/baselineLD_v2.2.tgz", "data/reference", "baselineLD_v2.2"),
         ("data/reference/GRCh38/plink_files.tgz", "data/reference/GRCh38", "1000G.EUR.hg38.1.bed"),
@@ -276,13 +272,13 @@ def __(tarfile, os):
                 tar.extractall(extract_to)
             print(f"  ✓ {os.path.basename(tar_file)} extracted")
             
-            # Verify extraction worked
+          
             if not os.path.exists(check_path):
-                print(f"  ⚠️  Warning: Expected file {check_path} not found after extraction")
+                print(f" Warning: Expected file {check_path} not found after extraction")
         else:
-            print(f"  ⚠️  Warning: {tar_file} not found")
+            print(f"  Warning: {tar_file} not found")
     
-    # Verify critical files exist
+    
     critical_file = "data/reference/GRCh38/1000G.EUR.hg38.1.bim"
     if os.path.exists(critical_file):
         print(f"\n✓ All reference files ready! Verified: {critical_file}")
@@ -292,7 +288,7 @@ def __(tarfile, os):
         if os.path.exists("data/reference/GRCh38"):
             files = os.listdir("data/reference/GRCh38")
             print(f"  Found {len(files)} files/directories")
-            for f in sorted(files)[:10]:  # Show first 10
+            for f in sorted(files)[:10]:  
                 print(f"    - {f}")
         else:
             print("  Directory doesn't exist!")
@@ -347,14 +343,12 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
     print("STEP 4: Generating cell-type annotations")
     print("="*60)
     
-    # Set up environment to include conda bin in PATH
+
     env = os.environ.copy()
     env["PATH"] = f"{ldsc27_path}/bin:" + env.get("PATH", "")
     
     for _ct in cell_types:
         print(f"\nProcessing {_ct}...")
-        
-        # Check if all annotation files already exist
         _all_exist = all(
             os.path.exists(f"data/annotations/{_ct}.{_chrom}.annot.gz") 
             for _chrom in range(1, 23)
@@ -415,8 +409,7 @@ def __(subprocess, os, cell_types, python27_path):
     for _ct in cell_types:
         print(f"\nProcessing {_ct}...")
         os.makedirs(f"data/ldscores/{_ct}", exist_ok=True)
-        
-        # Check if all LD score files exist
+    
         _all_exist = all(
             os.path.exists(f"data/ldscores/{_ct}/{_ct}.{_chrom}.l2.ldscore.gz")
             for _chrom in range(1, 23)
