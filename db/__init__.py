@@ -11,6 +11,7 @@ from .hypothesis_handler import HypothesisHandler
 from .summary_handler import SummaryHandler
 from .task_handler import TaskHandler
 from .base_handler import BaseHandler
+from .gene_expression_handler import GeneExpressionHandler
 
 __all__ = [
     'UserHandler', 
@@ -21,5 +22,6 @@ __all__ = [
     'HypothesisHandler',
     'SummaryHandler',
     'TaskHandler',
-    'BaseHandler'
+    'BaseHandler',
+    'GeneExpressionHandler'
 ]

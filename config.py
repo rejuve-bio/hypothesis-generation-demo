@@ -4,7 +4,8 @@ from llm import LLM
 from query_swipl import PrologQuery
 from db import (
     UserHandler, ProjectHandler, FileHandler, AnalysisHandler,
-    EnrichmentHandler, HypothesisHandler, SummaryHandler, TaskHandler
+    EnrichmentHandler, HypothesisHandler, SummaryHandler, TaskHandler,
+    GeneExpressionHandler
 )
 
 class Config:
@@ -19,10 +20,17 @@ class Config:
         self.mongodb_uri = None
         self.db_name = None
         self.embedding_model = "w601sxs/b1ade-embed-kd"
-        self.plink_dir = "./data/1000Genomes_phase3/plink_format_b37"
+        self.plink_dir_37 = "./data/1000Genomes_phase3/plink_format_b37"
+        self.plink_dir_38 = "./data/1000Genomes_phase3/plink_format_b38"
         self.data_dir = "./data"
+        self.ontology_cache_dir = "./data/ontology"
         self.host = "0.0.0.0"
         self.port = 5000
+        # Harmonization workflow configuration
+        self.harmonizer_ref_dir_37 = "/data/harmonizer_ref/b37"
+        self.harmonizer_ref_dir_38 = "/data/harmonizer_ref/b38"
+        self.harmonizer_code_repo = "./gwas-sumstats-harmoniser"  # Nextflow workflow
+        self.harmonizer_script_dir = "./scripts/1000Genomes_phase3"  # Shell scripts
 
     @classmethod
     def from_args(cls, args):
@@ -54,9 +62,45 @@ class Config:
         config.mongodb_uri = os.getenv("MONGODB_URI")
         config.db_name = os.getenv("DB_NAME")
         config.embedding_model = os.getenv("EMBEDDING_MODEL", "w601sxs/b1ade-embed-kd")
-        config.plink_dir = os.getenv("PLINK_DIR", "./data/1000Genomes_phase3/plink_format_b37")
+        config.plink_dir_37 = os.getenv("PLINK_DIR_37", "./data/1000Genomes_phase3/plink_format_b37")
+        config.plink_dir_38 = os.getenv("PLINK_DIR_38", "./data/1000Genomes_phase3/plink_format_b38")
         config.data_dir = os.getenv("DATA_DIR", "./data")
+        config.ontology_cache_dir = os.getenv("ONTOLOGY_CACHE_DIR", "./data/ontology")
+        # Harmonization workflow configuration
+        config.harmonizer_ref_dir_37 = os.getenv("HARMONIZER_REF_DIR_37", "/data/harmonizer_ref/b37")
+        config.harmonizer_ref_dir_38 = os.getenv("HARMONIZER_REF_DIR_38", "/data/harmonizer_ref/b38")
+        config.harmonizer_code_repo = os.getenv("HARMONIZER_CODE_REPO", "./gwas-sumstats-harmoniser")  # Nextflow workflow
+        config.harmonizer_script_dir = os.getenv("HARMONIZER_SCRIPT_DIR", "./scripts/1000Genomes_phase3")  # Shell scripts
         return config
+
+    def get_plink_dir(self, ref_genome):
+        """Get the PLINK directory for the specified genome build"""
+        if ref_genome == "GRCh38":
+            return self.plink_dir_38
+        elif ref_genome == "GRCh37":
+            return self.plink_dir_37
+        else:
+            raise ValueError(f"Unsupported reference genome: {ref_genome}. Must be 'GRCh37' or 'GRCh38'")
+
+    def get_harmonizer_ref_dir(self, ref_genome):
+        """Get the harmonizer reference directory for the specified genome build"""
+        if ref_genome == "GRCh38":
+            return self.harmonizer_ref_dir_38
+        elif ref_genome == "GRCh37":
+            return self.harmonizer_ref_dir_37
+        else:
+            raise ValueError(f"Unsupported reference genome: {ref_genome}. Must be 'GRCh37' or 'GRCh38'")
+
+    def get_plink_file_pattern(self, ref_genome, population, chrom):
+        """
+        Get the PLINK file pattern for the specified genome build.
+        """
+        if ref_genome == "GRCh38":
+            return f"{population}.chr{chrom}.1KG.GRCh38"
+        elif ref_genome == "GRCh37":
+            return f"{population}.{chrom}.1000Gp3.20130502"
+        else:
+            raise ValueError(f"Unsupported reference genome: {ref_genome}. Must be 'GRCh37' or 'GRCh38'")
 
 
 def create_dependencies(config):
@@ -96,5 +140,6 @@ def create_dependencies(config):
         'enrichment': EnrichmentHandler(mongodb_uri, db_name),
         'hypotheses': HypothesisHandler(mongodb_uri, db_name),
         'summaries': SummaryHandler(mongodb_uri, db_name),
-        'tasks': TaskHandler(mongodb_uri, db_name)
+        'tasks': TaskHandler(mongodb_uri, db_name),
+        'gene_expression': GeneExpressionHandler(mongodb_uri, db_name)
     }
