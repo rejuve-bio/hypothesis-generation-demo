@@ -291,28 +291,17 @@ def map_tissues_to_cellxgene(top_tissues, gtex_uberon_mapping, cellxgene_uberon_
                 
                 logger.info(f"Found {len(gtex_ancestor_ids)} ancestor terms")
                 
-                # Find best match among ancestors
-                best_match = None
-                match_level = float('inf')
-                best_notes = ""
-                
+                # Find any ancestor match in CellxGene
                 for cellxgene_mapped_id in cellxgene_uberon_map.keys():
                     if cellxgene_mapped_id in gtex_ancestor_ids:
                         try:
                             cellxgene_term = uberon_ontology[cellxgene_mapped_id]
-                            distance = 0 if cellxgene_mapped_id == cellxgene_uberon_id else 1
-                            
-                            if distance < match_level:
-                                best_match = cellxgene_mapped_id
-                                match_level = distance
-                                best_notes = f"Broader match: GTEx '{cellxgene_uberon_id}' ({gtex_term.name}) related to CellxGene '{cellxgene_mapped_id}' ({cellxgene_term.name}). Distance: {distance}"
+                            notes = f"Broader match: GTEx '{cellxgene_uberon_id}' ({gtex_term.name}) related to CellxGene '{cellxgene_mapped_id}' ({cellxgene_term.name})"
+                            return cellxgene_mapped_id, "broader_match_found", notes
                         except KeyError:
                             continue
                 
-                if best_match:
-                    return best_match, "broader_match_found", best_notes
-                else:
-                    return None, "no_cellxgene_match", f"No suitable CellxGene Census tissue found for GTEx UBERON ID '{cellxgene_uberon_id}'"
+                return None, "no_cellxgene_match", f"No suitable CellxGene Census tissue found for GTEx UBERON ID '{cellxgene_uberon_id}'"
             
             except KeyError:
                 return None, "no_uberon_in_ontology", f"UBERON ID '{cellxgene_uberon_id}' not found in ontology"  # Use converted ID in error message
