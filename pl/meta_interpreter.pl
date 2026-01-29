@@ -123,7 +123,8 @@ proof_tree(A, PT):-
   mi(A, PT),
   numbervars(PT).
 
-proof_tree(Goal, NumSamples, Graph) :-
+proof_tree(Goal, Seed, NumSamples, Graph) :-
+  set_random(seed(Seed)),
   mcintyre:mc_sample_arg_first(hypgen:mi(Goal, Proof), NumSamples, Proof, Values), 
   json_proof_tree(Values, NumSamples, Graph).
 

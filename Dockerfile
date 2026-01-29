@@ -50,6 +50,20 @@ RUN mkdir -p /opt/gcta && \
     find /opt/gcta -name "gcta64" -type f -exec ln -sf {} /usr/local/bin/gcta64 \; && \
     rm /tmp/gcta.zip
 
+# Install htslib (bgzip, tabix), bcftools, samtools, and Java (required by Nextflow)
+RUN apt-get update && apt-get install -y \
+    tabix \
+    bcftools \
+    samtools \
+    openjdk-17-jre-headless \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install Nextflow for harmonization workflow (requires Java)
+RUN cd /tmp && \
+    wget -qO- https://get.nextflow.io | bash && \
+    mv nextflow /usr/local/bin/ && \
+    chmod +x /usr/local/bin/nextflow
+
 RUN pip install --upgrade pip setuptools wheel
 
 # Install BiocManager first
@@ -94,17 +108,11 @@ RUN Rscript -e " \
     "
 
 # Install other R packages WITHOUT updating susieR
+#  Nextflow harmonizer
 RUN Rscript -e " \
     options(repos = c(CRAN = 'https://cloud.r-project.org/')); \
     options(Ncpus = parallel::detectCores()); \
     BiocManager::install(c('dplyr', 'readr', 'data.table', 'Rfast', 'devtools'), ask=FALSE, update=FALSE); \
-    BiocManager::install(c('MungeSumstats'), ask=FALSE, update=FALSE); \
-    BiocManager::install(c('SNPlocs.Hsapiens.dbSNP155.GRCh37', 'SNPlocs.Hsapiens.dbSNP155.GRCh38'), ask=FALSE, update=FALSE); \
-    BiocManager::install(c( \
-        'BSgenome.Hsapiens.UCSC.hg19', \
-        'BSgenome.Hsapiens.UCSC.hg38', \
-        'BSgenome.Hsapiens.1000genomes.hs37d5' \
-    ), ask=FALSE, update=FALSE); \
     "
 
 # Install vautils from GitHub
@@ -123,18 +131,63 @@ RUN Rscript -e " \
     cat('R version:', R.version.string, '\n'); \
     "
 
-# Install uv
+# Install Miniconda and set up LDSC environment
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
+    bash /tmp/miniconda.sh -b -p /opt/conda && \
+    rm /tmp/miniconda.sh && \
+    /opt/conda/bin/conda clean -afy
+
+# Create Python 2.7 environment only for LDSC
+RUN /opt/conda/bin/conda config --set channel_priority strict && \
+    /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
+    /opt/conda/bin/conda create -n ldsc python=2.7 anaconda -y && \
+    /opt/conda/bin/conda clean -afy
+
+# Install LDSC in the conda environment
+RUN git clone https://github.com/bulik/ldsc.git /opt/ldsc
+WORKDIR /opt/ldsc
+
+# Install LDSC dependencies manually with compatible versions
+RUN /opt/conda/bin/conda install -n ldsc numpy scipy=1.2.1 pandas=0.24.2 bitarray -c conda-forge -y
+
+# Create wrapper scripts that activate the ldsc environment
+RUN echo '#!/bin/bash\nsource /opt/conda/bin/activate ldsc\npython /opt/ldsc/ldsc.py "$@"' > /usr/local/bin/ldsc && \
+    chmod +x /usr/local/bin/ldsc
+
+RUN echo '#!/bin/bash\nsource /opt/conda/bin/activate ldsc\npython /opt/ldsc/munge_sumstats.py "$@"' > /usr/local/bin/munge_sumstats && \
+    chmod +x /usr/local/bin/munge_sumstats
+
+# Reset workdir
+WORKDIR /app
+
+# Install uv (astral/uv) for Python dependency management
 RUN wget -qO- https://astral.sh/uv/install.sh | sh && \
     mv /root/.local/bin/uv /usr/local/bin/uv
 
+# Copy project files needed for uv
+COPY pyproject.toml .
 
+# Set up Python environment with uv
 ENV UV_PROJECT_ENVIRONMENT=/opt/flask-venv
 ENV PATH="/opt/flask-venv/bin:$PATH"
-COPY pyproject.toml .
 RUN uv sync
 RUN uv pip install '.[r-integration]'
 
+# Install pyarrow for harmonizer workflow (need version compatible with NumPy 2.0)
+RUN uv pip install 'pyarrow>=17.0.0'
+
 # Copy application
 COPY . .
+
+# Create separate Python environment for harmonizer
+RUN python3 -m venv /opt/harmonizer-venv
+
+# Install harmonizer dependencies using uv for better performance
+ENV UV_HARMONIZER_VENV=/opt/harmonizer-venv
+RUN uv pip install --python=/opt/harmonizer-venv/bin/python -r gwas-sumstats-harmoniser/environments/requirements.txt
+
+# Also install minimal harmonizer deps in main venv (without gwas-sumstats-tools to avoid pydantic conflict)
+RUN uv pip install 'duckdb>=0.9.2' 'pyliftover>=0.4'
 
 EXPOSE 5000
