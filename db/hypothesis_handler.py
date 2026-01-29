@@ -8,6 +8,7 @@ class HypothesisHandler(BaseHandler):
     def __init__(self, uri, db_name):
         super().__init__(uri, db_name)
         self.hypothesis_collection = self.db['hypotheses']
+        self.enrich_collection = self.db['enrich']
     
     def create_hypothesis(self, user_id, data):
         """Create a new hypothesis"""
@@ -113,41 +114,103 @@ class HypothesisHandler(BaseHandler):
         return {'message': 'Hypothesis not found'}, 404
 
     def delete_hypothesis(self, user_id, hypothesis_id):
-        """Delete hypothesis"""
+        """Delete hypothesis and associated enrichments"""
+        hypothesis = self.hypothesis_collection.find_one({'id': hypothesis_id, 'user_id': user_id})
+        if not hypothesis:
+            return {'message': 'Hypothesis not found or not authorized'}, 404
+        
+        # Debug: Log all hypothesis fields to understand the data structure
+        logger.info(f"Hypothesis fields for {hypothesis_id}: {list(hypothesis.keys())}")
+        logger.info(f"Hypothesis enrich_id: {hypothesis.get('enrich_id')}")
+        logger.info(f"Hypothesis child_enrich_ids: {hypothesis.get('child_enrich_ids')}")
+        
+        # Collect enrichment IDs to delete
+        enrichment_ids_to_delete = []
+        if hypothesis.get('enrich_id'):
+            enrichment_ids_to_delete.append(hypothesis['enrich_id'])
+        if hypothesis.get('child_enrich_ids'):
+            enrichment_ids_to_delete.extend(hypothesis['child_enrich_ids'])
+        
+        logger.info(f"Looking for enrichments to delete for hypothesis {hypothesis_id}: {enrichment_ids_to_delete}")
+        
+        # Delete associated enrichments
+        enrich_result = None
+        if enrichment_ids_to_delete:
+            enrich_result = self.enrich_collection.delete_many({
+                'user_id': user_id,
+                'id': {'$in': enrichment_ids_to_delete}
+            })
+        else:
+            # Create a mock result for consistent logging
+            class MockResult:
+                deleted_count = 0
+            enrich_result = MockResult()
+        logger.info(f"Deleted {enrich_result.deleted_count} enrichments for hypothesis {hypothesis_id}")
+        
+        # Delete the hypothesis
         result = self.hypothesis_collection.delete_one({'id': hypothesis_id, 'user_id': user_id})
         if result.deleted_count > 0:
-            return {'message': 'Hypothesis deleted'}, 200
+            return {'message': f'Hypothesis and {enrich_result.deleted_count} associated enrichments deleted'}, 200
         return {'message': 'Hypothesis not found or not authorized'}, 404
     
     def bulk_delete_hypotheses(self, user_id, hypothesis_ids):
-        """Delete multiple hypotheses by their IDs for a specific user"""
+        """Delete multiple hypotheses and their associated enrichments by their IDs for a specific user"""
         if not hypothesis_ids or not isinstance(hypothesis_ids, list):
             return {'message': 'Invalid hypothesis_ids format. Expected a non-empty list.'}, 400
 
-        results = {'successful': [], 'failed': []}
+        # Get hypotheses to extract enrichment IDs before deletion
+        hypotheses = list(self.hypothesis_collection.find({
+            'id': {'$in': hypothesis_ids}, 
+            'user_id': user_id
+        }))
+        
+        if not hypotheses:
+            return {'message': 'No hypotheses found or not authorized'}, 404
+        
+        # Collect all enrichment IDs to delete
+        enrichment_ids_to_delete = []
+        for hypothesis in hypotheses:
+            # Add main enrichment ID
+            if hypothesis.get('enrich_id'):
+                enrichment_ids_to_delete.append(hypothesis['enrich_id'])
+            # Add child enrichment IDs
+            if hypothesis.get('child_enrich_ids'):
+                enrichment_ids_to_delete.extend(hypothesis['child_enrich_ids'])
+        
+        # Delete associated enrichments
+        total_enrichments_deleted = 0
+        if enrichment_ids_to_delete:
+            enrich_result = self.enrich_collection.delete_many({
+                'user_id': user_id,
+                'id': {'$in': enrichment_ids_to_delete}
+            })
+            total_enrichments_deleted = enrich_result.deleted_count
+            logger.info(f"Deleted {total_enrichments_deleted} enrichments for {len(hypotheses)} hypotheses")
 
-        # Bulk delete
+        # Bulk delete hypotheses
         bulk_result = self.hypothesis_collection.delete_many({
             'id': {'$in': hypothesis_ids}, 
             'user_id': user_id
         })
 
+        # Get the actual deleted hypothesis IDs
+        deleted_hypothesis_ids = [h['id'] for h in hypotheses if h['id'] in hypothesis_ids]
+        failed_ids = list(set(hypothesis_ids) - set(deleted_hypothesis_ids))
+
         # Check if all were deleted
         if bulk_result.deleted_count == len(hypothesis_ids):
             return {
-                'message': f'All {bulk_result.deleted_count} hypotheses deleted successfully',
+                'message': f'All {bulk_result.deleted_count} hypotheses and {total_enrichments_deleted} associated enrichments deleted successfully',
                 'deleted_count': bulk_result.deleted_count,
+                'enrichments_deleted': total_enrichments_deleted,
                 'successful': hypothesis_ids,
                 'failed': []
             }, 200
 
-        # Identify which ones failed
-        deleted_ids = set(hypothesis_ids[:bulk_result.deleted_count])  # Approximate success count
-        failed_ids = list(set(hypothesis_ids) - deleted_ids)
-
         return {
-            'message': f"{bulk_result.deleted_count} hypotheses deleted successfully, {len(failed_ids)} failed",
+            'message': f"{bulk_result.deleted_count} hypotheses and {total_enrichments_deleted} enrichments deleted successfully, {len(failed_ids)} failed",
             'deleted_count': bulk_result.deleted_count,
-            'successful': list(deleted_ids),
+            'enrichments_deleted': total_enrichments_deleted,
+            'successful': deleted_hypothesis_ids,
             'failed': [{'id': h_id, 'reason': 'Not found or not authorized'} for h_id in failed_ids]
-        }, 207 if deleted_ids else 404  # Use 207 for partial success
+        }, 207 if deleted_hypothesis_ids else 404  # Use 207 for partial success
