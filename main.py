@@ -17,6 +17,8 @@ from api import (
     AnalysisPipelineAPI,
     GWASFilesAPI,
     GWASFileDownloadAPI,
+    PhenotypesAPI,
+
 )
 from dotenv import load_dotenv
 import os
@@ -138,6 +140,8 @@ def setup_api(config):
     # GWAS files
     api.add_resource(GWASFilesAPI, "/gwas-files", resource_class_kwargs={"config": config})
     api.add_resource(GWASFileDownloadAPI, "/gwas-files/download/<string:file_id>", resource_class_kwargs={"config": config})
+
+    api.add_resource(PhenotypesAPI, "/phenotypes", resource_class_kwargs={"phenotypes": deps['phenotypes']})
 
 
     # Initialize socket handlers 

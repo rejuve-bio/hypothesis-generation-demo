@@ -12,6 +12,8 @@ from .summary_handler import SummaryHandler
 from .task_handler import TaskHandler
 from .base_handler import BaseHandler
 from .gene_expression_handler import GeneExpressionHandler
+from .phenotype_handler import PhenotypeHandler
+
 
 __all__ = [
     'UserHandler', 
@@ -23,5 +25,6 @@ __all__ = [
     'SummaryHandler',
     'TaskHandler',
     'BaseHandler',
-    'GeneExpressionHandler'
+    'GeneExpressionHandler',
+    'PhenotypeHandler',
 ]

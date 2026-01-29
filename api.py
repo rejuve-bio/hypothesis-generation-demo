@@ -904,6 +904,116 @@ class AnalysisPipelineAPI(Resource):
         except Exception as e:
             logger.error(f"[API] Error starting analysis pipeline: {str(e)}")
             return {"error": f"Error starting analysis pipeline: {str(e)}"}, 500
+class PhenotypesAPI(Resource):
+    """
+    API endpoint for getting and loading phenotypes
+    """
+    def __init__(self, phenotypes):
+        self.phenotypes = phenotypes
+
+    def get(self):
+        """Get phenotypes with pagination to prevent memory issues"""
+        try:
+            # Get query parameters
+            phenotype_id = request.args.get('id')
+            search_term = request.args.get('search')
+            limit = request.args.get('limit', type=int)
+            skip = request.args.get('skip', 0, type=int)
+            
+            if phenotype_id:
+                # Get specific phenotype
+                phenotype = self.phenotypes.get_phenotypes(phenotype_id=phenotype_id)
+                if not phenotype:
+                    return {"error": "Phenotype not found"}, 404
+                return serialize_datetime_fields({"phenotype": phenotype}), 200
+            
+            # Set reasonable default limit to prevent memory issues
+            if limit is None:
+                limit = 100
+                logger.info(f"No limit specified, using default limit of {limit} for memory protection")
+            
+            # Get phenotypes with pagination
+            phenotypes = self.phenotypes.get_phenotypes(
+                limit=limit, 
+                skip=skip, 
+                search_term=search_term
+            )
+            
+            # Get total count for pagination
+            total_count = self.phenotypes.count_phenotypes(search_term=search_term)
+            
+            response = {
+                "phenotypes": phenotypes,
+                "total_count": total_count,
+                "skip": skip,
+                "limit": limit,
+                "has_more": (skip + len(phenotypes)) < total_count,
+                "next_skip": skip + len(phenotypes) if (skip + len(phenotypes)) < total_count else None
+            }
+            
+            if search_term:
+                response["search_term"] = search_term
+            
+            return serialize_datetime_fields(response), 200
+            
+        except Exception as e:
+            logger.error(f"Error getting phenotypes: {str(e)}")
+            return {"error": f"Failed to get phenotypes: {str(e)}"}, 500
+
+    @token_required
+    def post(self, current_user_id):
+        """
+        Bulk load phenotypes from JSON data
+        """
+        try:
+            # Get JSON data from request
+            data = request.get_json()
+            
+            if not data:
+                return {"error": "No JSON data provided"}, 400
+            
+            if not isinstance(data, list):
+                return {"error": "Expected JSON array of phenotypes"}, 400
+            
+            # Transform data to match database schema
+            phenotypes_data = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                
+                # Map "name" to "phenotype_name" for database
+                phenotype = {
+                    "id": item.get("id", ""),
+                    "phenotype_name": item.get("name", "")
+                }
+                
+                # Validate that both fields exist
+                if phenotype["id"] and phenotype["phenotype_name"]:
+                    phenotypes_data.append(phenotype)
+                else:
+                    logger.warning(f"Skipping invalid phenotype entry: {item}")
+            
+            if not phenotypes_data:
+                return {"error": "No valid phenotypes found in JSON data"}, 400
+            
+            # Bulk insert phenotypes
+            logger.info(f"Loading {len(phenotypes_data)} phenotypes into database...")
+            result = self.phenotypes.bulk_create_phenotypes(phenotypes_data)
+            
+            response = {
+                "message": "Phenotypes loaded successfully",
+                "inserted_count": result['inserted_count'],
+                "skipped_count": result['skipped_count'],
+                "total_provided": len(phenotypes_data)
+            }
+            
+            logger.info(f"Phenotype load complete: {result['inserted_count']} inserted, {result['skipped_count']} skipped")
+            
+            return response, 201
+            
+        except Exception as e:
+            logger.error(f"Error loading phenotypes: {str(e)}")
+
 class CredibleSetsAPI(Resource):
     """
     API endpoint for fetching credible sets
