@@ -39,7 +39,7 @@ dependencies = [
     "cellxgene-census",
     "loguru>=0.7.3",
     "marimo[lsp]>=0.16.5",
-    "numpy>=2.2.6",
+    "numpy>=1.24.0,<2.0.0",
     "optuna>=4.3.0",
     "pandas>=2.2.3",
     "pysam>=0.23.1",
