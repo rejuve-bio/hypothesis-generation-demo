@@ -1,4 +1,4 @@
-# hypothesis-generation
+# hypothesis-generation.
 
 ## Overview
 
