@@ -11,12 +11,15 @@ from api import (
     EnrichAPI,
     HypothesisAPI, 
     BulkHypothesisDeleteAPI,
-    ChatAPI,
+    BulkProjectDeleteAPI,
+    ChatAPI, 
     init_socket_handlers,
     ProjectsAPI,
     AnalysisPipelineAPI,
     GWASFilesAPI,
     GWASFileDownloadAPI,
+    PhenotypesAPI,
+
 )
 from dotenv import load_dotenv
 import os
@@ -127,6 +130,7 @@ def setup_api(config):
         "enrichment": deps['enrichment'],
         "gene_expression": deps['gene_expression']
     })
+    api.add_resource(BulkProjectDeleteAPI, "/projects/delete", resource_class_kwargs={"projects": deps['projects']})
     api.add_resource(AnalysisPipelineAPI, "/analysis-pipeline", resource_class_kwargs={
         "projects": deps['projects'],
         "files": deps['files'],
@@ -138,6 +142,8 @@ def setup_api(config):
     # GWAS files
     api.add_resource(GWASFilesAPI, "/gwas-files", resource_class_kwargs={"config": config})
     api.add_resource(GWASFileDownloadAPI, "/gwas-files/download/<string:file_id>", resource_class_kwargs={"config": config})
+
+    api.add_resource(PhenotypesAPI, "/phenotypes", resource_class_kwargs={"phenotypes": deps['phenotypes']})
 
 
     # Initialize socket handlers 
