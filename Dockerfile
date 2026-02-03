@@ -180,6 +180,8 @@ RUN uv pip install 'pyarrow>=17.0.0'
 # Copy application
 COPY . .
 
+# Clone gwas-sumstats-harmoniser repository
+RUN git clone https://github.com/EBISPOT/gwas-sumstats-harmoniser.git
 # Create separate Python environment for harmonizer
 RUN python3 -m venv /opt/harmonizer-venv
 
