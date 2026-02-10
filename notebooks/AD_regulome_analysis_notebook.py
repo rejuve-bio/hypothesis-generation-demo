@@ -297,10 +297,6 @@ def __(tarfile, os):
     return
 
 
-@app.cell
-def __(mo):
-    mo.md("## 3. Munge Alzheimer's disease GWAS summary statistics")
-    return
 
 
 @app.cell
@@ -314,7 +310,100 @@ def __(mo):
         - Path to harmonizer reference data (created by harmonizer_setup.sh)
         """)
     return
-
+@app.cell
+def __(os, Path):
+    HARMONIZER_CODE_REPO = os.getenv("HARMONIZER_CODE_REPO", "path/to/harmonizer/repo")
+    HARMONIZER_REF_DIR = os.getenv("HARMONIZER_REF_DIR", "path/to/harmonizer/reference")
+    
+    harmonizer_script = Path(HARMONIZER_CODE_REPO) / "harmonizer.sh"
+    
+    if not harmonizer_script.exists():
+        print("⚠ WARNING: harmonizer.sh not found!")
+        print(f"  Expected location: {harmonizer_script}")
+        print(f"  Please set HARMONIZER_CODE_REPO environment variable or update this cell")
+        print(f"  Current setting: HARMONIZER_CODE_REPO={HARMONIZER_CODE_REPO}")
+        harmonizer_ready = False
+    elif not os.path.isdir(HARMONIZER_REF_DIR):
+        print("⚠ WARNING: Harmonizer reference directory not found!")
+        print(f"  Expected location: {HARMONIZER_REF_DIR}")
+        print(f"  Please run harmonizer_setup.sh first or set HARMONIZER_REF_DIR")
+        print(f"  Current setting: HARMONIZER_REF_DIR={HARMONIZER_REF_DIR}")
+        harmonizer_ready = False
+    else:
+        print("✓ Harmonizer configuration found")
+        print(f"  Code repo: {HARMONIZER_CODE_REPO}")
+        print(f"  Reference: {HARMONIZER_REF_DIR}")
+        harmonizer_ready = True
+    
+    return (HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR, harmonizer_ready)
+@app.cell
+def __(mo):
+    mo.md("## 4. Harmonize Alzheimer's disease GWAS summary statistics")
+    return
+@app.cell
+def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR):
+    os.makedirs("data/harmonized", exist_ok=True)
+    
+    input_gwas = "data/gwas/AD_bellenguez_2022_hg38.tsv.gz"
+    harmonized_found = False
+    if os.path.exists("data/harmonized"):
+        for item in os.listdir("data/harmonized"):
+            if os.path.isdir(os.path.join("data/harmonized", item)):
+                final_dir = os.path.join("data/harmonized", item, "final")
+                if os.path.exists(final_dir):
+                    harmonized_found = True
+                    harmonized_output_dir = os.path.join("data/harmonized", item)
+                    break
+    
+    if harmonized_found:
+        print("✓ Harmonized GWAS file already exists, skipping harmonization")
+        print(f"  Location: {harmonized_output_dir}")
+    elif not harmonizer_ready:
+        print("⚠ Harmonizer not configured - skipping harmonization step")
+        print("  Please configure HARMONIZER_CODE_REPO and HARMONIZER_REF_DIR")
+        harmonized_output_dir = None
+    else:
+        print("\n" + "="*60)
+        print("STEP 4: Harmonizing GWAS summary statistics")
+        print("="*60)
+        
+        os.chdir("data/harmonized")
+        
+        try:
+            result = subprocess.run([
+                "bash",
+                os.path.join(HARMONIZER_CODE_REPO, "harmonizer.sh"),
+                "--input", os.path.abspath(input_gwas),
+                "--build", "GRCh38",
+                "--ref", HARMONIZER_REF_DIR,
+                "--code-repo", HARMONIZER_CODE_REPO,
+                "--threshold", "0.99"
+            ], check=True, capture_output=True, text=True)
+            
+            print(result.stdout)
+            if result.stderr:
+                print("STDERR:", result.stderr)
+            
+           
+            harmonized_dirs = [d for d in os.listdir(".") if os.path.isdir(d)]
+            if harmonized_dirs:
+                harmonized_output_dir = os.path.abspath(max(harmonized_dirs))  # Get most recent
+                print(f"\n✓ Harmonization complete")
+                print(f"  Output: {harmonized_output_dir}")
+            else:
+                print("⚠ WARNING: No output directory found after harmonization")
+                harmonized_output_dir = None
+                
+        except subprocess.CalledProcessError as e:
+            print(f"\n✗ ERROR: Harmonization failed")
+            print(f"  Error: {e}")
+            print(f"  STDOUT: {e.stdout}")
+            print(f"  STDERR: {e.stderr}")
+            harmonized_output_dir = None
+        finally:
+            os.chdir("../..")
+    
+    return (harmonized_output_dir,)
 
 @app.cell
 def __(mo):
