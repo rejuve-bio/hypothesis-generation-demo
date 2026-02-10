@@ -407,6 +407,67 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
 
 @app.cell
 def __(mo):
+    mo.md("""
+## 5. Convert harmonized output to LDSC format
+
+The harmonizer outputs GWAS-SSF format. We need to convert this to the format LDSC expects.
+""")
+    return
+@app.cell
+def __(os, subprocess, python27_path, harmonized_output_dir):
+    os.makedirs("data/ldsc_input", exist_ok=True)
+    
+    if harmonized_output_dir is None:
+        print("⚠ Skipping LDSC conversion - no harmonized data available")
+        ldsc_sumstats_file = None
+    else:
+       
+        final_dir = os.path.join(harmonized_output_dir, "final")
+        
+        if not os.path.exists(final_dir):
+            print(f"⚠ WARNING: Final directory not found: {final_dir}")
+            ldsc_sumstats_file = None
+        else:
+
+            harmonized_files = [f for f in os.listdir(final_dir) if f.endswith(".tsv.gz")]
+            
+            if not harmonized_files:
+                print(f"⚠ WARNING: No .tsv.gz file found in {final_dir}")
+                ldsc_sumstats_file = None
+            else:
+                harmonized_file = os.path.join(final_dir, harmonized_files[0])
+                print(f"Found harmonized file: {harmonized_file}")
+                
+               
+                ldsc_sumstats_file = "data/ldsc_input/AD_harmonized_munged.sumstats.gz"
+                
+                if os.path.exists(ldsc_sumstats_file):
+                    print("✓ LDSC-formatted file already exists")
+                else:
+                    print("\n" + "="*60)
+                    print("STEP 5: Converting harmonized data to LDSC format")
+                    print("="*60)
+                    
+                    
+                    subprocess.run([
+                        python27_path, "tools/ldsc/munge_sumstats.py",
+                        "--sumstats", harmonized_file,
+                        "--out", "data/ldsc_input/AD_harmonized_munged",
+                        "--a1", "effect_allele",
+                        "--a2", "other_allele",
+                        "--p", "p_value",
+                        "--snp", "rsid",
+                        "--signed-sumstats", "beta,0",
+                        "--merge-alleles", "data/reference/GRCh38/plink_files/w_hm3.snplist"  # if available
+                    ], check=True)
+                    
+                    print("\n✓ LDSC format conversion complete")
+    
+    return (ldsc_sumstats_file,)
+
+
+@app.cell
+def __(mo):
     mo.md("## 4. Generate cell-type–specific binary annotations (BED → .annot.gz)")
     return
 
