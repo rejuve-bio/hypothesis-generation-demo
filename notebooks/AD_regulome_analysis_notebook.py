@@ -73,7 +73,6 @@ def __(Path, subprocess, os):
     envs = json.loads(conda_prefix.stdout)["envs"]
     ldsc27_path = [e for e in envs if "ldsc27" in e][0]
     
- 
     bedtools_path = os.path.join(ldsc27_path, "bin", "bedtools")
     if os.path.exists(bedtools_path):
         bedtools_check = subprocess.run(
@@ -106,20 +105,20 @@ def __(Path, subprocess, os):
     if check_numpy.returncode != 0:
         print("Installing LDSC dependencies in ldsc27 environment...")
         
-     
+    
         print("Installing OpenSSL 1.0...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "openssl=1.0.2", "-c", "conda-forge"
         ], check=True)
         
-      
+     
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "numpy", "scipy", "pandas", "bitarray", "-c", "conda-forge"
         ], check=True)
         
-       
+    
         print("Installing pybedtools and pysam...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
@@ -128,7 +127,7 @@ def __(Path, subprocess, os):
         
         print("✓ Dependencies installed!")
     
- 
+
     print("\nVerifying BEDTools is accessible to pybedtools...")
     pybedtools_check = subprocess.run(
         [os.path.join(ldsc27_path, "bin", "python"), "-c", 
@@ -168,7 +167,7 @@ def __(os, urllib):
     os.makedirs("data/reference", exist_ok=True)
     os.makedirs("data/gwas", exist_ok=True)
 
-    cell_types = ["Ast", "Ex", "In", "Microglia", "OPC", "Oligo", "PerEndo"]
+    cell_types = ["Ast"]
     base_url = "https://personal.broadinstitute.org/bjames/AD_snATAC/major_celltype_matrices/"
 
     print("Downloading cell type peak annotations...")
@@ -297,24 +296,26 @@ def __(tarfile, os):
     return
 
 
-
-
 @app.cell
 def __(mo):
     mo.md("""
-        ## 3. Setup harmonization workflow
+## 3. Setup harmonization workflow
 
-        This cell sets up the harmonization environment and downloads the harmonizer scripts.
-        You'll need to provide:
-        - Path to harmonizer code repository (harmonizer.sh and associated Nextflow scripts)
-        - Path to harmonizer reference data (created by harmonizer_setup.sh)
-        """)
+This cell sets up the harmonization environment and downloads the harmonizer scripts.
+You'll need to provide:
+- Path to harmonizer code repository (harmonizer.sh and associated Nextflow scripts)
+- Path to harmonizer reference data (created by harmonizer_setup.sh)
+""")
     return
+
+
 @app.cell
 def __(os, Path):
+ 
     HARMONIZER_CODE_REPO = os.getenv("HARMONIZER_CODE_REPO", "path/to/harmonizer/repo")
     HARMONIZER_REF_DIR = os.getenv("HARMONIZER_REF_DIR", "path/to/harmonizer/reference")
     
+ 
     harmonizer_script = Path(HARMONIZER_CODE_REPO) / "harmonizer.sh"
     
     if not harmonizer_script.exists():
@@ -336,10 +337,14 @@ def __(os, Path):
         harmonizer_ready = True
     
     return (HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR, harmonizer_ready)
+
+
 @app.cell
 def __(mo):
     mo.md("## 4. Harmonize Alzheimer's disease GWAS summary statistics")
     return
+
+
 @app.cell
 def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR):
     os.makedirs("data/harmonized", exist_ok=True)
@@ -349,8 +354,8 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
     if os.path.exists("data/harmonized"):
         for item in os.listdir("data/harmonized"):
             if os.path.isdir(os.path.join("data/harmonized", item)):
-                final_dir = os.path.join("data/harmonized", item, "final")
-                if os.path.exists(final_dir):
+                _final_dir = os.path.join("data/harmonized", item, "final")
+                if os.path.exists(_final_dir):
                     harmonized_found = True
                     harmonized_output_dir = os.path.join("data/harmonized", item)
                     break
@@ -367,10 +372,12 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
         print("STEP 4: Harmonizing GWAS summary statistics")
         print("="*60)
         
+       
         os.chdir("data/harmonized")
         
         try:
-            result = subprocess.run([
+      
+            _result = subprocess.run([
                 "bash",
                 os.path.join(HARMONIZER_CODE_REPO, "harmonizer.sh"),
                 "--input", os.path.abspath(input_gwas),
@@ -380,14 +387,14 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
                 "--threshold", "0.99"
             ], check=True, capture_output=True, text=True)
             
-            print(result.stdout)
-            if result.stderr:
-                print("STDERR:", result.stderr)
+            print(_result.stdout)
+            if _result.stderr:
+                print("STDERR:", _result.stderr)
             
-           
+          
             harmonized_dirs = [d for d in os.listdir(".") if os.path.isdir(d)]
             if harmonized_dirs:
-                harmonized_output_dir = os.path.abspath(max(harmonized_dirs))  # Get most recent
+                harmonized_output_dir = os.path.abspath(max(harmonized_dirs)) 
                 print(f"\n✓ Harmonization complete")
                 print(f"  Output: {harmonized_output_dir}")
             else:
@@ -405,6 +412,7 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
     
     return (harmonized_output_dir,)
 
+
 @app.cell
 def __(mo):
     mo.md("""
@@ -413,6 +421,8 @@ def __(mo):
 The harmonizer outputs GWAS-SSF format. We need to convert this to the format LDSC expects.
 """)
     return
+
+
 @app.cell
 def __(os, subprocess, python27_path, harmonized_output_dir):
     os.makedirs("data/ldsc_input", exist_ok=True)
@@ -421,24 +431,22 @@ def __(os, subprocess, python27_path, harmonized_output_dir):
         print("⚠ Skipping LDSC conversion - no harmonized data available")
         ldsc_sumstats_file = None
     else:
-       
-        final_dir = os.path.join(harmonized_output_dir, "final")
+        _final_dir = os.path.join(harmonized_output_dir, "final")
         
-        if not os.path.exists(final_dir):
-            print(f"⚠ WARNING: Final directory not found: {final_dir}")
+        if not os.path.exists(_final_dir):
+            print(f"⚠ WARNING: Final directory not found: {_final_dir}")
             ldsc_sumstats_file = None
         else:
-
-            harmonized_files = [f for f in os.listdir(final_dir) if f.endswith(".tsv.gz")]
+            harmonized_files = [f for f in os.listdir(_final_dir) if f.endswith(".tsv.gz")]
             
             if not harmonized_files:
-                print(f"⚠ WARNING: No .tsv.gz file found in {final_dir}")
+                print(f"⚠ WARNING: No .tsv.gz file found in {_final_dir}")
                 ldsc_sumstats_file = None
             else:
-                harmonized_file = os.path.join(final_dir, harmonized_files[0])
+                harmonized_file = os.path.join(_final_dir, harmonized_files[0])
                 print(f"Found harmonized file: {harmonized_file}")
                 
-               
+              
                 ldsc_sumstats_file = "data/ldsc_input/AD_harmonized_munged.sumstats.gz"
                 
                 if os.path.exists(ldsc_sumstats_file):
@@ -448,7 +456,7 @@ def __(os, subprocess, python27_path, harmonized_output_dir):
                     print("STEP 5: Converting harmonized data to LDSC format")
                     print("="*60)
                     
-                    
+
                     subprocess.run([
                         python27_path, "tools/ldsc/munge_sumstats.py",
                         "--sumstats", harmonized_file,
@@ -458,7 +466,7 @@ def __(os, subprocess, python27_path, harmonized_output_dir):
                         "--p", "p_value",
                         "--snp", "rsid",
                         "--signed-sumstats", "beta,0",
-                        "--merge-alleles", "data/reference/GRCh38/plink_files/w_hm3.snplist"  # if available
+                        "--N", "487511" 
                     ], check=True)
                     
                     print("\n✓ LDSC format conversion complete")
@@ -468,7 +476,7 @@ def __(os, subprocess, python27_path, harmonized_output_dir):
 
 @app.cell
 def __(mo):
-    mo.md("## 4. Generate cell-type–specific binary annotations (BED → .annot.gz)")
+    mo.md("## 6. Generate cell-type–specific binary annotations (BED → .annot.gz)")
     return
 
 
@@ -477,7 +485,7 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
     os.makedirs("data/annotations", exist_ok=True)
 
     print("\n" + "="*60)
-    print("STEP 4: Generating cell-type annotations")
+    print("STEP 6: Generating cell-type annotations")
     print("="*60)
     
 
@@ -495,13 +503,12 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
             print(f"  ✓ All {_ct} annotations already exist, skipping")
             continue
         
-       
+    
         peaks = pd.read_csv(f"data/peaks/{_ct}.peak.annotation.txt", sep="\t")
         _bed = peaks[['seqnames', 'start', 'end']].copy()
         _bed.columns = ['chr', 'start', 'end']
         _bed_file = f"data/annotations/{_ct}.bed"
         _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
-        
         
         for _chrom in range(1, 23):
             annot_file = f"data/annotations/{_ct}.{_chrom}.annot.gz"
@@ -510,18 +517,18 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
                 continue
                 
             print(f"  Chromosome {_chrom}...", end=" ", flush=True)
-            result = subprocess.run([
+            _result = subprocess.run([
                 python27_path, "tools/ldsc/make_annot.py",
                 "--bed-file", _bed_file,
                 "--bimfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{_chrom}.bim",
                 "--annot-file", annot_file
             ], capture_output=True, text=True, env=env)
             
-            if result.returncode != 0:
+            if _result.returncode != 0:
                 print(f"\n\nERROR on chromosome {_chrom}:")
-                print("STDERR:", result.stderr)
-                print("STDOUT:", result.stdout)
-                raise subprocess.CalledProcessError(result.returncode, result.args)
+                print("STDERR:", _result.stderr)
+                print("STDOUT:", _result.stdout)
+                raise subprocess.CalledProcessError(_result.returncode, _result.args)
             print("✓")
         print(f"  ✓ {_ct} complete")
     
@@ -531,7 +538,7 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
 
 @app.cell
 def __(mo):
-    mo.md("## 5. Calculate LD scores for each cell type and chromosome")
+    mo.md("## 7. Calculate LD scores for each cell type and chromosome")
     return
 
 
@@ -540,7 +547,7 @@ def __(subprocess, os, cell_types, python27_path):
     os.makedirs("data/ldscores", exist_ok=True)
 
     print("\n" + "="*60)
-    print("STEP 5: Calculating LD scores (this may take 10-30 minutes)")
+    print("STEP 7: Calculating LD scores (this may take 10-30 minutes)")
     print("="*60)
     
     for _ct in cell_types:
@@ -581,7 +588,7 @@ def __(subprocess, os, cell_types, python27_path):
 
 @app.cell
 def __(mo):
-    mo.md("## 6. Create CTS (cell-type–specific) reference file")
+    mo.md("## 8. Create CTS (cell-type–specific) reference file")
     return
 
 
@@ -597,46 +604,50 @@ def __(os, cell_types):
 
 @app.cell
 def __(mo):
-    mo.md("## 7. Run LDSC cell-type–specific heritability analysis (CTS)")
+    mo.md("## 9. Run LDSC cell-type–specific heritability analysis (CTS)")
     return
 
 
 @app.cell
-def __(subprocess, python27_path):
-    print("\n" + "="*60)
-    print("STEP 7: Running cell-type-specific heritability analysis")
-    print("="*60 + "\n")
-    
-    subprocess.run([
-        python27_path, "tools/ldsc/ldsc.py",
-        "--h2-cts", "data/munged/AD_bellenguez_2022_hg38_munged.sumstats.gz",
-        "--ref-ld-chr", "data/reference/baselineLD_v2.2/baselineLD.",
-        "--ref-ld-chr-cts", "data/cell_types.cts",
-        "--w-ld-chr", "data/reference/GRCh38/weights/weights.hm3_noMHC.",
-        "--out", "results/AD_CellTypeSpecific"
-    ], check=True)
-    
-    print("\n✓ Cell-type-specific analysis complete")
+def __(subprocess, python27_path, ldsc_sumstats_file, os):
+    if ldsc_sumstats_file is None or not os.path.exists(ldsc_sumstats_file):
+        print("⚠ Skipping LDSC analysis - no munged sumstats file available")
+        print("  Please complete harmonization and munging steps first")
+    else:
+        print("\n" + "="*60)
+        print("STEP 9: Running cell-type-specific heritability analysis")
+        print("="*60 + "\n")
+        
+        subprocess.run([
+            python27_path, "tools/ldsc/ldsc.py",
+            "--h2-cts", ldsc_sumstats_file,
+            "--ref-ld-chr", "data/reference/baselineLD_v2.2/baselineLD.",
+            "--ref-ld-chr-cts", "data/cell_types.cts",
+            "--w-ld-chr", "data/reference/GRCh38/weights/weights.hm3_noMHC.",
+            "--out", "results/AD_CellTypeSpecific"
+        ], check=True)
+        
+        print("\n✓ Cell-type-specific analysis complete")
     return
 
 
 @app.cell
 def __(mo):
-    mo.md("## 8. Rank cell types by heritability enrichment significance")
+    mo.md("## 10. Rank cell types by heritability enrichment significance")
     return
 
 
 @app.cell
 def __(pd, os):
     print("\n" + "="*60)
-    print("STEP 8: Ranking cell types by significance")
+    print("STEP 10: Ranking cell types by significance")
     print("="*60 + "\n")
     
     results_file = "results/AD_CellTypeSpecific.cell_type_results.txt"
     
     if not os.path.exists(results_file):
         print(f"⚠ Results file not found: {results_file}")
-        print("Please run Step 7 first to generate the cell-type-specific analysis results.")
+        print("Please run Step 9 first to generate the cell-type-specific analysis results.")
         ranked = None
     else:
         results = pd.read_csv(results_file, sep="\t")
