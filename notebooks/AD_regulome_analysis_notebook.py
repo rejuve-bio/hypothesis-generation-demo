@@ -73,20 +73,20 @@ def __(Path, subprocess, os):
     envs = json.loads(conda_prefix.stdout)["envs"]
     ldsc27_path = [e for e in envs if "ldsc27" in e][0]
     
-    bedtools_check = subprocess.run(
-        [os.path.join(ldsc27_path, "bin", "bedtools"), "--version"],
-        capture_output=True,
-        text=True
-    )
-    
-    if bedtools_check.returncode != 0:
+    bedtools_path = os.path.join(ldsc27_path, "bin", "bedtools")
+    if os.path.exists(bedtools_path):
+        bedtools_check = subprocess.run(
+            [bedtools_path, "--version"],
+            capture_output=True,
+            text=True
+        )
+        print(f"✓ BEDTools already installed: {bedtools_check.stdout.strip()}")
+    else:
         print("Installing BEDTools in ldsc27 environment...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27",
             "-c", "bioconda", "bedtools", "-y"
         ], check=True)
-    else:
-        print(f"✓ BEDTools already installed: {bedtools_check.stdout.strip()}")
     
   
     if not LDSC_DIR.exists():
