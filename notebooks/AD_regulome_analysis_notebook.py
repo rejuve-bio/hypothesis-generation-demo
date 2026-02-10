@@ -304,29 +304,15 @@ def __(mo):
 
 
 @app.cell
-def __(subprocess, os, python27_path):
-    os.makedirs("data/munged", exist_ok=True)
+def __(mo):
+    mo.md("""
+        ## 3. Setup harmonization workflow
 
-    munged_file = "data/munged/AD_bellenguez_2022_hg38_munged.sumstats.gz"
-    
-    if os.path.exists(munged_file):
-        print("✓ Munged GWAS file already exists, skipping munging step")
-    else:
-        print("\n" + "="*60)
-        print("STEP 3: Munging GWAS summary statistics")
-        print("="*60)
-        subprocess.run([
-            python27_path, "tools/ldsc/munge_sumstats.py",
-            "--sumstats", "data/gwas/AD_bellenguez_2022_hg38.tsv.gz",
-            "--out", "data/munged/AD_bellenguez_2022_hg38_munged",
-            "--a1", "effect_allele",
-            "--a2", "other_allele",
-            "--p", "p_value",
-            "--snp", "variant_id",
-            "--N-col", "n_total"
-        ], check=True)
-        
-        print("\n✓ GWAS munging complete")
+        This cell sets up the harmonization environment and downloads the harmonizer scripts.
+        You'll need to provide:
+        - Path to harmonizer code repository (harmonizer.sh and associated Nextflow scripts)
+        - Path to harmonizer reference data (created by harmonizer_setup.sh)
+        """)
     return
 
 
