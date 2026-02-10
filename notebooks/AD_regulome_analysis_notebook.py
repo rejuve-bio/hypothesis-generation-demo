@@ -105,20 +105,18 @@ def __(Path, subprocess, os):
     if check_numpy.returncode != 0:
         print("Installing LDSC dependencies in ldsc27 environment...")
         
-        # Install OpenSSL 1.0 FIRST
         print("Installing OpenSSL 1.0...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "openssl=1.0.2", "-c", "conda-forge"
         ], check=True)
         
-        # Install core dependencies
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "numpy", "scipy", "pandas", "bitarray", "-c", "conda-forge"
         ], check=True)
         
-        # Install pybedtools with pysam
+       
         print("Installing pybedtools and pysam...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
@@ -127,7 +125,7 @@ def __(Path, subprocess, os):
         
         print("✓ Dependencies installed!")
     
-    # Verify pybedtools can find bedtools
+ 
     print("\nVerifying BEDTools is accessible to pybedtools...")
     pybedtools_check = subprocess.run(
         [os.path.join(ldsc27_path, "bin", "python"), "-c", 
