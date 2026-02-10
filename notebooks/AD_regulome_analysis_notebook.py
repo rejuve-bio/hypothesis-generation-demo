@@ -254,7 +254,7 @@ def __(tarfile, os):
 
     nested_files = [
         ("data/reference/GRCh38/baselineLD_v2.2.tgz", "data/reference", "baselineLD_v2.2"),
-        ("data/reference/GRCh38/plink_files.tgz", "data/reference/GRCh38", "1000G.EUR.hg38.1.bed"),
+        ("data/reference/GRCh38/plink_files.tgz", "data/reference/GRCh38", "plink_files/1000G.EUR.hg38.1.bim"),
         ("data/reference/GRCh38/weights.tgz", "data/reference/GRCh38", "weights")
     ]
     
@@ -276,7 +276,7 @@ def __(tarfile, os):
             print(f"  Warning: {tar_file} not found")
     
     
-    critical_file = "data/reference/GRCh38/1000G.EUR.hg38.1.bim"
+    critical_file = "data/reference/GRCh38/plink_files/1000G.EUR.hg38.1.bim"
     if os.path.exists(critical_file):
         print(f"\n✓ All reference files ready! Verified: {critical_file}")
     else:
