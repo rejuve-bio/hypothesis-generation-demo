@@ -73,6 +73,7 @@ def __(Path, subprocess, os):
     envs = json.loads(conda_prefix.stdout)["envs"]
     ldsc27_path = [e for e in envs if "ldsc27" in e][0]
     
+ 
     bedtools_path = os.path.join(ldsc27_path, "bin", "bedtools")
     if os.path.exists(bedtools_path):
         bedtools_check = subprocess.run(
@@ -105,12 +106,14 @@ def __(Path, subprocess, os):
     if check_numpy.returncode != 0:
         print("Installing LDSC dependencies in ldsc27 environment...")
         
+     
         print("Installing OpenSSL 1.0...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "openssl=1.0.2", "-c", "conda-forge"
         ], check=True)
         
+      
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "numpy", "scipy", "pandas", "bitarray", "-c", "conda-forge"
@@ -169,6 +172,7 @@ def __(os, urllib):
     base_url = "https://personal.broadinstitute.org/bjames/AD_snATAC/major_celltype_matrices/"
 
     print("Downloading cell type peak annotations...")
+
     for _ct in cell_types:
         url = f"{base_url}{_ct}.peak.annotation.txt"
         out = f"data/peaks/{_ct}.peak.annotation.txt"
@@ -271,7 +275,7 @@ def __(tarfile, os):
             print(f"  ✓ {os.path.basename(tar_file)} extracted")
             
             if not os.path.exists(check_path):
-                print(f" Warning: Expected file {check_path} not found after extraction")
+                print(f"  Warning: Expected file {check_path} not found after extraction")
         else:
             print(f"  Warning: {tar_file} not found")
     
@@ -355,14 +359,14 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
             print(f"  ✓ All {_ct} annotations already exist, skipping")
             continue
         
-        # Create BED file
+       
         peaks = pd.read_csv(f"data/peaks/{_ct}.peak.annotation.txt", sep="\t")
         _bed = peaks[['seqnames', 'start', 'end']].copy()
         _bed.columns = ['chr', 'start', 'end']
         _bed_file = f"data/annotations/{_ct}.bed"
         _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
         
-        # Generate annotations for each chromosome
+        
         for _chrom in range(1, 23):
             annot_file = f"data/annotations/{_ct}.{_chrom}.annot.gz"
             if os.path.exists(annot_file):
@@ -450,7 +454,7 @@ def __(os, cell_types):
     os.makedirs("results", exist_ok=True)
     with open("data/cell_types.cts", "w") as f:
         for _ct in cell_types:
-            _f.write(f"{_ct}    data/ldscores/{_ct}/{_ct}.\n")
+            f.write(f"{_ct}    data/ldscores/{_ct}/{_ct}.\n")
     print("✓ CTS reference file created")
     return
 
@@ -487,21 +491,27 @@ def __(mo):
 
 
 @app.cell
-def __(pd):
+def __(pd, os):
     print("\n" + "="*60)
     print("STEP 8: Ranking cell types by significance")
     print("="*60 + "\n")
     
-    results = pd.read_csv(
-        "results/AD_CellTypeSpecific.cell_type_results.txt", sep="\t"
-    )
-    ranked = results.sort_values("Coefficient_P_value")
-    ranked.to_csv("results/AD_CellTypeSpecific_ranked.csv", index=False)
+    results_file = "results/AD_CellTypeSpecific.cell_type_results.txt"
     
-    print("Cell types ranked by heritability enrichment p-value:\n")
-    print(ranked[["Name", "Coefficient", "Coefficient_std_error", "Coefficient_P_value"]].to_string(index=False))
+    if not os.path.exists(results_file):
+        print(f"⚠ Results file not found: {results_file}")
+        print("Please run Step 7 first to generate the cell-type-specific analysis results.")
+        ranked = None
+    else:
+        results = pd.read_csv(results_file, sep="\t")
+        ranked = results.sort_values("Coefficient_P_value")
+        ranked.to_csv("results/AD_CellTypeSpecific_ranked.csv", index=False)
+        
+        print("Cell types ranked by heritability enrichment p-value:\n")
+        print(ranked[["Name", "Coefficient", "Coefficient_std_error", "Coefficient_P_value"]].to_string(index=False))
+        
+        print("\n✓ Results saved to results/AD_CellTypeSpecific_ranked.csv")
     
-    print("\n✓ Results saved to results/AD_CellTypeSpecific_ranked.csv")
     return (ranked,)
 
 
