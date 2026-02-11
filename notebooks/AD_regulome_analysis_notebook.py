@@ -13,7 +13,10 @@ def __():
     import pandas as pd
     import tarfile
     from pathlib import Path
-    return mo, urllib, os, subprocess, pd, tarfile, Path
+    import gzip
+    import hashlib
+    from datetime import datetime
+    return mo, urllib, os, subprocess, pd, tarfile, Path, gzip, hashlib, datetime
 
 
 @app.cell
@@ -73,6 +76,7 @@ def __(Path, subprocess, os):
     envs = json.loads(conda_prefix.stdout)["envs"]
     ldsc27_path = [e for e in envs if "ldsc27" in e][0]
     
+
     bedtools_path = os.path.join(ldsc27_path, "bin", "bedtools")
     if os.path.exists(bedtools_path):
         bedtools_check = subprocess.run(
@@ -105,20 +109,20 @@ def __(Path, subprocess, os):
     if check_numpy.returncode != 0:
         print("Installing LDSC dependencies in ldsc27 environment...")
         
-    
+     
         print("Installing OpenSSL 1.0...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "openssl=1.0.2", "-c", "conda-forge"
         ], check=True)
         
-     
+      
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "numpy", "scipy", "pandas", "bitarray", "-c", "conda-forge"
         ], check=True)
         
-    
+       
         print("Installing pybedtools and pysam...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
@@ -299,177 +303,187 @@ def __(tarfile, os):
 @app.cell
 def __(mo):
     mo.md("""
-## 3. Setup harmonization workflow
+## 3. Convert GWAS to SSF format (embedded harmonizer logic)
 
-This cell sets up the harmonization environment and downloads the harmonizer scripts.
-You'll need to provide:
-- Path to harmonizer code repository (harmonizer.sh and associated Nextflow scripts)
-- Path to harmonizer reference data (created by harmonizer_setup.sh)
+This cell converts the input GWAS file to GWAS-SSF format, filtering out X/Y/MT chromosomes.
+This replicates the to_gwas_ssf() function from harmonizer.sh.
 """)
     return
 
 
 @app.cell
-def __(os, Path):
- 
-    HARMONIZER_CODE_REPO = os.getenv("HARMONIZER_CODE_REPO", "path/to/harmonizer/repo")
-    HARMONIZER_REF_DIR = os.getenv("HARMONIZER_REF_DIR", "path/to/harmonizer/reference")
+def __(pd, os, gzip, subprocess, hashlib, datetime):
+    """Convert GWAS to SSF format"""
     
- 
-    harmonizer_script = Path(HARMONIZER_CODE_REPO) / "harmonizer.sh"
-    
-    if not harmonizer_script.exists():
-        print("⚠ WARNING: harmonizer.sh not found!")
-        print(f"  Expected location: {harmonizer_script}")
-        print(f"  Please set HARMONIZER_CODE_REPO environment variable or update this cell")
-        print(f"  Current setting: HARMONIZER_CODE_REPO={HARMONIZER_CODE_REPO}")
-        harmonizer_ready = False
-    elif not os.path.isdir(HARMONIZER_REF_DIR):
-        print("⚠ WARNING: Harmonizer reference directory not found!")
-        print(f"  Expected location: {HARMONIZER_REF_DIR}")
-        print(f"  Please run harmonizer_setup.sh first or set HARMONIZER_REF_DIR")
-        print(f"  Current setting: HARMONIZER_REF_DIR={HARMONIZER_REF_DIR}")
-        harmonizer_ready = False
-    else:
-        print("✓ Harmonizer configuration found")
-        print(f"  Code repo: {HARMONIZER_CODE_REPO}")
-        print(f"  Reference: {HARMONIZER_REF_DIR}")
-        harmonizer_ready = True
-    
-    return (HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR, harmonizer_ready)
-
-
-@app.cell
-def __(mo):
-    mo.md("## 4. Harmonize Alzheimer's disease GWAS summary statistics")
-    return
-
-
-@app.cell
-def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR):
-    os.makedirs("data/harmonized", exist_ok=True)
+    os.makedirs("data/ssf", exist_ok=True)
     
     input_gwas = "data/gwas/AD_bellenguez_2022_hg38.tsv.gz"
-    harmonized_found = False
-    if os.path.exists("data/harmonized"):
-        for item in os.listdir("data/harmonized"):
-            if os.path.isdir(os.path.join("data/harmonized", item)):
-                _final_dir = os.path.join("data/harmonized", item, "final")
-                if os.path.exists(_final_dir):
-                    harmonized_found = True
-                    harmonized_output_dir = os.path.join("data/harmonized", item)
-                    break
+    output_ssf = "data/ssf/AD_bellenguez_2022_hg38.tsv.gz"
+    output_yaml = f"{output_ssf}-meta.yaml"
     
-    if harmonized_found:
-        print("✓ Harmonized GWAS file already exists, skipping harmonization")
-        print(f"  Location: {harmonized_output_dir}")
-    elif not harmonizer_ready:
-        print("⚠ Harmonizer not configured - skipping harmonization step")
-        print("  Please configure HARMONIZER_CODE_REPO and HARMONIZER_REF_DIR")
-        harmonized_output_dir = None
+    if os.path.exists(output_ssf):
+        print("✓ SSF file already exists, skipping conversion")
     else:
         print("\n" + "="*60)
-        print("STEP 4: Harmonizing GWAS summary statistics")
+        print("STEP 3: Converting GWAS to SSF format")
         print("="*60)
         
-       
-        os.chdir("data/harmonized")
-        
-        try:
       
-            _result = subprocess.run([
-                "bash",
-                os.path.join(HARMONIZER_CODE_REPO, "harmonizer.sh"),
-                "--input", os.path.abspath(input_gwas),
-                "--build", "GRCh38",
-                "--ref", HARMONIZER_REF_DIR,
-                "--code-repo", HARMONIZER_CODE_REPO,
-                "--threshold", "0.99"
-            ], check=True, capture_output=True, text=True)
+        print(f"Reading input file: {input_gwas}")
+        _df = pd.read_csv(input_gwas, sep="\t", compression="gzip")
+        _cols_lower = {col.lower(): col for col in _df.columns}
+        _col_map = {}
+        
+     
+        if "variant" in _cols_lower:
+       
+            print("Detected Neale format")
+            _df[['chromosome', 'base_pair_location', 'other_allele', 'effect_allele']] = \
+                _df[_cols_lower['variant']].str.split(':', expand=True)
+        else:
+           
+            print("Detected PLINK/standard format")
+            _col_map['chromosome'] = _cols_lower.get('chr') or _cols_lower.get('chrom') or _cols_lower.get('chromosome')
+            _col_map['base_pair_location'] = _cols_lower.get('bp') or _cols_lower.get('pos') or _cols_lower.get('base_pair_location')
+            _col_map['effect_allele'] = _cols_lower.get('a1') or _cols_lower.get('effect_allele')
+            _col_map['other_allele'] = _cols_lower.get('a2') or _cols_lower.get('other_allele')
+        
+      
+        _col_map['beta'] = _cols_lower.get('beta')
+        _col_map['standard_error'] = (_cols_lower.get('se') or _cols_lower.get('stderr') or 
+                                      _cols_lower.get('standard_error'))
+        _col_map['p_value'] = _cols_lower.get('p') or _cols_lower.get('pval') or _cols_lower.get('p_value')
+        _col_map['effect_allele_frequency'] = (_cols_lower.get('a1_freq') or _cols_lower.get('frq') or 
+                                                _cols_lower.get('af') or _cols_lower.get('effect_allele_frequency'))
+        _col_map['rsid'] = (_cols_lower.get('id') or _cols_lower.get('snp') or 
+                           _cols_lower.get('rsid') or _cols_lower.get('variant_id'))
+        
+      
+        if "variant" not in _cols_lower:
+            _rename_map = {v: k for k, v in _col_map.items() if v is not None}
+            _df = _df.rename(columns=_rename_map)
+        
+       
+        _df['chromosome'] = _df['chromosome'].astype(str).str.replace('chr', '', regex=False)
+        _df['chromosome'] = _df['chromosome'].replace({'23': 'X', '24': 'Y', '26': 'MT'})
+        
+  
+        print("Filtering chromosomes (removing X, Y, MT)...")
+        _before = len(_df)
+        _df = _df[~_df['chromosome'].isin(['X', 'Y', 'MT'])]
+        print(f"  Removed {_before - len(_df)} variants on sex/MT chromosomes")
+        
+       
+        _df['base_pair_location'] = pd.to_numeric(_df['base_pair_location'], errors='coerce')
+        _df['effect_allele'] = _df['effect_allele'].str.upper()
+        _df['other_allele'] = _df['other_allele'].str.upper()
+        
+      
+        if 'effect_allele_frequency' in _df.columns:
+            _df['effect_allele_frequency'] = _df['effect_allele_frequency'].fillna('NA')
+        else:
+            _df['effect_allele_frequency'] = 'NA'
             
-            print(_result.stdout)
-            if _result.stderr:
-                print("STDERR:", _result.stderr)
-            
-          
-            harmonized_dirs = [d for d in os.listdir(".") if os.path.isdir(d)]
-            if harmonized_dirs:
-                harmonized_output_dir = os.path.abspath(max(harmonized_dirs)) 
-                print(f"\n✓ Harmonization complete")
-                print(f"  Output: {harmonized_output_dir}")
-            else:
-                print("⚠ WARNING: No output directory found after harmonization")
-                harmonized_output_dir = None
-                
-        except subprocess.CalledProcessError as e:
-            print(f"\n✗ ERROR: Harmonization failed")
-            print(f"  Error: {e}")
-            print(f"  STDOUT: {e.stdout}")
-            print(f"  STDERR: {e.stderr}")
-            harmonized_output_dir = None
-        finally:
-            os.chdir("../..")
+        if 'rsid' in _df.columns:
+            _df['rsid'] = _df['rsid'].fillna('NA')
+        else:
+            _df['rsid'] = 'NA'
+        
+       
+        ssf_columns = ['chromosome', 'base_pair_location', 'effect_allele', 'other_allele', 
+                       'beta', 'standard_error', 'p_value', 'effect_allele_frequency', 'rsid']
+        _df_ssf = _df[ssf_columns]
+        
+     
+        print(f"Writing SSF file: {output_ssf}")
+        _df_ssf.to_csv(output_ssf, sep="\t", index=False, compression="gzip")
+        
     
-    return (harmonized_output_dir,)
+        print("Creating tabix index...")
+        subprocess.run([
+            "tabix", "-c", "N", "-S", "1", "-s", "1", "-b", "2", "-e", "2", output_ssf
+        ], check=False) 
+        
+
+        with gzip.open(output_ssf, 'rb') as f:
+            _md5 = hashlib.md5(f.read()).hexdigest()
+        
+        
+        with open(output_yaml, 'w') as f:
+            f.write(f"""# Study meta-data
+date_metadata_last_modified: {datetime.now().strftime('%Y-%m-%d')}
+
+# Genotyping Information
+genome_assembly: GRCh38
+coordinate_system: 1-based
+
+# Summary Statistic information
+data_file_name: {os.path.basename(output_ssf)}
+file_type: GWAS-SSF v0.1
+data_file_md5sum: {_md5}
+
+# Harmonization status
+is_harmonised: false
+is_sorted: false
+""")
+        
+        print("✓ SSF conversion complete")
+        
+       
+        chromosomes_present = sorted(_df_ssf['chromosome'].unique(), key=lambda x: int(x))
+        print(f"Chromosomes in data: {', '.join(chromosomes_present)}")
+    
+    return (output_ssf, output_yaml)
 
 
 @app.cell
 def __(mo):
     mo.md("""
-## 5. Convert harmonized output to LDSC format
+## 4. Setup harmonization environment (Nextflow-based)
 
-The harmonizer outputs GWAS-SSF format. We need to convert this to the format LDSC expects.
+**Note:** The full harmonization step requires:
+- Nextflow installed
+- Harmonizer workflow repository
+- Reference data
+
+For this analysis, we can skip the Nextflow harmonization and directly convert 
+the SSF file to LDSC format since the data is already in GRCh38.
 """)
     return
 
 
 @app.cell
-def __(os, subprocess, python27_path, harmonized_output_dir):
+def __(mo):
+    mo.md("## 5. Convert SSF to LDSC format")
+    return
+
+
+@app.cell
+def __(os, subprocess, python27_path, output_ssf):
     os.makedirs("data/ldsc_input", exist_ok=True)
     
-    if harmonized_output_dir is None:
-        print("⚠ Skipping LDSC conversion - no harmonized data available")
-        ldsc_sumstats_file = None
+    ldsc_sumstats_file = "data/ldsc_input/AD_harmonized_munged.sumstats.gz"
+    
+    if os.path.exists(ldsc_sumstats_file):
+        print("✓ LDSC-formatted file already exists")
     else:
-        _final_dir = os.path.join(harmonized_output_dir, "final")
-        
-        if not os.path.exists(_final_dir):
-            print(f"⚠ WARNING: Final directory not found: {_final_dir}")
-            ldsc_sumstats_file = None
-        else:
-            harmonized_files = [f for f in os.listdir(_final_dir) if f.endswith(".tsv.gz")]
-            
-            if not harmonized_files:
-                print(f"⚠ WARNING: No .tsv.gz file found in {_final_dir}")
-                ldsc_sumstats_file = None
-            else:
-                harmonized_file = os.path.join(_final_dir, harmonized_files[0])
-                print(f"Found harmonized file: {harmonized_file}")
-                
-              
-                ldsc_sumstats_file = "data/ldsc_input/AD_harmonized_munged.sumstats.gz"
-                
-                if os.path.exists(ldsc_sumstats_file):
-                    print("✓ LDSC-formatted file already exists")
-                else:
-                    print("\n" + "="*60)
-                    print("STEP 5: Converting harmonized data to LDSC format")
-                    print("="*60)
-                    
+        print("\n" + "="*60)
+        print("STEP 5: Converting SSF data to LDSC format")
+        print("="*60)
 
-                    subprocess.run([
-                        python27_path, "tools/ldsc/munge_sumstats.py",
-                        "--sumstats", harmonized_file,
-                        "--out", "data/ldsc_input/AD_harmonized_munged",
-                        "--a1", "effect_allele",
-                        "--a2", "other_allele",
-                        "--p", "p_value",
-                        "--snp", "rsid",
-                        "--signed-sumstats", "beta,0",
-                        "--N", "487511" 
-                    ], check=True)
-                    
-                    print("\n✓ LDSC format conversion complete")
+        subprocess.run([
+            python27_path, "tools/ldsc/munge_sumstats.py",
+            "--sumstats", output_ssf,
+            "--out", "data/ldsc_input/AD_harmonized_munged",
+            "--a1", "effect_allele",
+            "--a2", "other_allele",
+            "--p", "p_value",
+            "--snp", "rsid",
+            "--signed-sumstats", "beta,0",
+            "--N", "487511"  
+        ], check=True)
+        
+        print("\n✓ LDSC format conversion complete")
     
     return (ldsc_sumstats_file,)
 
@@ -503,13 +517,14 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
             print(f"  ✓ All {_ct} annotations already exist, skipping")
             continue
         
-    
+ 
         peaks = pd.read_csv(f"data/peaks/{_ct}.peak.annotation.txt", sep="\t")
         _bed = peaks[['seqnames', 'start', 'end']].copy()
         _bed.columns = ['chr', 'start', 'end']
         _bed_file = f"data/annotations/{_ct}.bed"
         _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
         
+       
         for _chrom in range(1, 23):
             annot_file = f"data/annotations/{_ct}.{_chrom}.annot.gz"
             if os.path.exists(annot_file):
