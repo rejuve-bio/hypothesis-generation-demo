@@ -22,7 +22,6 @@ def __():
 @app.cell
 def __(mo):
     mo.md("""
-# LDSC Cell-Type Analysis – Alzheimer's Disease
 
 This notebook reproduces the LDSC cell-type–specific heritability analysis  
 from *Epigenomic dissection of Alzheimer's disease pinpoints causal variants and reveals epigenome erosion*.
@@ -35,7 +34,6 @@ All analyses are performed using **GRCh38 / hg38** coordinates.
 @app.cell
 def __(mo):
     mo.md("""
-## 0. Setup: Download and configure LDSC
 
 This cell will:
 1. Create a Python 2.7 conda environment for LDSC
@@ -76,7 +74,6 @@ def __(Path, subprocess, os):
     envs = json.loads(conda_prefix.stdout)["envs"]
     ldsc27_path = [e for e in envs if "ldsc27" in e][0]
     
-
     bedtools_path = os.path.join(ldsc27_path, "bin", "bedtools")
     if os.path.exists(bedtools_path):
         bedtools_check = subprocess.run(
@@ -109,20 +106,17 @@ def __(Path, subprocess, os):
     if check_numpy.returncode != 0:
         print("Installing LDSC dependencies in ldsc27 environment...")
         
-     
         print("Installing OpenSSL 1.0...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "openssl=1.0.2", "-c", "conda-forge"
         ], check=True)
         
-      
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "numpy", "scipy", "pandas", "bitarray", "-c", "conda-forge"
         ], check=True)
         
-       
         print("Installing pybedtools and pysam...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
@@ -131,7 +125,6 @@ def __(Path, subprocess, os):
         
         print("✓ Dependencies installed!")
     
-
     print("\nVerifying BEDTools is accessible to pybedtools...")
     pybedtools_check = subprocess.run(
         [os.path.join(ldsc27_path, "bin", "python"), "-c", 
@@ -303,7 +296,6 @@ def __(tarfile, os):
 @app.cell
 def __(mo):
     mo.md("""
-## 3. Convert GWAS to SSF format (embedded harmonizer logic)
 
 This cell converts the input GWAS file to GWAS-SSF format, filtering out X/Y/MT chromosomes.
 This replicates the to_gwas_ssf() function from harmonizer.sh.
@@ -328,27 +320,24 @@ def __(pd, os, gzip, subprocess, hashlib, datetime):
         print("STEP 3: Converting GWAS to SSF format")
         print("="*60)
         
-      
         print(f"Reading input file: {input_gwas}")
         _df = pd.read_csv(input_gwas, sep="\t", compression="gzip")
+        
         _cols_lower = {col.lower(): col for col in _df.columns}
+        
         _col_map = {}
         
-     
         if "variant" in _cols_lower:
-       
             print("Detected Neale format")
             _df[['chromosome', 'base_pair_location', 'other_allele', 'effect_allele']] = \
                 _df[_cols_lower['variant']].str.split(':', expand=True)
         else:
-           
             print("Detected PLINK/standard format")
             _col_map['chromosome'] = _cols_lower.get('chr') or _cols_lower.get('chrom') or _cols_lower.get('chromosome')
             _col_map['base_pair_location'] = _cols_lower.get('bp') or _cols_lower.get('pos') or _cols_lower.get('base_pair_location')
             _col_map['effect_allele'] = _cols_lower.get('a1') or _cols_lower.get('effect_allele')
             _col_map['other_allele'] = _cols_lower.get('a2') or _cols_lower.get('other_allele')
         
-      
         _col_map['beta'] = _cols_lower.get('beta')
         _col_map['standard_error'] = (_cols_lower.get('se') or _cols_lower.get('stderr') or 
                                       _cols_lower.get('standard_error'))
@@ -358,27 +347,22 @@ def __(pd, os, gzip, subprocess, hashlib, datetime):
         _col_map['rsid'] = (_cols_lower.get('id') or _cols_lower.get('snp') or 
                            _cols_lower.get('rsid') or _cols_lower.get('variant_id'))
         
-      
         if "variant" not in _cols_lower:
             _rename_map = {v: k for k, v in _col_map.items() if v is not None}
             _df = _df.rename(columns=_rename_map)
         
-       
         _df['chromosome'] = _df['chromosome'].astype(str).str.replace('chr', '', regex=False)
         _df['chromosome'] = _df['chromosome'].replace({'23': 'X', '24': 'Y', '26': 'MT'})
         
-  
         print("Filtering chromosomes (removing X, Y, MT)...")
         _before = len(_df)
         _df = _df[~_df['chromosome'].isin(['X', 'Y', 'MT'])]
         print(f"  Removed {_before - len(_df)} variants on sex/MT chromosomes")
         
-       
         _df['base_pair_location'] = pd.to_numeric(_df['base_pair_location'], errors='coerce')
         _df['effect_allele'] = _df['effect_allele'].str.upper()
         _df['other_allele'] = _df['other_allele'].str.upper()
         
-      
         if 'effect_allele_frequency' in _df.columns:
             _df['effect_allele_frequency'] = _df['effect_allele_frequency'].fillna('NA')
         else:
@@ -389,47 +373,38 @@ def __(pd, os, gzip, subprocess, hashlib, datetime):
         else:
             _df['rsid'] = 'NA'
         
-       
         ssf_columns = ['chromosome', 'base_pair_location', 'effect_allele', 'other_allele', 
                        'beta', 'standard_error', 'p_value', 'effect_allele_frequency', 'rsid']
         _df_ssf = _df[ssf_columns]
         
-     
         print(f"Writing SSF file: {output_ssf}")
         _df_ssf.to_csv(output_ssf, sep="\t", index=False, compression="gzip")
         
-    
         print("Creating tabix index...")
         subprocess.run([
             "tabix", "-c", "N", "-S", "1", "-s", "1", "-b", "2", "-e", "2", output_ssf
-        ], check=False) 
+        ], check=False)
         
-
         with gzip.open(output_ssf, 'rb') as f:
             _md5 = hashlib.md5(f.read()).hexdigest()
         
-        
-        with open(output_yaml, 'w') as f:
-            f.write(f"""# Study meta-data
+        with open(output_yaml, 'w') as _f:
+            _f.write(f"""# Study meta-data
 date_metadata_last_modified: {datetime.now().strftime('%Y-%m-%d')}
 
-# Genotyping Information
 genome_assembly: GRCh38
 coordinate_system: 1-based
 
-# Summary Statistic information
 data_file_name: {os.path.basename(output_ssf)}
 file_type: GWAS-SSF v0.1
 data_file_md5sum: {_md5}
 
-# Harmonization status
 is_harmonised: false
 is_sorted: false
 """)
         
         print("✓ SSF conversion complete")
         
-       
         chromosomes_present = sorted(_df_ssf['chromosome'].unique(), key=lambda x: int(x))
         print(f"Chromosomes in data: {', '.join(chromosomes_present)}")
     
@@ -439,7 +414,6 @@ is_sorted: false
 @app.cell
 def __(mo):
     mo.md("""
-## 4. Setup harmonization environment (Nextflow-based)
 
 **Note:** The full harmonization step requires:
 - Nextflow installed
@@ -470,7 +444,7 @@ def __(os, subprocess, python27_path, output_ssf):
         print("\n" + "="*60)
         print("STEP 5: Converting SSF data to LDSC format")
         print("="*60)
-
+        
         subprocess.run([
             python27_path, "tools/ldsc/munge_sumstats.py",
             "--sumstats", output_ssf,
@@ -480,7 +454,7 @@ def __(os, subprocess, python27_path, output_ssf):
             "--p", "p_value",
             "--snp", "rsid",
             "--signed-sumstats", "beta,0",
-            "--N", "487511"  
+            "--N", "487511"
         ], check=True)
         
         print("\n✓ LDSC format conversion complete")
@@ -517,14 +491,12 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
             print(f"  ✓ All {_ct} annotations already exist, skipping")
             continue
         
- 
         peaks = pd.read_csv(f"data/peaks/{_ct}.peak.annotation.txt", sep="\t")
         _bed = peaks[['seqnames', 'start', 'end']].copy()
         _bed.columns = ['chr', 'start', 'end']
         _bed_file = f"data/annotations/{_ct}.bed"
         _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
         
-       
         for _chrom in range(1, 23):
             annot_file = f"data/annotations/{_ct}.{_chrom}.annot.gz"
             if os.path.exists(annot_file):
@@ -610,9 +582,9 @@ def __(mo):
 @app.cell
 def __(os, cell_types):
     os.makedirs("results", exist_ok=True)
-    with open("data/cell_types.cts", "w") as f:
+    with open("data/cell_types.cts", "w") as _f:
         for _ct in cell_types:
-            f.write(f"{_ct}    data/ldscores/{_ct}/{_ct}.\n")
+            _f.write(f"{_ct}    data/ldscores/{_ct}/{_ct}.\n")
     print("✓ CTS reference file created")
     return
 
