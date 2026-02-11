@@ -11,12 +11,13 @@ def __():
     import os
     import subprocess
     import pandas as pd
+    import numpy as np
     import tarfile
     from pathlib import Path
     import gzip
     import hashlib
     from datetime import datetime
-    return mo, urllib, os, subprocess, pd, tarfile, Path, gzip, hashlib, datetime
+    return mo, urllib, os, subprocess, pd, np, tarfile, Path, gzip, hashlib, datetime
 
 
 @app.cell
@@ -414,57 +415,97 @@ is_sorted: false
 @app.cell
 def __(mo):
     mo.md("""
+## 4. Convert SSF to LDSC format
 
-**Note:** The full harmonization step requires:
-- Nextflow installed
-- Harmonizer workflow repository
-- Reference data
-
-For this analysis, we can skip the Nextflow harmonization and directly convert 
-the SSF file to LDSC format since the data is already in GRCh38.
+LDSC requires specific columns: SNP, A1, A2, Z, N
+We'll convert the SSF format to include these required columns.
 """)
     return
 
 
 @app.cell
-def __(mo):
-    mo.md("## 5. Convert SSF to LDSC format")
-    return
-
-
-@app.cell
-def __(os, subprocess, python27_path, output_ssf):
+def __(output_ssf, pd, np, os):
+    """Convert SSF to LDSC format with required columns"""
+    
     os.makedirs("data/ldsc_input", exist_ok=True)
     
-    ldsc_sumstats_file = "data/ldsc_input/AD_harmonized_munged.sumstats.gz"
+    ldsc_sumstats_file = "data/ldsc_input/AD_bellenguez_2022_hg38.sumstats.gz"
     
     if os.path.exists(ldsc_sumstats_file):
-        print("✓ LDSC-formatted file already exists")
+        print(f"✓ LDSC sumstats file already exists: {ldsc_sumstats_file}")
     else:
         print("\n" + "="*60)
-        print("STEP 5: Converting SSF data to LDSC format")
+        print("Converting SSF to LDSC format")
         print("="*60)
         
-        subprocess.run([
-            python27_path, "tools/ldsc/munge_sumstats.py",
-            "--sumstats", output_ssf,
-            "--out", "data/ldsc_input/AD_harmonized_munged",
-            "--a1", "effect_allele",
-            "--a2", "other_allele",
-            "--p", "p_value",
-            "--snp", "rsid",
-            "--signed-sumstats", "beta,0",
-            "--N", "487511"
-        ], check=True)
+        print(f"Reading SSF file: {output_ssf}")
+        _df = pd.read_csv(output_ssf, sep='\t', compression='gzip')
         
-        print("\n✓ LDSC format conversion complete")
+        print(f"Input: {len(_df)} variants")
+        
+        _ldsc = pd.DataFrame()
+        
+     
+        if 'rsid' in _df.columns and (_df['rsid'] != 'NA').any():
+            _ldsc['SNP'] = _df['rsid']
+            _missing = (_ldsc['SNP'].isna()) | (_ldsc['SNP'] == 'NA')
+            _ldsc.loc[_missing, 'SNP'] = (
+                _df.loc[_missing, 'chromosome'].astype(str) + ':' + 
+                _df.loc[_missing, 'base_pair_location'].astype(str)
+            )
+        else:
+            _ldsc['SNP'] = (
+                _df['chromosome'].astype(str) + ':' + 
+                _df['base_pair_location'].astype(str)
+            )
+        
+        _ldsc['A1'] = _df['effect_allele'].str.upper()
+        _ldsc['A2'] = _df['other_allele'].str.upper()
+        
+        _ldsc['Z'] = _df['beta'] / _df['standard_error']
+        _n_cases = 111326
+        _n_controls = 677663
+        _effective_n = 4 / (1/_n_cases + 1/_n_controls)
+        _ldsc['N'] = int(_effective_n)
+        
+        print(f"Using effective sample size: {int(_effective_n):,}")
+        
+        if 'p_value' in _df.columns:
+            _ldsc['P'] = _df['p_value']
+        
+        _before = len(_ldsc)
+        _ldsc = _ldsc[np.isfinite(_ldsc['Z'])]
+        if _before > len(_ldsc):
+            print(f"Removed {_before - len(_ldsc)} variants with invalid Z-scores")
+        
+        _before = len(_ldsc)
+        _ldsc = _ldsc.drop_duplicates(subset=['SNP'])
+        if _before > len(_ldsc):
+            print(f"Removed {_before - len(_ldsc)} duplicate variants")
+        
+        print(f"Output: {len(_ldsc)} variants")
+        print(f"Columns: {', '.join(_ldsc.columns)}")
+        
+       
+        print(f"Writing: {ldsc_sumstats_file}")
+        _ldsc.to_csv(ldsc_sumstats_file, sep='\t', index=False, compression='gzip')
+        
+        print("✓ LDSC format conversion complete")
+        
+      
+        print(f"\nSummary:")
+        print(f"  Mean |Z|: {_ldsc['Z'].abs().mean():.3f}")
+        print(f"  Median |Z|: {_ldsc['Z'].abs().median():.3f}")
+        if 'P' in _ldsc.columns:
+            _sig = (_ldsc['P'] < 5e-8).sum()
+            print(f"  Genome-wide significant (P < 5e-8): {_sig:,}")
     
     return (ldsc_sumstats_file,)
 
 
 @app.cell
 def __(mo):
-    mo.md("## 6. Generate cell-type–specific binary annotations (BED → .annot.gz)")
+    mo.md("## 5. Generate cell-type–specific binary annotations (BED → .annot.gz)")
     return
 
 
@@ -473,7 +514,7 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
     os.makedirs("data/annotations", exist_ok=True)
 
     print("\n" + "="*60)
-    print("STEP 6: Generating cell-type annotations")
+    print("STEP 5: Generating cell-type annotations")
     print("="*60)
     
 
@@ -525,7 +566,7 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
 
 @app.cell
 def __(mo):
-    mo.md("## 7. Calculate LD scores for each cell type and chromosome")
+    mo.md("## 6. Calculate LD scores for each cell type and chromosome")
     return
 
 
@@ -534,7 +575,7 @@ def __(subprocess, os, cell_types, python27_path):
     os.makedirs("data/ldscores", exist_ok=True)
 
     print("\n" + "="*60)
-    print("STEP 7: Calculating LD scores (this may take 10-30 minutes)")
+    print("STEP 6: Calculating LD scores (this may take 10-30 minutes)")
     print("="*60)
     
     for _ct in cell_types:
@@ -575,7 +616,7 @@ def __(subprocess, os, cell_types, python27_path):
 
 @app.cell
 def __(mo):
-    mo.md("## 8. Create CTS (cell-type–specific) reference file")
+    mo.md("## 7. Create CTS (cell-type–specific) reference file")
     return
 
 
@@ -591,7 +632,7 @@ def __(os, cell_types):
 
 @app.cell
 def __(mo):
-    mo.md("## 9. Run LDSC cell-type–specific heritability analysis (CTS)")
+    mo.md("## 8. Run LDSC cell-type–specific heritability analysis (CTS)")
     return
 
 
@@ -602,7 +643,7 @@ def __(subprocess, python27_path, ldsc_sumstats_file, os):
         print("  Please complete harmonization and munging steps first")
     else:
         print("\n" + "="*60)
-        print("STEP 9: Running cell-type-specific heritability analysis")
+        print("STEP 8: Running cell-type-specific heritability analysis")
         print("="*60 + "\n")
         
         subprocess.run([
@@ -620,21 +661,21 @@ def __(subprocess, python27_path, ldsc_sumstats_file, os):
 
 @app.cell
 def __(mo):
-    mo.md("## 10. Rank cell types by heritability enrichment significance")
+    mo.md("## 9. Rank cell types by heritability enrichment significance")
     return
 
 
 @app.cell
 def __(pd, os):
     print("\n" + "="*60)
-    print("STEP 10: Ranking cell types by significance")
+    print("STEP 9: Ranking cell types by significance")
     print("="*60 + "\n")
     
     results_file = "results/AD_CellTypeSpecific.cell_type_results.txt"
     
     if not os.path.exists(results_file):
         print(f"⚠ Results file not found: {results_file}")
-        print("Please run Step 9 first to generate the cell-type-specific analysis results.")
+        print("Please run Step 8 first to generate the cell-type-specific analysis results.")
         ranked = None
     else:
         results = pd.read_csv(results_file, sep="\t")
