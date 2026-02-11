@@ -165,7 +165,7 @@ def __(os, urllib):
     os.makedirs("data/reference", exist_ok=True)
     os.makedirs("data/gwas", exist_ok=True)
 
-    cell_types = ["Ast"]
+    cell_types = ["Ast", "Ex", "In", "Microglia", "OPC", "Oligo", "PerEndo"]
     base_url = "https://personal.broadinstitute.org/bjames/AD_snATAC/major_celltype_matrices/"
 
     print("Downloading cell type peak annotations...")
