@@ -165,12 +165,12 @@ def __(os, urllib):
     os.makedirs("data/reference", exist_ok=True)
     os.makedirs("data/gwas", exist_ok=True)
 
-    cell_types = ["Ast", "Ex", "In", "Microglia", "OPC", "Oligo", "PerEndo"]
+    snATAC_cell_types = ["Ast", "Ex", "In", "Microglia", "OPC", "Oligo", "PerEndo"]
     base_url = "https://personal.broadinstitute.org/bjames/AD_snATAC/major_celltype_matrices/"
 
     print("Downloading cell type peak annotations...")
 
-    for _ct in cell_types:
+    for _ct in snATAC_cell_types:
         url = f"{base_url}{_ct}.peak.annotation.txt"
         out = f"data/peaks/{_ct}.peak.annotation.txt"
         if not os.path.exists(out):
@@ -200,7 +200,7 @@ def __(os, urllib):
         print("✓ GWAS data already downloaded")
 
     print("\n✓ All downloads complete!")
-    return (cell_types,)
+    return (snATAC_cell_types,)
 
 
 @app.cell
@@ -211,7 +211,6 @@ def __(mo):
 
 @app.cell  
 def __(tarfile, os):
-    """First check what's actually in the GRCh38.tgz archive"""
     print("Checking GRCh38.tgz contents...")
     
     if os.path.exists("data/reference/GRCh38.tgz"):
@@ -306,8 +305,6 @@ This replicates the to_gwas_ssf() function from harmonizer.sh.
 
 @app.cell
 def __(pd, os, gzip, subprocess, hashlib, datetime):
-    """Convert GWAS to SSF format"""
-    
     os.makedirs("data/ssf", exist_ok=True)
     
     input_gwas = "data/gwas/AD_bellenguez_2022_hg38.tsv.gz"
@@ -425,8 +422,6 @@ We'll convert the SSF format to include these required columns.
 
 @app.cell
 def __(output_ssf, pd, np, os):
-    """Convert SSF to LDSC format with required columns"""
-    
     os.makedirs("data/ldsc_input", exist_ok=True)
     
     ldsc_sumstats_file = "data/ldsc_input/AD_bellenguez_2022_hg38.sumstats.gz"
@@ -445,7 +440,6 @@ def __(output_ssf, pd, np, os):
         
         _ldsc = pd.DataFrame()
         
-     
         if 'rsid' in _df.columns and (_df['rsid'] != 'NA').any():
             _ldsc['SNP'] = _df['rsid']
             _missing = (_ldsc['SNP'].isna()) | (_ldsc['SNP'] == 'NA')
@@ -486,13 +480,11 @@ def __(output_ssf, pd, np, os):
         print(f"Output: {len(_ldsc)} variants")
         print(f"Columns: {', '.join(_ldsc.columns)}")
         
-       
         print(f"Writing: {ldsc_sumstats_file}")
         _ldsc.to_csv(ldsc_sumstats_file, sep='\t', index=False, compression='gzip')
         
         print("✓ LDSC format conversion complete")
         
-      
         print(f"\nSummary:")
         print(f"  Mean |Z|: {_ldsc['Z'].abs().mean():.3f}")
         print(f"  Median |Z|: {_ldsc['Z'].abs().median():.3f}")
@@ -510,40 +502,58 @@ def __(mo):
 
 
 @app.cell
-def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
+def __(pd, subprocess, os, snATAC_cell_types, python27_path, ldsc27_path):
     os.makedirs("data/annotations", exist_ok=True)
+
+    HUMANENHANCER_DIR = "humanenhancer_atac_data"
+
+    humanenhancer_cell_types = []
+    if os.path.exists(HUMANENHANCER_DIR):
+        humanenhancer_cell_types = [
+            os.path.splitext(f)[0]
+            for f in os.listdir(HUMANENHANCER_DIR)
+            if f.endswith(".bed") and not f.startswith(".")
+        ]
+        humanenhancer_cell_types.sort()
+        print(f"Found {len(humanenhancer_cell_types)} cell types in {HUMANENHANCER_DIR}")
+    else:
+        print(f"WARNING: {HUMANENHANCER_DIR} not found — skipping humanenhancer cell types")
+
+    all_cell_types = snATAC_cell_types + humanenhancer_cell_types
 
     print("\n" + "="*60)
     print("STEP 5: Generating cell-type annotations")
     print("="*60)
-    
 
     env = os.environ.copy()
     env["PATH"] = f"{ldsc27_path}/bin:" + env.get("PATH", "")
-    
-    for _ct in cell_types:
+
+    for _ct in all_cell_types:
         print(f"\nProcessing {_ct}...")
         _all_exist = all(
-            os.path.exists(f"data/annotations/{_ct}.{_chrom}.annot.gz") 
+            os.path.exists(f"data/annotations/{_ct}.{_chrom}.annot.gz")
             for _chrom in range(1, 23)
         )
-        
+
         if _all_exist:
             print(f"  ✓ All {_ct} annotations already exist, skipping")
             continue
-        
-        peaks = pd.read_csv(f"data/peaks/{_ct}.peak.annotation.txt", sep="\t")
-        _bed = peaks[['seqnames', 'start', 'end']].copy()
-        _bed.columns = ['chr', 'start', 'end']
-        _bed_file = f"data/annotations/{_ct}.bed"
-        _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
-        
+
+        if _ct in snATAC_cell_types:
+            peaks = pd.read_csv(f"data/peaks/{_ct}.peak.annotation.txt", sep="\t")
+            _bed = peaks[['seqnames', 'start', 'end']].copy()
+            _bed.columns = ['chr', 'start', 'end']
+            _bed_file = f"data/annotations/{_ct}.bed"
+            _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
+        else:
+            _bed_file = os.path.join(HUMANENHANCER_DIR, f"{_ct}.bed")
+
         for _chrom in range(1, 23):
             annot_file = f"data/annotations/{_ct}.{_chrom}.annot.gz"
             if os.path.exists(annot_file):
                 print(f"  Chromosome {_chrom} ✓ (exists)", end=" ", flush=True)
                 continue
-                
+
             print(f"  Chromosome {_chrom}...", end=" ", flush=True)
             _result = subprocess.run([
                 python27_path, "tools/ldsc/make_annot.py",
@@ -551,7 +561,7 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
                 "--bimfile", f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{_chrom}.bim",
                 "--annot-file", annot_file
             ], capture_output=True, text=True, env=env)
-            
+
             if _result.returncode != 0:
                 print(f"\n\nERROR on chromosome {_chrom}:")
                 print("STDERR:", _result.stderr)
@@ -559,9 +569,9 @@ def __(pd, subprocess, os, cell_types, python27_path, ldsc27_path):
                 raise subprocess.CalledProcessError(_result.returncode, _result.args)
             print("✓")
         print(f"  ✓ {_ct} complete")
-    
+
     print("\n✓ All annotations generated")
-    return
+    return (all_cell_types, humanenhancer_cell_types)
 
 
 @app.cell
@@ -571,14 +581,14 @@ def __(mo):
 
 
 @app.cell
-def __(subprocess, os, cell_types, python27_path):
+def __(subprocess, os, all_cell_types, python27_path):
     os.makedirs("data/ldscores", exist_ok=True)
 
     print("\n" + "="*60)
     print("STEP 6: Calculating LD scores (this may take 10-30 minutes)")
     print("="*60)
     
-    for _ct in cell_types:
+    for _ct in all_cell_types:
         print(f"\nProcessing {_ct}...")
         os.makedirs(f"data/ldscores/{_ct}", exist_ok=True)
     
@@ -621,12 +631,12 @@ def __(mo):
 
 
 @app.cell
-def __(os, cell_types):
+def __(os, all_cell_types):
     os.makedirs("results", exist_ok=True)
     with open("data/cell_types.cts", "w") as _f:
-        for _ct in cell_types:
+        for _ct in all_cell_types:
             _f.write(f"{_ct}    data/ldscores/{_ct}/{_ct}.\n")
-    print("✓ CTS reference file created")
+    print(f"✓ CTS reference file created with {len(all_cell_types)} cell types")
     return
 
 
