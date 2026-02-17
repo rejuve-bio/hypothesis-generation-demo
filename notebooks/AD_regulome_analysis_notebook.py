@@ -49,21 +49,20 @@ def __(Path, subprocess, os):
     TOOLS_DIR = Path("tools")
     LDSC_DIR = TOOLS_DIR / "ldsc"
     TOOLS_DIR.mkdir(exist_ok=True)
-    
+
     env_check = subprocess.run(
         ["conda", "env", "list"],
         capture_output=True,
         text=True
     )
     ldsc_env_exists = "ldsc27" in env_check.stdout
-    
+
     if not ldsc_env_exists:
         print("Creating Python 2.7 conda environment for LDSC...")
         subprocess.run([
-            "conda", "create", "-n", "ldsc27", 
+            "conda", "create", "-n", "ldsc27",
             "python=2.7", "-y"
         ], check=True)
-    
 
     conda_prefix = subprocess.run(
         ["conda", "env", "list", "--json"],
@@ -74,7 +73,7 @@ def __(Path, subprocess, os):
     import json
     envs = json.loads(conda_prefix.stdout)["envs"]
     ldsc27_path = [e for e in envs if "ldsc27" in e][0]
-    
+
     bedtools_path = os.path.join(ldsc27_path, "bin", "bedtools")
     if os.path.exists(bedtools_path):
         bedtools_check = subprocess.run(
@@ -89,8 +88,7 @@ def __(Path, subprocess, os):
             "conda", "install", "-n", "ldsc27",
             "-c", "bioconda", "bedtools", "-y"
         ], check=True)
-    
-  
+
     if not LDSC_DIR.exists():
         print("Cloning LDSC repository...")
         subprocess.run([
@@ -98,86 +96,134 @@ def __(Path, subprocess, os):
             "https://github.com/bulik/ldsc.git",
             str(LDSC_DIR)
         ], check=True)
-    
+
     check_numpy = subprocess.run(
         [os.path.join(ldsc27_path, "bin", "python"), "-c", "import numpy"],
         capture_output=True
     )
-    
+
     if check_numpy.returncode != 0:
         print("Installing LDSC dependencies in ldsc27 environment...")
-        
+
         print("Installing OpenSSL 1.0...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "openssl=1.0.2", "-c", "conda-forge"
         ], check=True)
-        
+
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "numpy", "scipy", "pandas", "bitarray", "-c", "conda-forge"
         ], check=True)
-        
+
         print("Installing pybedtools and pysam...")
         subprocess.run([
             "conda", "install", "-n", "ldsc27", "-y",
             "pybedtools", "pysam=0.15.3", "-c", "bioconda", "-c", "conda-forge"
         ], check=True)
-        
+
         print("✓ Dependencies installed!")
-    
+
     print("\nVerifying BEDTools is accessible to pybedtools...")
     pybedtools_check = subprocess.run(
-        [os.path.join(ldsc27_path, "bin", "python"), "-c", 
+        [os.path.join(ldsc27_path, "bin", "python"), "-c",
          "from pybedtools import BedTool; import pybedtools.helpers as helpers; print('BEDTools path:', helpers.get_bedtools_path())"],
         capture_output=True,
         text=True
     )
-    
+
     if pybedtools_check.returncode != 0:
         print("WARNING: pybedtools can't find BEDTools!")
         print("Error:", pybedtools_check.stderr)
     else:
         print("✓ pybedtools can access BEDTools")
         print(pybedtools_check.stdout)
-    
+
     ldsc_script = LDSC_DIR / "ldsc.py"
     subprocess.run(["chmod", "+x", str(ldsc_script)], check=True)
-    
+
     python27_path = os.path.join(ldsc27_path, "bin", "python")
-    
+
     print(f"\n✓ LDSC environment ready!")
     print(f"Python 2.7 path: {python27_path}")
     print(f"LDSC path: {ldsc_script}")
-    
+
     return (ldsc_script, python27_path, ldsc27_path)
 
 
 @app.cell
 def __(mo):
-    mo.md("## 1. Download cell-type peak annotations, reference panels, and GWAS summary statistics")
+    mo.md("## 1. Discover cell types and resolve BED sources")
     return
 
 
 @app.cell
-def __(os, urllib):
+def __(os, urllib, pd):
     os.makedirs("data/peaks", exist_ok=True)
     os.makedirs("data/reference", exist_ok=True)
     os.makedirs("data/gwas", exist_ok=True)
+    os.makedirs("data/beds", exist_ok=True)
 
-    snATAC_cell_types = ["Ast", "Ex", "In", "Microglia", "OPC", "Oligo", "PerEndo"]
-    base_url = "https://personal.broadinstitute.org/bjames/AD_snATAC/major_celltype_matrices/"
+    BROAD_CELL_TYPES = ["Ast", "Ex", "In", "Microglia", "OPC", "Oligo", "PerEndo"]
+    BROAD_BASE_URL = "https://personal.broadinstitute.org/bjames/AD_snATAC/major_celltype_matrices/"
 
-    print("Downloading cell type peak annotations...")
+    BED_SEARCH_DIRS = [
+        "humanenhancer_atac_data",
+        "data/beds",
+    ]
 
-    for _ct in snATAC_cell_types:
-        url = f"{base_url}{_ct}.peak.annotation.txt"
-        out = f"data/peaks/{_ct}.peak.annotation.txt"
-        if not os.path.exists(out):
-            print(f"  Downloading {_ct}...")
-            urllib.request.urlretrieve(url, out)
+    def _find_local_bed(ct):
+        for d in BED_SEARCH_DIRS:
+            candidate = os.path.join(d, f"{ct}.bed")
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
+    def _peak_annotation_to_bed(ct):
+        peak_txt = f"data/peaks/{ct}.peak.annotation.txt"
+        bed_out = f"data/beds/{ct}.bed"
+        if os.path.exists(bed_out):
+            return bed_out
+        if not os.path.exists(peak_txt):
+            url = f"{BROAD_BASE_URL}{ct}.peak.annotation.txt"
+            print(f"  Downloading peak annotation for {ct}...")
+            urllib.request.urlretrieve(url, peak_txt)
+        peaks = pd.read_csv(peak_txt, sep="\t")
+        _bed = peaks[['seqnames', 'start', 'end']].copy()
+        _bed.columns = ['chr', 'start', 'end']
+        _bed.to_csv(bed_out, sep="\t", index=False, header=False)
+        return bed_out
+
+    all_cell_types = set()
+
+    for _d in BED_SEARCH_DIRS:
+        if os.path.exists(_d):
+            for _f in os.listdir(_d):
+                if _f.endswith(".bed") and not _f.startswith("."):
+                    all_cell_types.add(os.path.splitext(_f)[0])
+
+    for _ct in BROAD_CELL_TYPES:
+        all_cell_types.add(_ct)
+
+    all_cell_types = sorted(all_cell_types)
+
+    print("="*60)
+    print(f"Resolving BED files for {len(all_cell_types)} cell types")
+    print("="*60)
+
+    cell_type_beds = {}
+
+    for _ct in all_cell_types:
+        _local = _find_local_bed(_ct)
+        if _local:
+            cell_type_beds[_ct] = _local
+            print(f"  ✓ {_ct}  →  {_local}  (local BED)")
         else:
-            print(f"  ✓ {_ct} already downloaded")
+            _bed = _peak_annotation_to_bed(_ct)
+            cell_type_beds[_ct] = _bed
+            print(f"  ✓ {_ct}  →  {_bed}  (converted from peak annotation)")
+
+    print(f"\n✓ {len(cell_type_beds)} cell types ready")
 
     if not os.path.exists("data/reference/GRCh38.tgz"):
         print("\nDownloading GRCh38 reference with baseline LD scores (this may take several minutes)...")
@@ -199,8 +245,8 @@ def __(os, urllib):
     else:
         print("✓ GWAS data already downloaded")
 
-    print("\n✓ All downloads complete!")
-    return (snATAC_cell_types,)
+    print("\n✓ All sources resolved!")
+    return (all_cell_types, cell_type_beds)
 
 
 @app.cell
@@ -209,17 +255,17 @@ def __(mo):
     return
 
 
-@app.cell  
+@app.cell
 def __(tarfile, os):
     print("Checking GRCh38.tgz contents...")
-    
+
     if os.path.exists("data/reference/GRCh38.tgz"):
         with tarfile.open("data/reference/GRCh38.tgz", "r:gz") as _tar:
             members = _tar.getmembers()
             print(f"Archive contains {len(members)} items")
             print("\nTop-level structure:")
             seen = set()
-            for m in members[:50]:  
+            for m in members[:50]:
                 parts = m.name.split('/')
                 if len(parts) > 1:
                     top = parts[0] + "/" + parts[1]
@@ -232,7 +278,7 @@ def __(tarfile, os):
 @app.cell
 def __(tarfile, os):
     print("Extracting GRCh38 reference files...")
-    
+
     if not os.path.exists("data/reference/GRCh38"):
         try:
             print("  Verifying GRCh38.tgz integrity...")
@@ -243,39 +289,37 @@ def __(tarfile, os):
             print(f"\n  ✗ Error: GRCh38.tgz is corrupted!")
             print(f"  Please delete it and re-run: rm data/reference/GRCh38.tgz")
             raise
-        
+
         print("  Extracting (this may take a few minutes)...")
         with tarfile.open("data/reference/GRCh38.tgz", "r:gz") as _tar:
             _tar.extractall("data/reference")
         print("✓ GRCh38 reference extracted successfully")
     else:
         print("✓ GRCh38 directory exists")
-    
 
     nested_files = [
         ("data/reference/GRCh38/baselineLD_v2.2.tgz", "data/reference", "baselineLD_v2.2"),
         ("data/reference/GRCh38/plink_files.tgz", "data/reference/GRCh38", "plink_files/1000G.EUR.hg38.1.bim"),
         ("data/reference/GRCh38/weights.tgz", "data/reference/GRCh38", "weights")
     ]
-    
+
     for tar_file, extract_to, check_file in nested_files:
         check_path = os.path.join(extract_to, check_file)
         if os.path.exists(check_path):
             print(f"  ✓ {os.path.basename(tar_file)} already extracted")
             continue
-            
+
         if os.path.exists(tar_file):
             print(f"  Extracting {os.path.basename(tar_file)}...")
             with tarfile.open(tar_file, "r:gz") as _tar:
                 _tar.extractall(extract_to)
             print(f"  ✓ {os.path.basename(tar_file)} extracted")
-            
+
             if not os.path.exists(check_path):
                 print(f"  Warning: Expected file {check_path} not found after extraction")
         else:
             print(f"  Warning: {tar_file} not found")
-    
-    
+
     critical_file = "data/reference/GRCh38/plink_files/1000G.EUR.hg38.1.bim"
     if os.path.exists(critical_file):
         print(f"\n✓ All reference files ready! Verified: {critical_file}")
@@ -285,11 +329,11 @@ def __(tarfile, os):
         if os.path.exists("data/reference/GRCh38"):
             files = os.listdir("data/reference/GRCh38")
             print(f"  Found {len(files)} files/directories")
-            for _f in sorted(files)[:10]:  
+            for _f in sorted(files)[:10]:
                 print(f"    - {_f}")
         else:
             print("  Directory doesn't exist!")
-    
+
     return
 
 
@@ -306,25 +350,25 @@ This replicates the to_gwas_ssf() function from harmonizer.sh.
 @app.cell
 def __(pd, os, gzip, subprocess, hashlib, datetime):
     os.makedirs("data/ssf", exist_ok=True)
-    
+
     input_gwas = "data/gwas/AD_bellenguez_2022_hg38.tsv.gz"
     output_ssf = "data/ssf/AD_bellenguez_2022_hg38.tsv.gz"
     output_yaml = f"{output_ssf}-meta.yaml"
-    
+
     if os.path.exists(output_ssf):
         print("✓ SSF file already exists, skipping conversion")
     else:
         print("\n" + "="*60)
         print("STEP 3: Converting GWAS to SSF format")
         print("="*60)
-        
+
         print(f"Reading input file: {input_gwas}")
         _df = pd.read_csv(input_gwas, sep="\t", compression="gzip")
-        
+
         _cols_lower = {col.lower(): col for col in _df.columns}
-        
+
         _col_map = {}
-        
+
         if "variant" in _cols_lower:
             print("Detected Neale format")
             _df[['chromosome', 'base_pair_location', 'other_allele', 'effect_allele']] = \
@@ -335,57 +379,57 @@ def __(pd, os, gzip, subprocess, hashlib, datetime):
             _col_map['base_pair_location'] = _cols_lower.get('bp') or _cols_lower.get('pos') or _cols_lower.get('base_pair_location')
             _col_map['effect_allele'] = _cols_lower.get('a1') or _cols_lower.get('effect_allele')
             _col_map['other_allele'] = _cols_lower.get('a2') or _cols_lower.get('other_allele')
-        
+
         _col_map['beta'] = _cols_lower.get('beta')
-        _col_map['standard_error'] = (_cols_lower.get('se') or _cols_lower.get('stderr') or 
+        _col_map['standard_error'] = (_cols_lower.get('se') or _cols_lower.get('stderr') or
                                       _cols_lower.get('standard_error'))
         _col_map['p_value'] = _cols_lower.get('p') or _cols_lower.get('pval') or _cols_lower.get('p_value')
-        _col_map['effect_allele_frequency'] = (_cols_lower.get('a1_freq') or _cols_lower.get('frq') or 
+        _col_map['effect_allele_frequency'] = (_cols_lower.get('a1_freq') or _cols_lower.get('frq') or
                                                 _cols_lower.get('af') or _cols_lower.get('effect_allele_frequency'))
-        _col_map['rsid'] = (_cols_lower.get('id') or _cols_lower.get('snp') or 
+        _col_map['rsid'] = (_cols_lower.get('id') or _cols_lower.get('snp') or
                            _cols_lower.get('rsid') or _cols_lower.get('variant_id'))
-        
+
         if "variant" not in _cols_lower:
             _rename_map = {v: k for k, v in _col_map.items() if v is not None}
             _df = _df.rename(columns=_rename_map)
-        
+
         _df['chromosome'] = _df['chromosome'].astype(str).str.replace('chr', '', regex=False)
         _df['chromosome'] = _df['chromosome'].replace({'23': 'X', '24': 'Y', '26': 'MT'})
-        
+
         print("Filtering chromosomes (removing X, Y, MT)...")
         _before = len(_df)
         _df = _df[~_df['chromosome'].isin(['X', 'Y', 'MT'])]
         print(f"  Removed {_before - len(_df)} variants on sex/MT chromosomes")
-        
+
         _df['base_pair_location'] = pd.to_numeric(_df['base_pair_location'], errors='coerce')
         _df['effect_allele'] = _df['effect_allele'].str.upper()
         _df['other_allele'] = _df['other_allele'].str.upper()
-        
+
         if 'effect_allele_frequency' in _df.columns:
             _df['effect_allele_frequency'] = _df['effect_allele_frequency'].fillna('NA')
         else:
             _df['effect_allele_frequency'] = 'NA'
-            
+
         if 'rsid' in _df.columns:
             _df['rsid'] = _df['rsid'].fillna('NA')
         else:
             _df['rsid'] = 'NA'
-        
-        ssf_columns = ['chromosome', 'base_pair_location', 'effect_allele', 'other_allele', 
+
+        ssf_columns = ['chromosome', 'base_pair_location', 'effect_allele', 'other_allele',
                        'beta', 'standard_error', 'p_value', 'effect_allele_frequency', 'rsid']
         _df_ssf = _df[ssf_columns]
-        
+
         print(f"Writing SSF file: {output_ssf}")
         _df_ssf.to_csv(output_ssf, sep="\t", index=False, compression="gzip")
-        
+
         print("Creating tabix index...")
         subprocess.run([
             "tabix", "-c", "N", "-S", "1", "-s", "1", "-b", "2", "-e", "2", output_ssf
         ], check=False)
-        
+
         with gzip.open(output_ssf, 'rb') as f:
             _md5 = hashlib.md5(f.read()).hexdigest()
-        
+
         with open(output_yaml, 'w') as _f:
             _f.write(f"""# Study meta-data
 date_metadata_last_modified: {datetime.now().strftime('%Y-%m-%d')}
@@ -400,12 +444,12 @@ data_file_md5sum: {_md5}
 is_harmonised: false
 is_sorted: false
 """)
-        
+
         print("✓ SSF conversion complete")
-        
+
         chromosomes_present = sorted(_df_ssf['chromosome'].unique(), key=lambda x: int(x))
         print(f"Chromosomes in data: {', '.join(chromosomes_present)}")
-    
+
     return (output_ssf, output_yaml)
 
 
@@ -423,75 +467,75 @@ We'll convert the SSF format to include these required columns.
 @app.cell
 def __(output_ssf, pd, np, os):
     os.makedirs("data/ldsc_input", exist_ok=True)
-    
+
     ldsc_sumstats_file = "data/ldsc_input/AD_bellenguez_2022_hg38.sumstats.gz"
-    
+
     if os.path.exists(ldsc_sumstats_file):
         print(f"✓ LDSC sumstats file already exists: {ldsc_sumstats_file}")
     else:
         print("\n" + "="*60)
         print("Converting SSF to LDSC format")
         print("="*60)
-        
+
         print(f"Reading SSF file: {output_ssf}")
         _df = pd.read_csv(output_ssf, sep='\t', compression='gzip')
-        
+
         print(f"Input: {len(_df)} variants")
-        
+
         _ldsc = pd.DataFrame()
-        
+
         if 'rsid' in _df.columns and (_df['rsid'] != 'NA').any():
             _ldsc['SNP'] = _df['rsid']
             _missing = (_ldsc['SNP'].isna()) | (_ldsc['SNP'] == 'NA')
             _ldsc.loc[_missing, 'SNP'] = (
-                _df.loc[_missing, 'chromosome'].astype(str) + ':' + 
+                _df.loc[_missing, 'chromosome'].astype(str) + ':' +
                 _df.loc[_missing, 'base_pair_location'].astype(str)
             )
         else:
             _ldsc['SNP'] = (
-                _df['chromosome'].astype(str) + ':' + 
+                _df['chromosome'].astype(str) + ':' +
                 _df['base_pair_location'].astype(str)
             )
-        
+
         _ldsc['A1'] = _df['effect_allele'].str.upper()
         _ldsc['A2'] = _df['other_allele'].str.upper()
-        
+
         _ldsc['Z'] = _df['beta'] / _df['standard_error']
         _n_cases = 111326
         _n_controls = 677663
         _effective_n = 4 / (1/_n_cases + 1/_n_controls)
         _ldsc['N'] = int(_effective_n)
-        
+
         print(f"Using effective sample size: {int(_effective_n):,}")
-        
+
         if 'p_value' in _df.columns:
             _ldsc['P'] = _df['p_value']
-        
+
         _before = len(_ldsc)
         _ldsc = _ldsc[np.isfinite(_ldsc['Z'])]
         if _before > len(_ldsc):
             print(f"Removed {_before - len(_ldsc)} variants with invalid Z-scores")
-        
+
         _before = len(_ldsc)
         _ldsc = _ldsc.drop_duplicates(subset=['SNP'])
         if _before > len(_ldsc):
             print(f"Removed {_before - len(_ldsc)} duplicate variants")
-        
+
         print(f"Output: {len(_ldsc)} variants")
         print(f"Columns: {', '.join(_ldsc.columns)}")
-        
+
         print(f"Writing: {ldsc_sumstats_file}")
         _ldsc.to_csv(ldsc_sumstats_file, sep='\t', index=False, compression='gzip')
-        
+
         print("✓ LDSC format conversion complete")
-        
+
         print(f"\nSummary:")
         print(f"  Mean |Z|: {_ldsc['Z'].abs().mean():.3f}")
         print(f"  Median |Z|: {_ldsc['Z'].abs().median():.3f}")
         if 'P' in _ldsc.columns:
             _sig = (_ldsc['P'] < 5e-8).sum()
             print(f"  Genome-wide significant (P < 5e-8): {_sig:,}")
-    
+
     return (ldsc_sumstats_file,)
 
 
@@ -502,24 +546,8 @@ def __(mo):
 
 
 @app.cell
-def __(pd, subprocess, os, snATAC_cell_types, python27_path, ldsc27_path):
+def __(subprocess, os, all_cell_types, cell_type_beds, python27_path, ldsc27_path):
     os.makedirs("data/annotations", exist_ok=True)
-
-    HUMANENHANCER_DIR = "humanenhancer_atac_data"
-
-    humanenhancer_cell_types = []
-    if os.path.exists(HUMANENHANCER_DIR):
-        humanenhancer_cell_types = [
-            os.path.splitext(f)[0]
-            for f in os.listdir(HUMANENHANCER_DIR)
-            if f.endswith(".bed") and not f.startswith(".")
-        ]
-        humanenhancer_cell_types.sort()
-        print(f"Found {len(humanenhancer_cell_types)} cell types in {HUMANENHANCER_DIR}")
-    else:
-        print(f"WARNING: {HUMANENHANCER_DIR} not found — skipping humanenhancer cell types")
-
-    all_cell_types = snATAC_cell_types + humanenhancer_cell_types
 
     print("\n" + "="*60)
     print("STEP 5: Generating cell-type annotations")
@@ -539,14 +567,7 @@ def __(pd, subprocess, os, snATAC_cell_types, python27_path, ldsc27_path):
             print(f"  ✓ All {_ct} annotations already exist, skipping")
             continue
 
-        if _ct in snATAC_cell_types:
-            peaks = pd.read_csv(f"data/peaks/{_ct}.peak.annotation.txt", sep="\t")
-            _bed = peaks[['seqnames', 'start', 'end']].copy()
-            _bed.columns = ['chr', 'start', 'end']
-            _bed_file = f"data/annotations/{_ct}.bed"
-            _bed.to_csv(_bed_file, sep="\t", index=False, header=False)
-        else:
-            _bed_file = os.path.join(HUMANENHANCER_DIR, f"{_ct}.bed")
+        _bed_file = cell_type_beds[_ct]
 
         for _chrom in range(1, 23):
             annot_file = f"data/annotations/{_ct}.{_chrom}.annot.gz"
@@ -571,7 +592,7 @@ def __(pd, subprocess, os, snATAC_cell_types, python27_path, ldsc27_path):
         print(f"  ✓ {_ct} complete")
 
     print("\n✓ All annotations generated")
-    return (all_cell_types, humanenhancer_cell_types)
+    return
 
 
 @app.cell
@@ -587,26 +608,26 @@ def __(subprocess, os, all_cell_types, python27_path):
     print("\n" + "="*60)
     print("STEP 6: Calculating LD scores (this may take 10-30 minutes)")
     print("="*60)
-    
+
     for _ct in all_cell_types:
         print(f"\nProcessing {_ct}...")
         os.makedirs(f"data/ldscores/{_ct}", exist_ok=True)
-    
+
         _all_exist = all(
             os.path.exists(f"data/ldscores/{_ct}/{_ct}.{_chrom}.l2.ldscore.gz")
             for _chrom in range(1, 23)
         )
-        
+
         if _all_exist:
             print(f"  ✓ All {_ct} LD scores already exist, skipping")
             continue
-        
+
         for _chrom in range(1, 23):
             ldscore_file = f"data/ldscores/{_ct}/{_ct}.{_chrom}.l2.ldscore.gz"
             if os.path.exists(ldscore_file):
                 print(f"  Chromosome {_chrom} ✓ (exists)", end=" ", flush=True)
                 continue
-                
+
             print(f"  Chromosome {_chrom}...", end=" ", flush=True)
             subprocess.run([
                 python27_path, "tools/ldsc/ldsc.py",
@@ -619,7 +640,7 @@ def __(subprocess, os, all_cell_types, python27_path):
             ], check=True, capture_output=True)
             print("✓")
         print(f"  ✓ {_ct} complete")
-    
+
     print("\n✓ All LD scores calculated")
     return
 
@@ -655,7 +676,7 @@ def __(subprocess, python27_path, ldsc_sumstats_file, os):
         print("\n" + "="*60)
         print("STEP 8: Running cell-type-specific heritability analysis")
         print("="*60 + "\n")
-        
+
         subprocess.run([
             python27_path, "tools/ldsc/ldsc.py",
             "--h2-cts", ldsc_sumstats_file,
@@ -664,7 +685,7 @@ def __(subprocess, python27_path, ldsc_sumstats_file, os):
             "--w-ld-chr", "data/reference/GRCh38/weights/weights.hm3_noMHC.",
             "--out", "results/AD_CellTypeSpecific"
         ], check=True)
-        
+
         print("\n✓ Cell-type-specific analysis complete")
     return
 
@@ -680,9 +701,9 @@ def __(pd, os):
     print("\n" + "="*60)
     print("STEP 9: Ranking cell types by significance")
     print("="*60 + "\n")
-    
+
     results_file = "results/AD_CellTypeSpecific.cell_type_results.txt"
-    
+
     if not os.path.exists(results_file):
         print(f"⚠ Results file not found: {results_file}")
         print("Please run Step 8 first to generate the cell-type-specific analysis results.")
@@ -691,12 +712,12 @@ def __(pd, os):
         results = pd.read_csv(results_file, sep="\t")
         ranked = results.sort_values("Coefficient_P_value")
         ranked.to_csv("results/AD_CellTypeSpecific_ranked.csv", index=False)
-        
+
         print("Cell types ranked by heritability enrichment p-value:\n")
         print(ranked[["Name", "Coefficient", "Coefficient_std_error", "Coefficient_P_value"]].to_string(index=False))
-        
+
         print("\n✓ Results saved to results/AD_CellTypeSpecific_ranked.csv")
-    
+
     return (ranked,)
 
 
