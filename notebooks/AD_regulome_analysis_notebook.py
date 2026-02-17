@@ -9,6 +9,7 @@ def __():
     import marimo as mo
     import urllib.request
     import os
+    import re
     import subprocess
     import pandas as pd
     import numpy as np
@@ -17,7 +18,7 @@ def __():
     import gzip
     import hashlib
     from datetime import datetime
-    return mo, urllib, os, subprocess, pd, np, tarfile, Path, gzip, hashlib, datetime
+    return mo, urllib, os, re, subprocess, pd, np, tarfile, Path, gzip, hashlib, datetime
 
 
 @app.cell
@@ -158,7 +159,7 @@ def __(mo):
 
 
 @app.cell
-def __(os, urllib, pd):
+def __(os, urllib, pd, subprocess, re):
     os.makedirs("data/peaks", exist_ok=True)
     os.makedirs("data/reference", exist_ok=True)
     os.makedirs("data/gwas", exist_ok=True)
@@ -167,14 +168,37 @@ def __(os, urllib, pd):
     BROAD_CELL_TYPES = ["Ast", "Ex", "In", "Microglia", "OPC", "Oligo", "PerEndo"]
     BROAD_BASE_URL = "https://personal.broadinstitute.org/bjames/AD_snATAC/major_celltype_matrices/"
 
-    BED_SEARCH_DIRS = [
-        "humanenhancer_atac_data",
-        "data/beds",
-    ]
+    CATLAS_DIR = "humanenhancer_atac_data"
+    CATLAS_URL = "http://catlas.org/humanenhancer/data/cCREs/"
 
-    def _find_local_bed(ct):
+    BED_SEARCH_DIRS = [CATLAS_DIR, "data/beds"]
+
+    def _sanitize_name(raw_name):
+        return re.sub(r'[^A-Za-z0-9_\-]', '_', raw_name)
+
+    def _ensure_catlas_downloaded():
+        bed_files = [
+            f for f in os.listdir(CATLAS_DIR)
+            if f.endswith(".bed") and not f.startswith(".")
+        ] if os.path.exists(CATLAS_DIR) else []
+        if bed_files:
+            print(f"✓ {CATLAS_DIR} already has {len(bed_files)} BED files, skipping download")
+            return
+        print(f"Downloading all cell type BEDs from {CATLAS_URL}")
+        print("  (this may take several minutes depending on connection speed...)")
+        os.makedirs(CATLAS_DIR, exist_ok=True)
+        subprocess.run([
+            "wget", "-r", "-np", "-nH", "--cut-dirs=3",
+            "-R", "index.html*",
+            "-P", CATLAS_DIR,
+            CATLAS_URL
+        ], check=True)
+        downloaded = [f for f in os.listdir(CATLAS_DIR) if f.endswith(".bed")]
+        print(f"✓ Downloaded {len(downloaded)} BED files to {CATLAS_DIR}/")
+
+    def _find_local_bed(raw_name):
         for d in BED_SEARCH_DIRS:
-            candidate = os.path.join(d, f"{ct}.bed")
+            candidate = os.path.join(d, f"{raw_name}.bed")
             if os.path.exists(candidate):
                 return candidate
         return None
@@ -194,36 +218,43 @@ def __(os, urllib, pd):
         _bed.to_csv(bed_out, sep="\t", index=False, header=False)
         return bed_out
 
-    all_cell_types = set()
+    _ensure_catlas_downloaded()
 
+    raw_names = set()
     for _d in BED_SEARCH_DIRS:
         if os.path.exists(_d):
             for _f in os.listdir(_d):
                 if _f.endswith(".bed") and not _f.startswith("."):
-                    all_cell_types.add(os.path.splitext(_f)[0])
-
+                    raw_names.add(os.path.splitext(_f)[0])
     for _ct in BROAD_CELL_TYPES:
-        all_cell_types.add(_ct)
-
-    all_cell_types = sorted(all_cell_types)
+        raw_names.add(_ct)
 
     print("="*60)
-    print(f"Resolving BED files for {len(all_cell_types)} cell types")
+    print(f"Resolving BED files for {len(raw_names)} cell types")
     print("="*60)
 
     cell_type_beds = {}
+    name_conflicts = {}
 
-    for _ct in all_cell_types:
-        _local = _find_local_bed(_ct)
+    for _raw in sorted(raw_names):
+        _safe = _sanitize_name(_raw)
+        if _safe in name_conflicts:
+            print(f"  ⚠ Name collision after sanitization: '{_raw}' → '{_safe}' (already used by '{name_conflicts[_safe]}')")
+            _safe = _safe + "_2"
+        name_conflicts[_safe] = _raw
+
+        _local = _find_local_bed(_raw)
         if _local:
-            cell_type_beds[_ct] = _local
-            print(f"  ✓ {_ct}  →  {_local}  (local BED)")
+            cell_type_beds[_safe] = _local
+            marker = "(local BED)" if _raw == _safe else f"(local BED, '{_raw}' → '{_safe}')"
+            print(f"  ✓ {_safe}  →  {_local}  {marker}")
         else:
-            _bed = _peak_annotation_to_bed(_ct)
-            cell_type_beds[_ct] = _bed
-            print(f"  ✓ {_ct}  →  {_bed}  (converted from peak annotation)")
+            _bed = _peak_annotation_to_bed(_raw)
+            cell_type_beds[_safe] = _bed
+            print(f"  ✓ {_safe}  →  {_bed}  (converted from peak annotation)")
 
-    print(f"\n✓ {len(cell_type_beds)} cell types ready")
+    all_cell_types = sorted(cell_type_beds.keys())
+    print(f"\n✓ {len(all_cell_types)} cell types ready")
 
     if not os.path.exists("data/reference/GRCh38.tgz"):
         print("\nDownloading GRCh38 reference with baseline LD scores (this may take several minutes)...")
