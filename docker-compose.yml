@@ -24,7 +24,76 @@ services:
     networks:
       - app_network
 
-  flask-app:
+  dask-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile  
+    hostname: dask-scheduler
+    ports:
+      - "8786:8786" 
+      - "8787:8787" 
+    environment:
+      - PYTHONPATH=/app
+      - SKIP_SEED=true 
+    volumes:
+      - .:/app
+    entrypoint: []
+    command: >
+      sh -c "uv run dask scheduler --host 0.0.0.0 --port 8786 --dashboard-address :8787"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.connect(('localhost', 8786))"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+    networks:
+      - app_network
+
+  dask-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DASK_ADDRESS=tcp://dask-scheduler:8786
+      - PREFECT_API_URL=http://prefect-service:4200/api
+      - PYTHONPATH=/app
+      - SWIPL_HOST=prolog-service
+      - SWIPL_PORT=4242
+      - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
+      - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
+      - GO_MAP=/app/data/go_map.pkl
+      - SKIP_SEED=true 
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - /mnt/hdd_1/rediet/hypothesis-generation-demo/data:/app/data/external_data
+    depends_on:
+      dask-scheduler:
+        condition: service_healthy  
+      mongo:
+        condition: service_started
+      prolog-service:
+        condition: service_started
+    command: >
+      uv run dask worker tcp://dask-scheduler:8786 
+      --nworkers 8
+      --nthreads 1 
+      --memory-limit 0 
+      --preload dask_preload
+    deploy:
+      mode: replicated
+      replicas: 1  
+      resources:
+        limits:
+          cpus: '32.0'   
+          memory: 180G    
+
+    networks:
+      - app_network
+
+  api-service:
     build:
       context: .
       dockerfile: Dockerfile
@@ -33,22 +102,29 @@ services:
     environment:
       - FLASK_ENV=development
       - PREFECT_API_URL=http://prefect-service:4200/api
-      - OPENAI_API_KEY=${OpenAI}
+      - PYTHONPATH=/app
+      - DASK_ADDRESS=tcp://dask-scheduler:8786
+      - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
+      - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
+      - GO_MAP=/app/data/go_map.pkl
+      - SWIPL_HOST=prolog-service
+      - SWIPL_PORT=4242
     env_file:
       - .env
     volumes:
       - .:/app
       - ./data:/app/data
-      - /mnt/hdd_1/rediet/hypothesis-generation-demo/data:/app/data/external_data  
     depends_on:
       - mongo
-      - prolog-service
       - prefect-service
+      - dask-scheduler
     command: >
-      sh -c "
-      uv run python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl \
-      --go-map data/go_map.pkl --swipl-host prolog-service --swipl-port 4242 
-      "
+      uv run python main.py 
+      --ensembl-hgnc-map data/ensembl_to_hgnc.pkl 
+      --hgnc-ensembl-map data/hgnc_to_ensembl.pkl 
+      --go-map data/go_map.pkl 
+      --swipl-host prolog-service 
+      --swipl-port 4242
     networks:
       - app_network
 
@@ -64,7 +140,7 @@ services:
     environment:
       - PREFECT_API_URL=http://localhost:4200/api
       - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
-      - OPENAI_API_KEY=${OpenAI}
+      - DASK_ADDRESS=tcp://dask-scheduler:8786
     env_file:
       - .env
     command: > 
@@ -81,26 +157,37 @@ services:
   prefect-deployment:
     build:
       context: .
-      dockerfile: Dockerfile.prefect
+      dockerfile: Dockerfile
     volumes:
       - .:/app
+      - ./data:/app/data
+      - /mnt/hdd_1/rediet/hypothesis-generation-demo/data:/app/data/external_data
     env_file:
       - .env
     command: >
       sh -c "
-      uv run python deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl 
+      uv run python deployments.py 
+      --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl 
       --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl 
       --go-map /app/data/go_map.pkl 
       --swipl-host prolog-service 
       --swipl-port 4242
       "
     environment:
-    - PREFECT_API_URL=http://prefect-service:4200/api
-    - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
-    - OPENAI_API_KEY=${OpenAI}
+      - PREFECT_API_URL=http://prefect-service:4200/api
+      - UV_PROJECT_ENVIRONMENT=/opt/flask-venv
+      - DASK_ADDRESS=tcp://dask-scheduler:8786  
+      - PYTHONPATH=/app
+      - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
+      - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
+      - GO_MAP=/app/data/go_map.pkl
     depends_on:
       prefect-service:
         condition: service_healthy
+      dask-scheduler:
+        condition: service_started
+      mongo:
+        condition: service_started
     networks:
       - app_network
 
