@@ -233,7 +233,7 @@ class ProjectHandler(BaseHandler):
     
     def get_project_analysis_path(self, user_id, project_id):
         """Get the analysis path for a project"""
-        return f"data/projects/{user_id}/{project_id}/analysis"
+        return os.path.abspath(f"data/projects/{user_id}/{project_id}/analysis")
 
     def get_analysis_state_path(self, user_id, project_id):
         """Get the analysis state file path"""

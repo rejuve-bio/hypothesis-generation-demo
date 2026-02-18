@@ -16,6 +16,7 @@ import re
 from config import Config
 import shutil
 import pickle
+from utils import get_deps
 
 try:
     import warnings
@@ -565,9 +566,13 @@ def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k
         return top_positive, top_negative, all_genes_list
 
 @task(log_prints=True, cache_policy=None)
-def run_combined_ldsc_tissue_analysis(gene_expression, projects_handler, munged_file, output_dir, project_id, user_id):
+def run_combined_ldsc_tissue_analysis( munged_file, output_dir, project_id, user_id):
     """Combined LDSC + tissue analysis as part of main analysis pipeline"""
     analysis_run_id = None
+
+    deps = get_deps()
+    gene_expression = deps["gene_expression"]
+
     try:
         logger.info("[PIPELINE] Starting combined LDSC + tissue analysis")
         

@@ -22,7 +22,8 @@ import optuna
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import Config
 import re
-from utils import transform_credible_sets_to_locuszoom
+from utils import transform_credible_sets_to_locuszoom, get_deps, get_shared_temp_dir
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -119,10 +120,14 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
 def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh38", 
                                      ref_dir=None, code_repo=None, script_dir=None,
                                      threshold=0.99, sample_size=None, timeout_seconds=14400, 
-                                     cleanup_upload=True, storage=None, user_id=None, project_id=None):
+                                     cleanup_upload=True, user_id=None, project_id=None):
     """
     Harmonize GWAS summary statistics using Nextflow-based harmonization pipeline.
     """
+
+    deps = get_deps()
+    storage = deps["storage"]
+
     logger.info(f"[HARMONIZE] Starting Nextflow harmonization for {gwas_file_path}")
     start_time = datetime.now()
     
@@ -430,10 +435,7 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
     
     # Create user-isolated temporary directory for COJO processing
     # Extract user/project info from output_dir path (format: data/projects/{user_id}/{project_id}/analysis)
-    import uuid
-    unique_id = str(uuid.uuid4())[:8]
-    temp_base = os.path.join(tempfile.gettempdir(), 'cojo_analysis', unique_id)
-    os.makedirs(temp_base, exist_ok=True)
+    temp_base = get_shared_temp_dir(prefix="cojo")
     
     try:
         temp_dir = temp_base
@@ -586,7 +588,6 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
         except Exception as cleanup_e:
             logger.warning(f"[COJO] Could not cleanup temp directory: {cleanup_e}")
 
-@task
 def check_ld_dimensions(ld_matrix, snp_df, bim_file_path):
     
     if ld_matrix.shape[0] != len(snp_df) or ld_matrix.shape[1] != len(snp_df):
@@ -610,7 +611,7 @@ def check_ld_dimensions(ld_matrix, snp_df, bim_file_path):
     logger.info("No dimension mismatch. No filtering needed.")
     return snp_df
 
-@task
+
 def check_ld_semidefiniteness(R_df):
     """
     Check if the LD matrix is semidefinite.
@@ -967,7 +968,6 @@ def run_susie_finemapping(seed, ld_df, sub_region_sumstats_ld, chr_num, lead_var
 
 
 # === FINE-MAPPING ORCHESTRATION ===
-@task(cache_policy=None)
 def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000, 
                                  population="EUR", L=-1, coverage=0.95, min_abs_corr=0.5, maf=0.01, 
                                  ref_genome="GRCh38", plink_dir=None):
@@ -1067,6 +1067,7 @@ def create_region_batches(cojo_results, batch_size=3):
     logger.info(f"[BATCH] Created {len(batches)} batches from {len(regions)} regions")
     return batches
 
+@task(retries=3, cache_policy=None)
 def finemap_region_batch_worker(batch_data):
 
     # Unpack the batch_data tuple
@@ -1084,12 +1085,10 @@ def finemap_region_batch_worker(batch_data):
         logger.error(f"[BATCH-{batch_id}] Failed to load sumstats from file")
         return []
 
-    db = None
     user_id = None
     project_id = None
     
     if additional_params:
-        db_params = additional_params.get('db_params', None)
         user_id = additional_params.get('user_id', None)
         project_id = additional_params.get('project_id', None)
         finemap_params = additional_params.get('finemap_params', {})
@@ -1105,16 +1104,13 @@ def finemap_region_batch_worker(batch_data):
         maf_threshold = finemap_params.get('maf_threshold', 0.01)
         plink_dir = finemap_params.get('plink_dir', None)
         
-        # Recreate database connection in worker process
-        if db_params:
-            try:
-                # Import AnalysisHandler locally to avoid circular imports in multiprocessing
-                from db import AnalysisHandler
-                analysis_handler = AnalysisHandler(db_params['uri'], db_params['db_name'])
-                logger.info(f"[BATCH-{batch_id}] Analysis handler connection recreated in worker process")
-            except Exception as db_e:
-                logger.error(f"[BATCH-{batch_id}] Error recreating analysis handler connection: {db_e}")
-                analysis_handler = None
+        try:
+            deps = get_deps()
+            analysis_handler = deps["analysis"]
+            logger.info(f"[BATCH-{batch_id}] Analysis handler connection recreated in worker process")
+        except Exception as db_e:
+            logger.error(f"[BATCH-{batch_id}] Error recreating analysis handler connection: {db_e}")
+            analysis_handler = None
     else:
         raise ValueError("No additional_params provided to worker - this should not happen")
     
@@ -1327,14 +1323,12 @@ def finemap_region_batch_worker(batch_data):
     return batch_results
 
 # === MEMORY-EFFICIENT DATA SHARING ===
+@task(cache_policy=None)
 def save_sumstats_for_workers(sumstats_df, temp_dir=None):
     """Save sumstats to a temporary file for memory-efficient worker access"""
     if temp_dir is None:
         # Create isolated temp directory for sumstats sharing between workers
-        import uuid
-        unique_id = str(uuid.uuid4())[:8]
-        temp_dir = os.path.join(tempfile.gettempdir(), 'sumstats_shared', unique_id)
-        os.makedirs(temp_dir, exist_ok=True)
+        temp_dir = get_shared_temp_dir(prefix="sumstats")
     
     # Create temporary file with better naming
     import uuid as uuid_module
@@ -1358,6 +1352,7 @@ def load_sumstats_from_file(temp_path):
         logger.error(f"[WORKER] Error loading sumstats from {temp_path}: {e}")
         return None
 
+@task(cache_policy=None)
 def cleanup_sumstats_file(temp_path):
     """Clean up temporary sumstats file after all workers are done"""
     try:

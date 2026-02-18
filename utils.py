@@ -11,6 +11,8 @@ import numpy as np
 import threading
 import time
 import hashlib
+import uuid
+from dask.distributed import get_worker
 
 # Global persistent client for Prefect connections
 _prefect_client = None
@@ -175,6 +177,21 @@ def compute_file_md5(file_path, chunk_size=8192):
         logger.error(f"Error computing MD5 for {file_path}: {e}")
         return None
 
+def get_shared_temp_dir(user_id=None, prefix=""):
+    base = "/app/data/temp"
+    
+    if user_id:
+        base = os.path.join(base, str(user_id))
+    
+    if prefix:
+        dir_name = f"{prefix}_{uuid.uuid4().hex[:8]}"
+    else:
+        dir_name = uuid.uuid4().hex[:8]
+    
+    path = os.path.join(base, dir_name)
+    os.makedirs(path, exist_ok=True)
+    return path
+
 def get_user_file_path(files_handler, file_id, user_id):
     """Get file path from file ID using database metadata"""
     file_metadata = files_handler.get_file_metadata(user_id, file_id)
@@ -282,3 +299,26 @@ def convert_variants_to_object_array(variants_data):
         result.append(variant_obj)
     
     return result
+
+
+def get_deps():
+    logger.info(f"[GET_DEPS] Called get_deps()")
+    
+    try:
+        worker = get_worker()
+        worker_id = getattr(worker, 'id', 'unknown')
+        print(f"[GET_DEPS] Got worker: {worker_id}", flush=True)
+        logger.info(f"[GET_DEPS] Got worker: {worker_id}")
+    except ValueError as e:
+        raise RuntimeError(f"Task not running on Dask worker: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to get Dask worker context: {e}")
+    
+    deps = getattr(worker, "deps", None)
+    
+    if not deps:
+        err = getattr(worker, "deps_error", "unknown")
+        raise RuntimeError(f"Worker dependencies not initialized: {err}")
+    
+    logger.info(f"[GET_DEPS] Successfully retrieved deps from worker {worker_id}")
+    return deps
