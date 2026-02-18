@@ -219,6 +219,7 @@ data/ldsc
 data/ldsc_test
 data/gene_expression
 data/temp/
+data/ontology
 .nextflow.*
 .nextflow/
 data/harmonizer_ref/
