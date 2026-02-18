@@ -8,8 +8,7 @@ from tasks import (
     get_relevant_gene_proof, retry_get_relevant_gene_proof,
     check_hypothesis, get_enrich, get_gene_ids, execute_gene_query, execute_variant_query,
     summarize_graph, create_hypothesis, execute_phenotype_query,
-    extract_causal_gene_from_graph, 
-    process_child_enrichments_simple
+    extract_causal_gene_from_graph
 )
 
 from analysis_tasks import (
@@ -28,17 +27,20 @@ run_combined_ldsc_tissue_analysis
 
 import pandas as pd
 from datetime import datetime, timezone
-from prefect.task_runners import ThreadPoolTaskRunner
+from prefect_dask import DaskTaskRunner
 import os
+from uuid import uuid4
 
-from utils import emit_task_update
+from utils import emit_task_update, get_deps
 from config import Config, create_dependencies
-from threading import Thread
-import traceback
 
 
 ### Enrichment Flow
-@flow(log_prints=True, persist_result=False, task_runner=ThreadPoolTaskRunner(max_workers=4))
+@flow(
+    log_prints=True, 
+    persist_result=False, 
+    task_runner=DaskTaskRunner(address=os.getenv("DASK_ADDRESS"))
+)
 def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id, seed):
     """
     Fully project-based enrichment flow that initializes dependencies from centralized config
@@ -64,17 +66,17 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         logger.info(f"Running project-based enrichment for project {project_id}, variant {variant}")
         
         # Check for existing enrichment data
-        enrich = check_enrich.submit(enrichment, current_user_id, variant, phenotype, hypothesis_id).result()
+        enrich = check_enrich.submit(current_user_id, variant, phenotype, hypothesis_id).result()
         
         if enrich:
             logger.info("Retrieved enrich data from saved db")
             return {"id": enrich['id']}, 200
 
-        candidate_genes = get_candidate_genes.submit(prolog_query, variant, hypothesis_id).result()
-        graphs_list = get_relevant_gene_proof.submit(prolog_query, variant, hypothesis_id, seed).result()
+        candidate_genes = get_candidate_genes.submit(variant, hypothesis_id).result()
+        graphs_list = get_relevant_gene_proof.submit(variant, hypothesis_id, seed).result()
 
         if not graphs_list or len(graphs_list) == 0:
-            graphs_list = retry_get_relevant_gene_proof.submit(prolog_query, variant, hypothesis_id, seed).result()
+            graphs_list = retry_get_relevant_gene_proof.submit(variant, hypothesis_id, seed).result()
             logger.info(f"Retried graphs: {len(graphs_list) if graphs_list else 0} graphs received")
         
         # If still no graphs after retry, fail the enrichment
@@ -183,7 +185,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
             
             # Create enrichment for this graph
             enrich_id = create_enrich_data.submit(
-                enrichment, hypotheses, current_user_id, project_id, variant, 
+                current_user_id, project_id, variant, 
                 phenotype, this_causal_gene, relevant_gos, {
                     "graph": graph,
                     "graph_index": original_i,
@@ -235,43 +237,130 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         )
         raise
 
-### Hypothesis Flow
-@flow(log_prints=True)
-def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses, prolog_query, llm, enrichment):
+### Child Enrichment Batch Flow
+@flow(
+    log_prints=True,
+    task_runner=DaskTaskRunner(address=os.getenv("DASK_ADDRESS"))
+)
+def child_enrichment_batch_flow(current_user_id, child_enrich_ids, parent_hypothesis_id):
+    """
+    Process child enrichments in background, each using its FIRST GO term.
+    """
+    logger.info(f"[CHILD_BATCH] Starting batch processing for {len(child_enrich_ids)} child enrichments")
     
-    hypothesis = check_hypothesis(hypotheses, current_user_id, enrich_id, go_id, hypothesis_id)
+    config = Config.from_env()
+    deps = create_dependencies(config)
+    hypotheses = deps['hypotheses']
+    enrichment = deps['enrichment']
+
+    # Get parent hypothesis to extract project_id
+    parent_hypothesis = hypotheses.get_hypotheses(current_user_id, parent_hypothesis_id)
+    parent_project_id = parent_hypothesis.get('project_id') if parent_hypothesis else None
+    
+    for enrich_id in child_enrich_ids:
+        logger.info(f"[CHILD_BATCH] Processing child enrichment {enrich_id}")
+        
+        try:
+            # Get enrichment data to find first GO term
+            enrich_data = enrichment.get_enrich(current_user_id, enrich_id)
+            if not enrich_data:
+                logger.warning(f"[CHILD_BATCH] Could not get enrichment data for {enrich_id}")
+                continue
+            
+            # Get GO terms from enrichment
+            go_terms = enrich_data.get("GO_terms", [])
+            if not go_terms or len(go_terms) == 0:
+                logger.warning(f"[CHILD_BATCH] No GO terms found for enrichment {enrich_id}")
+                continue
+            
+            # Get FIRST GO term only
+            go_term = go_terms[0]
+            go_id = go_term.get("id")
+            if not go_id:
+                logger.warning(f"[CHILD_BATCH] No GO ID found in first GO term for enrichment {enrich_id}")
+                continue
+            
+            # Get phenotype and variant from enrichment data
+            phenotype = enrich_data.get('phenotype')
+            variant = enrich_data.get('variant')
+            
+            # Check if hypothesis already exists for this enrichment + GO combination
+            all_hypotheses = hypotheses.get_hypotheses(current_user_id)
+            existing_hyp = None
+            if isinstance(all_hypotheses, list):
+                for h in all_hypotheses:
+                    if h.get('enrich_id') == enrich_id and h.get('go_id') == go_id:
+                        existing_hyp = h
+                        break
+            
+            if existing_hyp:
+                logger.info(f"[CHILD_BATCH] Hypothesis already exists for enrichment {enrich_id} + GO {go_id}")
+                continue
+            
+            # Create unique hypothesis ID
+            new_hypothesis_id = str(uuid4())
+            
+            # Create the hypothesis record
+            hypothesis_data = {
+                "id": new_hypothesis_id,
+                "enrich_id": enrich_id,
+                "go_id": go_id,
+                "phenotype": phenotype,
+                "variant": variant,
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+                "task_history": [],
+            }
+            
+            if parent_project_id:
+                hypothesis_data["project_id"] = parent_project_id
+            
+            hypotheses.create_hypothesis(current_user_id, hypothesis_data)
+            logger.info(f"[CHILD_BATCH] Created hypothesis record {new_hypothesis_id} for child enrichment {enrich_id}")
+            
+            logger.info(f"[CHILD_BATCH] Generating hypothesis for child enrichment {enrich_id}, GO: {go_id}")
+            hypothesis_flow(current_user_id, new_hypothesis_id, enrich_id, go_id)
+            logger.info(f"[CHILD_BATCH] Successfully generated hypothesis {new_hypothesis_id}")
+            
+        except Exception as hyp_e:
+            logger.error(f"[CHILD_BATCH] Failed to generate hypothesis for enrichment {enrich_id}: {str(hyp_e)}")
+            continue
+    
+    logger.info(f"[CHILD_BATCH] Batch processing completed")
+    return {"processed": len(child_enrich_ids), "status": "completed"}
+
+
+### Hypothesis Flow
+@flow(
+    log_prints=True,
+    task_runner=DaskTaskRunner(address=os.getenv("DASK_ADDRESS"))
+)
+def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
+    config = Config.from_env()
+    deps = create_dependencies(config)
+    hypotheses = deps['hypotheses']
+    enrichment = deps['enrichment']
+ 
+    hypothesis = check_hypothesis.submit(current_user_id, enrich_id, go_id, hypothesis_id).result()
     if hypothesis:
         logger.info("Retrieved hypothesis data from saved db")
         return {"summary": hypothesis.get('summary'), "graph": hypothesis.get('graph')}, 200
-    # Check if this hypothesis has child enrichments
+    
+    # Check if this hypothesis has child enrichments and trigger background processing
     parent_hypothesis = hypotheses.get_hypotheses(current_user_id, hypothesis_id)
     if parent_hypothesis and 'child_enrich_ids' in parent_hypothesis:
         child_enrich_ids = parent_hypothesis.get('child_enrich_ids', [])
         if child_enrich_ids and len(child_enrich_ids) > 0:
             logger.info(f"Triggering background processing for {len(child_enrich_ids)} child enrichments")
-                        
-            # Create deps dict from current context
-            deps_for_bg = {
-                'hypotheses': hypotheses,
-                'enrichment': enrichment,
-                'prolog_query': prolog_query,
-                'llm': llm
-            }
             
-            def run_background_hypotheses():
-                try:
-                    process_child_enrichments_simple(
-                        current_user_id, child_enrich_ids, hypothesis_id, deps_for_bg
-                    )
-                except Exception as bg_e:
-                    logger.error(f"Background child hypothesis generation failed: {str(bg_e)}")
-                    logger.error(traceback.format_exc())
+            # Import here to avoid circular dependency
+            from run_deployment import invoke_child_batch_deployment
             
-            bg_thread = Thread(target=run_background_hypotheses)
-            bg_thread.start()
-            logger.info(f"Background thread started for child enrichments (processing in parallel)")
+            # Trigger the child batch deployment (fire-and-forget)
+            invoke_child_batch_deployment(current_user_id, child_enrich_ids, hypothesis_id)
+            logger.info(f"Child batch deployment triggered for {len(child_enrich_ids)} enrichments")
 
-    enrich_data = get_enrich(enrichment, current_user_id, enrich_id, hypothesis_id)
+    enrich_data = get_enrich.submit(current_user_id, enrich_id, hypothesis_id).result()
     if not enrich_data:
         return {"message": "Invalid enrich_id or access denied."}, 404
 
@@ -296,7 +385,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
     
     causal_graph = graph      
     
-    coexpressed_gene_ids = get_gene_ids(prolog_query, [g.lower() for g in coexpressed_gene_names], hypothesis_id)
+    coexpressed_gene_ids = get_gene_ids.submit([g.lower() for g in coexpressed_gene_names], hypothesis_id).result()
 
     nodes, edges = causal_graph["nodes"], causal_graph["edges"]
     
@@ -310,7 +399,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
     variant_entities = [f"snp({id})" for id in variant_rsids]
     query = f"maplist(variant_id, {variant_entities}, X)".replace("'", "")
 
-    variant_ids = execute_variant_query(prolog_query, query, hypothesis_id)
+    variant_ids = execute_variant_query.submit(query, hypothesis_id).result()
     for variant_id, rsid, node in zip(variant_ids, variant_rsids, variant_nodes):
         variant_id = variant_id.replace("'", "")
         node["id"] = variant_id
@@ -327,13 +416,13 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
     gene_entities = [f"gene({id})" for id in gene_ids]
     query = f"maplist(gene_name, {gene_entities}, X)".replace("'", "")
 
-    gene_names = execute_gene_query(prolog_query, query, hypothesis_id)
+    gene_names = execute_gene_query.submit(query, hypothesis_id).result()
     for id, name, node in zip(gene_ids, gene_names, gene_nodes):
         node["id"] = id
         node["name"] = name.upper()
     
     nodes.append({"id": go_id, "type": "go", "name": go_name})
-    phenotype_result = execute_phenotype_query(prolog_query, phenotype, hypothesis_id)
+    phenotype_result = execute_phenotype_query.submit(phenotype, hypothesis_id).result()
     
     phenotype_id = phenotype_result[0] if isinstance(phenotype_result, list) and phenotype_result else phenotype_result
 
@@ -346,19 +435,22 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, hypotheses
 
     final_causal_graph = {"nodes": nodes, "edges": edges, "probability": graph_prob}
 
-    summary = summarize_graph(llm, {"nodes": nodes, "edges": edges}, hypothesis_id)
+    summary = summarize_graph.submit({"nodes": nodes, "edges": edges}, hypothesis_id).result()
 
-    create_hypothesis(hypotheses, enrich_id, go_id, variant_id, phenotype, causal_gene_name, final_causal_graph, 
-                     summary, current_user_id, hypothesis_id)
+    create_hypothesis.submit(enrich_id, go_id, variant_id, phenotype, causal_gene_name, final_causal_graph, 
+                     summary, current_user_id, hypothesis_id).result()
     
     return {"summary": summary, "graph": final_causal_graph}, 201
 
 
-@flow(log_prints=True)
-def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, mongodb_uri, db_name, user_id, project_id, gwas_file_path, ref_genome="GRCh38", 
+@flow(log_prints=True, 
+    persist_result=False, 
+    task_runner=DaskTaskRunner(address=os.getenv("DASK_ADDRESS"))
+)
+def analysis_pipeline_flow(user_id, project_id, gwas_file_path, ref_genome="GRCh38", 
                            population="EUR", batch_size=5, max_workers=3,
                            maf_threshold=0.01, seed=42, window=2000, L=-1, 
-                           coverage=0.95, min_abs_corr=0.5, sample_size=None, storage=None):
+                           coverage=0.95, min_abs_corr=0.5, sample_size=None):
     """
     Complete analysis pipeline flow using Prefect for orchestration
     but multiprocessing for fine-mapping batches (R safety)
@@ -373,7 +465,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
     
     try:
         # Get project-specific output directory (using Prefect task)
-        output_dir = get_project_analysis_path_task.submit(projects_handler, user_id, project_id).result()
+        output_dir = get_project_analysis_path_task.submit(user_id, project_id).result()
         logger.info(f"[PIPELINE] Using output directory: {output_dir}")
         
         # Save initial analysis state
@@ -384,12 +476,12 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
             "message": "Starting Nextflow harmonization",
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
-        save_analysis_state_task.submit(projects_handler, user_id, project_id, initial_state).result()
+        save_analysis_state_task.submit(user_id, project_id, initial_state).result()
         
         logger.info(f"[PIPELINE] Stage 1: Nextflow harmonization")
         harmonized_file_result = harmonize_sumstats_with_nextflow.submit(
             gwas_file_path, output_dir, ref_genome=ref_genome, sample_size=sample_size,
-            storage=storage, user_id=user_id, project_id=project_id
+            user_id=user_id, project_id=project_id
         ).result()
         
         # Extract the actual file path from the result
@@ -401,7 +493,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
 
         # Start LDSC + tissue analysis immediately after harmonization (runs in parallel)
         logger.info(f"[PIPELINE] Starting LDSC + tissue analysis in parallel after harmonization")
-        ldsc_tissue_future = run_combined_ldsc_tissue_analysis.submit(gene_expression, projects_handler,
+        ldsc_tissue_future = run_combined_ldsc_tissue_analysis.submit(
             harmonized_file, output_dir, project_id, user_id
         )
         logger.info(f"[PIPELINE] LDSC + tissue analysis started in background")
@@ -414,7 +506,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
             "message": "Harmonization completed, filtering significant variants",
             "started_at": initial_state["started_at"]
         }
-        save_analysis_state_task.submit(projects_handler, user_id, project_id, harmonization_state).result()
+        save_analysis_state_task.submit(user_id, project_id, harmonization_state).result()
         
         logger.info(f"[PIPELINE] Stage 2: Loading and filtering variants")
         significant_df_result = filter_significant_variants.submit(harmonized_df, output_dir).result()
@@ -433,7 +525,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
             "progress": 50,
             "message": "Filtering completed, running COJO analysis"
         }
-        save_analysis_state_task.submit(projects_handler, user_id, project_id, filtering_state).result()
+        save_analysis_state_task.submit(user_id, project_id, filtering_state).result()
         
         logger.info(f"[PIPELINE] Stage 3: COJO analysis")
        
@@ -465,7 +557,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
                 "progress": 50,
                 "message": "COJO analysis failed - no independent signals found",
             }
-            save_analysis_state_task.submit(projects_handler, user_id, project_id, failed_state).result()
+            save_analysis_state_task.submit(user_id, project_id, failed_state).result()
             return None
         
         # Update analysis state after COJO
@@ -475,9 +567,9 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
             "progress": 70,
             "message": "COJO analysis completed, starting fine-mapping"
         }
-        save_analysis_state_task.submit(projects_handler, user_id, project_id, cojo_state).result()
+        save_analysis_state_task.submit(user_id, project_id, cojo_state).result()
         
-        logger.info(f"[PIPELINE] Stage 4: Multiprocessing fine-mapping)")
+        logger.info(f"[PIPELINE] Stage 4: Multiprocessing fine-mapping")
         logger.info(f"[PIPELINE] Processing {len(cojo_results)} regions with {batch_size} regions per batch")
         
         region_batches = create_region_batches(cojo_results, batch_size=batch_size)
@@ -488,12 +580,12 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
         # Prepare batch data for multiprocessing
         batch_data_list = []
         for i, batch in enumerate(region_batches):
-            db_params = {
-                'uri': mongodb_uri,
-                'db_name': db_name
-            }
+            # db_params = {
+            #     'uri': mongodb_uri,
+            #     'db_name': db_name
+            # }
             batch_data = (batch, f"batch_{i}", sumstats_temp_file, {
-                'db_params': db_params,
+                # 'db_params': db_params,
                 'user_id': user_id,
                 'project_id': project_id,
                 'finemap_params': {
@@ -510,45 +602,31 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
             })
             batch_data_list.append(batch_data)
         
-        original_method = mp.get_start_method()
-        if original_method != 'spawn':
-            logger.info(f"[PIPELINE] Switching multiprocessing method from '{original_method}' to 'spawn' to reduce memory usage")
-            mp.set_start_method('spawn', force=True)
+        logger.info(f"[PIPELINE] Submitting {len(batch_data_list)} batches to Dask Cluster...")
         
         all_results = []
         successful_batches = 0
         failed_batches = 0
-        
+
         try:
-            with mp.Pool(max_workers) as pool:
-                try:
-                    # Process all batches in parallel
-                    batch_results_list = pool.map(finemap_region_batch_worker, batch_data_list)
-                    
-                    # Collect results
-                    for i, batch_results in enumerate(batch_results_list):
-                        if batch_results and len(batch_results) > 0:
-                            all_results.extend(batch_results)
-                            successful_batches += 1
-                            logger.info(f"[PIPELINE] Batch {i} completed with {len(batch_results)} regions")
-                        else:
-                            failed_batches += 1
-                            logger.warning(f"[PIPELINE] Batch {i} failed or returned no results")
-                            
-                except Exception as e:
-                    logger.error(f"[PIPELINE] Error in multiprocessing: {str(e)}")
-                    raise
-                finally:
-                    # Clean up temporary sumstats file after all workers are done
-                    cleanup_sumstats_file(sumstats_temp_file)
+            futures = finemap_region_batch_worker.map(batch_data_list)
+
+            batch_results_list = [f.result() for f in futures]
+
+            for i, batch_results in enumerate(batch_results_list):
+                if batch_results and len(batch_results) > 0:
+                    all_results.extend(batch_results)
+                    successful_batches += 1
+                    logger.info(f"[PIPELINE] Batch {i} completed with {len(batch_results)} regions")
+                else:
+                    failed_batches += 1
+                    logger.warning(f"[PIPELINE] Batch {i} failed or returned no results")
+
+        except Exception as e:
+            logger.error(f"[PIPELINE] Error in Dask mapping: {str(e)}")
+            raise
         finally:
-            # Restore original multiprocessing method
-            if original_method != 'spawn':
-                try:
-                    mp.set_start_method(original_method, force=True)
-                    logger.info(f"[PIPELINE] Restored multiprocessing method to '{original_method}'")
-                except:
-                    logger.warning(f"[PIPELINE] Could not restore multiprocessing method to '{original_method}'")
+            cleanup_sumstats_file.submit(sumstats_temp_file)
         
         # Combine and save results
         if all_results:
@@ -564,7 +642,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
                     logger.warning(f"[PIPELINE] Could not cleanup {cojo_output_path}: {cleanup_e}")
             
             # Save results using Prefect tasks
-            results_file = create_analysis_result_task.submit(analysis_handler, user_id, project_id, combined_results, output_dir).result()
+            results_file = create_analysis_result_task.submit(user_id, project_id, combined_results, output_dir).result()
             
             # Summary statistics
             total_variants = len(combined_results)
@@ -581,7 +659,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
                 "progress": 85,
                 "message": "Fine-mapping completed, waiting for LDSC and tissue analysis"
             }
-            save_analysis_state_task.submit(projects_handler, user_id, project_id, ldsc_tissue_state).result()
+            save_analysis_state_task.submit(user_id, project_id, ldsc_tissue_state).result()
             
             try:
                 # Wait for the parallel LDSC + tissue analysis task to complete
@@ -600,7 +678,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
                     "progress": 90,
                     "message": f"LDSC tissue analysis failed: {str(ldsc_e)}. Tissue-specific enrichment will not be available.",
                 }
-                save_analysis_state_task.submit(projects_handler, user_id, project_id, failed_ldsc_state).result()
+                save_analysis_state_task.submit(user_id, project_id, failed_ldsc_state).result()
                 raise RuntimeError(f"LDSC tissue analysis failed - required for enrichment: {str(ldsc_e)}")
             
             # Save completed analysis state
@@ -610,7 +688,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
                 "message": "Analysis completed successfully",
                 "ldsc_status": ldsc_status
             }
-            save_analysis_state_task.submit(projects_handler, user_id, project_id, completed_state).result()
+            save_analysis_state_task.submit(user_id, project_id, completed_state).result()
             
             logger.info(f"[PIPELINE] Analysis completed successfully!")
             logger.info(f"[PIPELINE] - Total variants: {total_variants}")
@@ -634,7 +712,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
                 "progress": 70,
                 "message": "Fine-mapping failed - no results generated",
             }
-            save_analysis_state_task.submit(projects_handler, user_id, project_id, failed_finemap_state).result()
+            save_analysis_state_task.submit(user_id, project_id, failed_finemap_state).result()
             raise RuntimeError("All fine-mapping batches failed")
             
     except Exception as e:
@@ -647,7 +725,7 @@ def analysis_pipeline_flow(projects_handler, analysis_handler,gene_expression, m
                 "progress": 0,
                 "message": f"Analysis pipeline failed: {str(e)}",
             }
-            save_analysis_state_task.submit(projects_handler, user_id, project_id, failed_state).result()
+            save_analysis_state_task.submit(user_id, project_id, failed_state).result()
         except Exception as state_e:
             logger.error(f"[PIPELINE] Failed to save error state: {str(state_e)}")
         raise

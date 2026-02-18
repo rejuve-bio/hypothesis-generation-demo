@@ -8,9 +8,8 @@ from socketio_instance import socketio
 from auth import socket_token_required, token_required
 from datetime import datetime, timezone
 from uuid import uuid4
-from flows import hypothesis_flow, analysis_pipeline_flow
 # finemapping_flow
-from run_deployment import invoke_enrichment_deployment
+from run_deployment import invoke_enrichment_deployment, invoke_analysis_pipeline_deployment, invoke_hypothesis_deployment
 from status_tracker import status_tracker, TaskState
 from prefect import flow
 from utils import allowed_file, convert_variants_to_object_array, serialize_datetime_fields, compute_file_md5
@@ -215,7 +214,9 @@ class HypothesisAPI(Resource):
                     "created_at": hypothesis.get('created_at'),
                     "probability": confidence,
                     "hypotheses": related_hypotheses,
-                    "result": enrich_data
+                    "result": enrich_data,
+                    "summary": hypothesis.get('summary'),  
+                    "graph": hypothesis.get('graph') 
                 }
 
                 if 'tissue_rankings' in hypothesis:
@@ -355,10 +356,9 @@ class HypothesisAPI(Resource):
         
         hypothesis_id = hypothesis['id']
         
-        # Run the Prefect flow and return the result
-        flow_result = hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id, self.hypotheses, self.prolog_query, self.llm, self.enrichment)
+        invoke_hypothesis_deployment(current_user_id, hypothesis_id, enrich_id, go_id)
 
-        return flow_result[0], flow_result[1]
+        return {"message": "Hypothesis generation started", "id": hypothesis_id}, 202
 
     
     @token_required
@@ -848,12 +848,10 @@ class AnalysisPipelineAPI(Resource):
                     if not self.storage:
                         return {"error": "Storage service not available"}, 500
                     
-                    # Download from MinIO to temp location for processing
-                    import tempfile
-                    user_temp_dir = os.path.join(tempfile.gettempdir(), 'uploads', str(current_user_id), file_id_param)
-                    os.makedirs(user_temp_dir, exist_ok=True)
-                    
-                    temp_file_path = os.path.join(user_temp_dir, filename)
+                    # Download from MinIO to shared temp location for processing
+                    from utils import get_shared_temp_dir
+                    temp_dir = get_shared_temp_dir(user_id=current_user_id, prefix="user_file")
+                    temp_file_path = os.path.join(temp_dir, filename)
                     
                     if not self.storage.download_file(storage_key, temp_file_path):
                         return {"error": "Failed to retrieve file from storage"}, 500
@@ -884,9 +882,9 @@ class AnalysisPipelineAPI(Resource):
                         minio_path = gwas_entry['minio_path']
                         
                         if self.storage.exists(minio_path):
-                            # Download from MinIO to temp location for analysis
-                            import tempfile
-                            temp_dir = tempfile.mkdtemp(prefix=f"gwas_analysis_{current_user_id}_")
+                            # Download from MinIO to shared temp location for analysis
+                            from utils import get_shared_temp_dir
+                            temp_dir = get_shared_temp_dir(user_id=current_user_id, prefix="gwas_cache")
                             gwas_file_path = os.path.join(temp_dir, filename)
                             
                             logger.info(f"[API] Downloading from MinIO: {minio_path}")
@@ -913,11 +911,11 @@ class AnalysisPipelineAPI(Resource):
                         if not download_url:
                             return {"error": f"No download URL available for {file_id_param}"}, 404
                         
-                        # Download to temp location
-                        import tempfile
+                        # Download to shared temp location
+                        from utils import get_shared_temp_dir
                         import requests
                         
-                        temp_dir = tempfile.mkdtemp(prefix=f"gwas_analysis_{current_user_id}_")
+                        temp_dir = get_shared_temp_dir(user_id=current_user_id, prefix="gwas_download")
                         gwas_file_path = os.path.join(temp_dir, filename)
                         
                         logger.info(f"[API] Downloading from {download_url}")
@@ -986,13 +984,12 @@ class AnalysisPipelineAPI(Resource):
                 
                 logger.info(f"[API] Starting upload for file {filename} (ID: {file_id})")
                 
-                # Create user-isolated temp directory
-                import tempfile
-                user_temp_dir = os.path.join(tempfile.gettempdir(), 'uploads', str(current_user_id), file_id)
-                os.makedirs(user_temp_dir, exist_ok=True)
+                # Create user-isolated temp directory in shared volume
+                from utils import get_shared_temp_dir
+                temp_dir = get_shared_temp_dir(user_id=current_user_id, prefix="upload")
                 
-                # Save to isolated temp location
-                temp_file_path = os.path.join(user_temp_dir, filename)
+                # Save to shared temp location
+                temp_file_path = os.path.join(temp_dir, filename)
                 gwas_file.save(temp_file_path)
                 file_size = os.path.getsize(temp_file_path)
                 
@@ -1038,10 +1035,10 @@ class AnalysisPipelineAPI(Resource):
                         
                         if not upload_success:
                             logger.error(f"[API] Failed to upload file to MinIO")
-                            # Cleanup temp file on failure
+                            # Cleanup temp dir on failure
                             try:
-                                os.remove(temp_file_path)
-                                os.rmdir(user_temp_dir)
+                                import shutil
+                                shutil.rmtree(temp_dir, ignore_errors=True)
                             except:
                                 pass
                             return {"error": "File upload failed"}, 500
@@ -1142,63 +1139,22 @@ class AnalysisPipelineAPI(Resource):
             
             logger.info(f"[API] Created project {project_id} with file {file_metadata_id}")
             
-            # Start pipeline in background thread
-            def run_pipeline_background(
-                proj_id=project_id,
+            invoke_analysis_pipeline_deployment(
                 user_id=current_user_id,
-                gwas_path=file_path,
-                ref_gen=ref_genome,
-                pop=population,
-                batch=batch_size,
-                workers=max_workers,
-                maf=maf_threshold,
-                seed_val=seed,
-                win=window,
-                L_val=L,
-                cov=coverage,
-                min_corr=min_abs_corr,
+                project_id=project_id,
+                gwas_file_path=file_path,
+                ref_genome=ref_genome,
+                population=population,
+                batch_size=batch_size,
+                max_workers=max_workers,
+                maf_threshold=maf_threshold,
+                seed=seed,
+                window=window,
+                L=L,
+                coverage=coverage,
+                min_abs_corr=min_abs_corr,
                 sample_size=sample_size
-            ):
-                try:
-                    logger.info(f"[API] Running analysis pipeline for project {proj_id}")
-                    
-                    # Run the analysis pipeline flow directly
-                    credible_sets = analysis_pipeline_flow(
-                        projects_handler=self.projects,
-                        analysis_handler=self.analysis,
-                        gene_expression=self.gene_expression,
-                        mongodb_uri=self.config.mongodb_uri,
-                        db_name=self.config.db_name,
-                        user_id=user_id,
-                        project_id=proj_id,
-                        gwas_file_path=gwas_path,
-                        ref_genome=ref_gen,
-                        population=pop,
-                        batch_size=batch,
-                        max_workers=workers,
-                        maf_threshold=maf,
-                        seed=seed_val,
-                        window=win,
-                        L=L_val,
-                        coverage=cov,
-                        min_abs_corr=min_corr,
-                        sample_size=sample_size,
-                        storage=self.storage
-                    )
-                    
-                    logger.info(f"[API] Analysis pipeline for project {project_id} completed successfully")
-                    if credible_sets and isinstance(credible_sets, dict):
-                        logger.info(f"[API] Generated {credible_sets.get('total_variants', 0)} variants in {credible_sets.get('total_credible_sets', 0)} credible sets")
-                    else:
-                        logger.info(f"[API] Analysis completed but no credible sets generated")
-                    
-                except Exception as e:
-                    logger.error(f"[API] Analysis pipeline for project {project_id} failed: {str(e)}")
-                    raise e
-            
-            # Start background thread
-            background_thread = Thread(target=run_pipeline_background)
-            background_thread.start()
+            )
             
             logger.info(f"[API] Analysis pipeline started for project {project_id}")
             

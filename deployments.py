@@ -4,7 +4,7 @@ import os
 import argparse
 import logging
 from prefect import serve
-from flows import enrichment_flow
+from flows import enrichment_flow, analysis_pipeline_flow, child_enrichment_batch_flow, hypothesis_flow
 from config import Config
 from dotenv import load_dotenv
 
@@ -35,15 +35,39 @@ def setup_deployments(config):
         "SWIPL_PORT": str(config.swipl_port),
     })
     
-    # Create deployment
+    # 1. Enrichment Deployment
     enrich_deploy = enrichment_flow.to_deployment(
         name="enrichment-flow-deployment",
         tags=["background_enrichment", "production"],
         description="Background enrichment processing for gene hypothesis generation",
         version="1.0.0"
     )
+
+    # 2. Analysis Pipeline Deployment
+    analysis_deploy = analysis_pipeline_flow.to_deployment(
+        name="analysis-pipeline-deployment",
+        tags=["analysis", "production"],
+        description="GWAS Analysis Pipeline (Harmonization -> Fine-mapping)",
+        version="1.0.0"
+    )
     
-    return [enrich_deploy]
+    # 3. Child Enrichment Batch Deployment
+    child_batch_deploy = child_enrichment_batch_flow.to_deployment(
+        name="child-batch-deployment",
+        tags=["background_hypothesis", "production"],
+        description="Background processing for child enrichment hypotheses",
+        version="1.0.0"
+    )
+
+    # 4. Hypothesis Generation Deployment
+    hypothesis_deploy = hypothesis_flow.to_deployment(
+        name="hypothesis-generation-deployment",
+        tags=["hypothesis", "production"],
+        description="Generate hypothesis from enrichment data",
+        version="1.0.0"
+    )
+    
+    return [enrich_deploy, analysis_deploy, child_batch_deploy, hypothesis_deploy]
 
 def main():
     """Main deployment service entry point"""
@@ -70,7 +94,7 @@ def main():
     deployments = setup_deployments(config)
     
     # Start serving deployments
-    logger.info("Serving deployments...")
+    logger.info(f"Serving {len(deployments)} deployments...")
     serve(*deployments)
 
 if __name__ == "__main__":

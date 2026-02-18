@@ -340,6 +340,7 @@ fi
 
 nextflow run "$CODE_REPO" -profile standard \
   $CUSTOM_CONFIG_FLAG \
+  -qs 4 \
   --harm \
   --ref "$REF_DIR_ABS" \
   --file "$OUT_GZ" \

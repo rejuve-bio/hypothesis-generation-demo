@@ -28,7 +28,7 @@ def setup_logging(log_level='DEBUG'):
         sys.stdout,
         format=custom_format,
         level=log_level,
-        enqueue=True,
+        enqueue=False,
         backtrace=True,
         diagnose=True
     )
@@ -41,7 +41,7 @@ def setup_logging(log_level='DEBUG'):
         rotation="50 MB",      # Smaller rotation size for better performance
         retention="10 days",   # Keep logs a bit longer
         compression="zip",
-        enqueue=True,
+        enqueue=False,
         backtrace=True,
         diagnose=False  # Don't include sensitive info in files
     )
@@ -54,7 +54,7 @@ def setup_logging(log_level='DEBUG'):
         rotation="25 MB",      # Smaller for error logs
         retention="30 days",   # Keep error logs longer
         compression="zip",
-        enqueue=True,
+        enqueue=False,
         backtrace=True,
         diagnose=True   # Include more info for errors
     )
@@ -67,7 +67,7 @@ def setup_logging(log_level='DEBUG'):
         retention="7 days",    # Standard retention
         compression="zip",
         serialize=True,
-        enqueue=True,
+        enqueue=False,
         backtrace=False,       # JSON logs don't need backtrace
         diagnose=False
     )
@@ -80,7 +80,7 @@ def setup_logging(log_level='DEBUG'):
         retention="21 days",   # Keep error analysis data longer
         compression="zip",
         serialize=True,
-        enqueue=True,
+        enqueue=False,
         backtrace=False,
         diagnose=False
     )
