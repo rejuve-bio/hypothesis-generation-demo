@@ -699,27 +699,74 @@ def __(mo):
 
 
 @app.cell
-def __(subprocess, python27_path, ldsc_sumstats_file, os):
+def __(all_cell_types, python27_path, ldsc_sumstats_file, os, pd, datetime):
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    BATCH_SIZE  = 25
+    MAX_WORKERS = 4
+
+    def run_cts_batch(args):
+        batch_idx, cell_type_subset, py_path, sumstats = args
+        import os, subprocess
+        cts_path = f"data/cell_types_batch_{batch_idx}.cts"
+        with open(cts_path, "w") as f:
+            for ct in cell_type_subset:
+                f.write(f"{ct}\tdata/ldscores/{ct}/{ct}.\n")
+
+        out_prefix  = f"results/AD_CTS_batch_{batch_idx}"
+        result_path = f"{out_prefix}.cell_type_results.txt"
+        if os.path.exists(result_path):
+            return batch_idx, True, "already exists"
+
+        r = subprocess.run([
+            py_path, "tools/ldsc/ldsc.py",
+            "--h2-cts",         sumstats,
+            "--ref-ld-chr",     "data/reference/baselineLD_v2.2/baselineLD.",
+            "--ref-ld-chr-cts", cts_path,
+            "--w-ld-chr",       "data/reference/GRCh38/weights/weights.hm3_noMHC.",
+            "--out",            out_prefix,
+        ], capture_output=True, text=True)
+
+        if r.returncode != 0:
+            return batch_idx, False, r.stderr[:300]
+        return batch_idx, True, "ok"
+
     if ldsc_sumstats_file is None or not os.path.exists(ldsc_sumstats_file):
         print("⚠ Skipping LDSC analysis - no munged sumstats file available")
-        print("  Please complete harmonization and munging steps first")
     else:
-        print("\n" + "="*60)
-        print("STEP 8: Running cell-type-specific heritability analysis")
-        print("="*60 + "\n")
+        os.makedirs("results", exist_ok=True)
+        batches = [all_cell_types[i:i+BATCH_SIZE] for i in range(0, len(all_cell_types), BATCH_SIZE)]
+        print(f"Running {len(batches)} batches of ≤{BATCH_SIZE} cell types, {MAX_WORKERS} workers")
+        print(f"Started: {datetime.now().strftime('%H:%M:%S')}")
 
-        subprocess.run([
-            python27_path, "tools/ldsc/ldsc.py",
-            "--h2-cts", ldsc_sumstats_file,
-            "--ref-ld-chr", "data/reference/baselineLD_v2.2/baselineLD.",
-            "--ref-ld-chr-cts", "data/cell_types.cts",
-            "--w-ld-chr", "data/reference/GRCh38/weights/weights.hm3_noMHC.",
-            "--out", "results/AD_CellTypeSpecific"
-        ], check=True)
+        tasks  = [(i, b, python27_path, ldsc_sumstats_file) for i, b in enumerate(batches)]
+        failed = []
+        with ProcessPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {pool.submit(run_cts_batch, t): t[0] for t in tasks}
+            for fut in as_completed(futures):
+                idx, ok, msg = fut.result()
+                print(f"  {'✓' if ok else '✗'} Batch {idx:03d} → {msg}")
+                if not ok:
+                    failed.append(idx)
 
-        print("\n✓ Cell-type-specific analysis complete")
+        print(f"Finished: {datetime.now().strftime('%H:%M:%S')}")
+        if failed:
+            print(f"⚠ Failed batches: {failed}")
+
+        dfs = []
+        for i in range(len(batches)):
+            p = f"results/AD_CTS_batch_{i}.cell_type_results.txt"
+            if os.path.exists(p):
+                dfs.append(pd.read_csv(p, sep="\t"))
+
+    if dfs:
+                _ranked = pd.concat(dfs, ignore_index=True).sort_values("Coefficient_P_value")
+                _ranked.to_csv("results/AD_CellTypeSpecific_ranked_2_28.csv", index=False)
+                _ranked.to_csv("results/AD_CellTypeSpecific.cell_type_results_2_28.txt", sep="\t", index=False)
+                _ranked.to_csv("results/AD_CellTypeSpecific_ranked_2_28.csv", index=False)
+                print(f"\n✓ Merged {len(_ranked)} cell types → results/AD_CellTypeSpecific_ranked_2_28.csv")
+                print(_ranked[["Name","Coefficient","Coefficient_std_error","Coefficient_P_value"]].head(10).to_string(index=False))
     return
-
 
 @app.cell
 def __(mo):
@@ -733,7 +780,7 @@ def __(pd, os):
     print("STEP 9: Ranking cell types by significance")
     print("="*60 + "\n")
 
-    results_file = "results/AD_CellTypeSpecific.cell_type_results.txt"
+    results_file = "results/AD_CellTypeSpecific.cell_type_results_sun.txt"
 
     if not os.path.exists(results_file):
         print(f"⚠ Results file not found: {results_file}")
@@ -742,12 +789,12 @@ def __(pd, os):
     else:
         results = pd.read_csv(results_file, sep="\t")
         ranked = results.sort_values("Coefficient_P_value")
-        ranked.to_csv("results/AD_CellTypeSpecific_ranked.csv", index=False)
+        ranked.to_csv("results/AD_CellTypeSpecific_ranked_sun.csv", index=False)
 
         print("Cell types ranked by heritability enrichment p-value:\n")
         print(ranked[["Name", "Coefficient", "Coefficient_std_error", "Coefficient_P_value"]].to_string(index=False))
 
-        print("\n✓ Results saved to results/AD_CellTypeSpecific_ranked.csv")
+        print("\n✓ Results saved to results/AD_CellTypeSpecific_ranked_sun.csv")
 
     return (ranked,)
 
