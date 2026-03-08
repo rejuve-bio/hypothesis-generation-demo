@@ -34,7 +34,7 @@ All analyses are performed using **GRCh38 / hg38** coordinates.
 
 @app.cell
 def __(mo):
-    GWAS_INPUT_FILE = "data/gwas/AD_bellenguez_2022_hg38.tsv.gz"
+    GWAS_INPUT_FILE = "data/gwas/atrial_fibrillation.h.tsv.gz"
 
     gwas_stem = mo.state(GWAS_INPUT_FILE)
     return (GWAS_INPUT_FILE, gwas_stem)
@@ -738,11 +738,11 @@ def __(all_cell_types, python27_path, SUMSTATS_FILE, GWAS_STEM, RESULTS_PREFIX, 
 
         if dfs:
             _ranked = pd.concat(dfs, ignore_index=True).sort_values("Coefficient_P_value")
-            ranked_csv  = f"{RESULTS_PREFIX}_ranked.csv"
-            ranked_tsv  = f"{RESULTS_PREFIX}.cell_type_results.txt"
-            _ranked.to_csv(ranked_csv, index=False)
-            _ranked.to_csv(ranked_tsv, sep="\t", index=False)
-            print(f"\nMerged {len(_ranked)} cell types -> {ranked_csv}")
+            _ranked_csv = f"{RESULTS_PREFIX}_ranked.csv"
+            _ranked_tsv = f"{RESULTS_PREFIX}.cell_type_results.txt"
+            _ranked.to_csv(_ranked_csv, index=False)
+            _ranked.to_csv(_ranked_tsv, sep="\t", index=False)
+            print(f"\nMerged {len(_ranked)} cell types -> {_ranked_csv}")
             print(_ranked[["Name","Coefficient","Coefficient_std_error","Coefficient_P_value"]].head(10).to_string(index=False))
 
     return
@@ -765,12 +765,12 @@ def __(RESULTS_PREFIX, pd, os):
     else:
         results = pd.read_csv(results_file, sep="\t")
         ranked = results.sort_values("Coefficient_P_value")
-        ranked_csv = f"{RESULTS_PREFIX}_ranked.csv"
-        ranked.to_csv(ranked_csv, index=False)
+        _ranked_csv = f"{RESULTS_PREFIX}_ranked.csv"
+        ranked.to_csv(_ranked_csv, index=False)
 
         print("Cell types ranked by heritability enrichment p-value:\n")
         print(ranked[["Name", "Coefficient", "Coefficient_std_error", "Coefficient_P_value"]].to_string(index=False))
-        print(f"\nResults saved to {ranked_csv}")
+        print(f"\nResults saved to {_ranked_csv}")
 
     return (ranked,)
 
