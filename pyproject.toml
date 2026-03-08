@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "numpy==1.26.0",
+    "numpy==2.4.2",
     "outlines",
     "Flask",
     "flask-restful",
