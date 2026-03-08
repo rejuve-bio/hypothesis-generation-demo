@@ -12,7 +12,7 @@ dependencies = [
     "gseapy",
     "faiss-gpu",
     "python-dotenv",
-    "PyJWT==2.9.0",
+    "PyJWT==2.11.0",
     "pymongo",
     "torch",
     "torchvision",
