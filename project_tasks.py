@@ -7,7 +7,7 @@ import re
 from utils import get_deps
 
 
-@task(cache_policy=None)
+@task()
 def save_analysis_state_task(user_id, project_id, state_data):
     """Save analysis state to file system"""
     try:
@@ -21,7 +21,7 @@ def save_analysis_state_task(user_id, project_id, state_data):
         raise
 
 
-@task(cache_policy=None)
+@task()
 def load_analysis_state_task(projects_handler, user_id, project_id):
     """Load analysis state from file system"""
     try:
@@ -36,7 +36,7 @@ def load_analysis_state_task(projects_handler, user_id, project_id):
         raise
 
 
-@task(cache_policy=None)
+@task()
 def create_analysis_result_task(user_id, project_id, combined_results, output_dir):
     """Create and save analysis results"""
     try:
@@ -60,7 +60,7 @@ def create_analysis_result_task(user_id, project_id, combined_results, output_di
 
 
 
-@task(cache_policy=None)
+@task()
 def get_project_analysis_path_task(user_id, project_id):
     """Get the analysis path for a project"""
     try:

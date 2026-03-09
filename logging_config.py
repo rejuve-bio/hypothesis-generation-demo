@@ -1,13 +1,36 @@
 import os
 import sys
+import logging
 from loguru import logger
 import functools
 import time
 
+class InterceptHandler(logging.Handler):
+    """
+    Intercepts standard Python logging messages and routes them to Loguru.
+    """
+    def emit(self, record):
+        # Get corresponding Loguru level if it exists
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        frame, depth = logging.currentframe(), 2
+        while frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        logger.bind(original_name=record.name).opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
+
 def custom_format(record):
-    # Convert the file path to a relative path
+    if "original_name" in record["extra"]:
+        name = record["extra"]["original_name"]
+        return f"{{time:YYYY-MM-DD HH:mm:ss}} | {{level}} | {name} - {{message}}\n"
+        
     rel_file = os.path.relpath(record["file"].path)
-    # Build a format string with time, level, relative file, line number, and message.
     return (
         f"{{time:YYYY-MM-DD HH:mm:ss}} | {{level}} | {rel_file}:{{line}} - {{message}}\n"
     )
@@ -23,68 +46,24 @@ def setup_logging(log_level='DEBUG'):
 
     logger.remove()
 
-    # Console logging with custom format
-    logger.add(
-        sys.stdout,
-        format=custom_format,
-        level=log_level,
-        enqueue=False,
-        backtrace=True,
-        diagnose=True
-    )
+    # Console logging
+    logger.add(sys.stdout, format=custom_format, level=log_level, enqueue=False, backtrace=True, diagnose=True)
 
-    # Main application log with rotation, retention, and compression
-    logger.add(
-        log_file_path,
-        format=custom_format,
-        level=log_level,
-        rotation="50 MB",      # Smaller rotation size for better performance
-        retention="10 days",   # Keep logs a bit longer
-        compression="zip",
-        enqueue=False,
-        backtrace=True,
-        diagnose=False  # Don't include sensitive info in files
-    )
+    logger.add(log_file_path, format=custom_format, level=log_level, rotation="50 MB", retention="10 days", compression="zip", enqueue=False, backtrace=True, diagnose=False)
+    logger.add(error_log_path, format=custom_format, level="ERROR", rotation="25 MB", retention="30 days", compression="zip", enqueue=False, backtrace=True, diagnose=True)
+    logger.add(log_file_jsonl, level=log_level, rotation="75 MB", retention="7 days", compression="zip", serialize=True, enqueue=False, backtrace=False, diagnose=False)
+    logger.add(error_log_jsonl, level="ERROR", rotation="50 MB", retention="21 days", compression="zip", serialize=True, enqueue=False, backtrace=False, diagnose=False)
     
-    # Separate error log for easier debugging
-    logger.add(
-        error_log_path,
-        format=custom_format,
-        level="ERROR",
-        rotation="25 MB",      # Smaller for error logs
-        retention="30 days",   # Keep error logs longer
-        compression="zip",
-        enqueue=False,
-        backtrace=True,
-        diagnose=True   # Include more info for errors
-    )
+    # Convert Loguru level to standard logging level
+    logging_level = getattr(logging, log_level.upper(), logging.INFO)
+    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
+    
+    for logger_name in ["uvicorn", "uvicorn.access", "uvicorn.error", "fastapi"]:
+        logging_logger = logging.getLogger(logger_name)
+        logging_logger.handlers = [InterceptHandler()]
+        logging_logger.propagate = False
+        logging_logger.setLevel(logging_level)
 
-    # JSON structured logs for log analysis tools
-    logger.add(
-        log_file_jsonl,
-        level=log_level,
-        rotation="75 MB",      # Optimized size
-        retention="7 days",    # Standard retention
-        compression="zip",
-        serialize=True,
-        enqueue=False,
-        backtrace=False,       # JSON logs don't need backtrace
-        diagnose=False
-    )
-    
-    # JSON error logs for structured error analysis
-    logger.add(
-        error_log_jsonl,
-        level="ERROR",
-        rotation="50 MB",
-        retention="21 days",   # Keep error analysis data longer
-        compression="zip",
-        serialize=True,
-        enqueue=False,
-        backtrace=False,
-        diagnose=False
-    )
-    
     logger.info(f"Logging initialized with level: {log_level}")
     logger.info(f"Log directory: {os.path.abspath(log_dir)}")
 

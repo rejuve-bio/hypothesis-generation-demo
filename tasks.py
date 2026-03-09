@@ -151,7 +151,7 @@ def extract_causal_gene_from_graph(graph, variant_nodes):
 
 
 ### Enrich Tasks
-@task(retries=2, cache_policy=None)
+@task(retries=2)
 def check_enrich(current_user_id, variant, phenotype, hypothesis_id):
     """Check if enrichment exists for variant and phenotype"""
     try: 
@@ -351,7 +351,7 @@ def retry_get_relevant_gene_proof(variant, hypothesis_id, seed):
         )
         raise
         
-@task(cache_policy=None)
+@task()
 def create_enrich_data(user_id, project_id, variant, phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id):
     """Create enrichment data with project references"""
     try:
@@ -403,7 +403,7 @@ def create_enrich_data(user_id, project_id, variant, phenotype, causal_gene, rel
         raise
 
 ### Hypothesis Tasks
-@task(cache_policy=None, retries=2)
+@task(retries=2)
 def check_hypothesis(current_user_id, enrich_id, go_id, hypothesis_id):
     try:
         emit_task_update(
@@ -444,7 +444,7 @@ def check_hypothesis(current_user_id, enrich_id, go_id, hypothesis_id):
         )
         raise
 
-@task(cache_policy=None, retries=2)
+@task(retries=2)
 def get_enrich(current_user_id, enrich_id, hypothesis_id):
     try:
         emit_task_update(
@@ -629,7 +629,7 @@ def summarize_graph(causal_graph, hypothesis_id):
         )
         raise
 
-@task(cache_policy=None, retries=2)
+@task(retries=2)
 def create_hypothesis(enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id, hypothesis_id):
     try:
         emit_task_update(
