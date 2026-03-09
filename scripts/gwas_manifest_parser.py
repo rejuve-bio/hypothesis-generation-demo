@@ -198,6 +198,27 @@ class GWASManifestParser:
         # Try to extract file size from wget command or filename
         file_size = self._extract_file_size(wget_command, filename, aws_url)
         
+        # Extract sample_size 
+        sample_size_raw = (
+            normalized_row.get('sample_size') or
+            normalized_row.get('n') or
+            normalized_row.get('n_complete_samples') or
+            normalized_row.get('n_cases') or
+            ''
+        )
+        sample_size = self._parse_sample_size(sample_size_raw)
+        
+        genome_build = (
+            normalized_row.get('ref_genome') or
+            normalized_row.get('genome_build') or
+            normalized_row.get('build') or
+            normalized_row.get('reference_genome') or
+            ''
+        )
+        genome_build = genome_build.strip()
+        if not genome_build:
+            genome_build = self._infer_genome_build_from_filename(filename)
+        
         # Build the entry (filename is the unique ID)
         entry = {
             'file_id': filename,  # Use filename as unique ID
@@ -216,6 +237,10 @@ class GWASManifestParser:
         
         if file_size:
             entry['file_size'] = file_size
+        if sample_size is not None:
+            entry['sample_size'] = sample_size
+        if genome_build:
+            entry['genome_build'] = genome_build
         
         return entry
     
@@ -274,6 +299,33 @@ class GWASManifestParser:
             display = display[:57] + '...'
         
         return display
+    
+    def _parse_sample_size(self, raw: str) -> Optional[int]:
+        """
+        Parse sample size from manifest column. Returns int or None if invalid/missing.
+        """
+        if not raw or not str(raw).strip():
+            return None
+        try:
+            val = int(float(str(raw).strip().replace(',', '')))
+            return val if val > 0 else None
+        except (ValueError, TypeError):
+            return None
+    
+    def _infer_genome_build_from_filename(self, filename: str) -> str:
+        """
+        Infer genome build from filename. UK Biobank imputed_v3 = GRCh37.
+        """
+        fn_lower = filename.lower()
+        if 'hg38' in fn_lower or 'grch38' in fn_lower or 'b38' in fn_lower:
+            return 'GRCh38'
+        if 'hg19' in fn_lower or 'grch37' in fn_lower or 'b37' in fn_lower:
+            return 'GRCh37'
+        # UK Biobank imputed_v3 = GRCh37
+        if 'imputed_v3' in fn_lower:
+            return 'GRCh37'
+        # Default for UK Biobank round2
+        return 'GRCh37'
     
     def _extract_file_size(self, wget_command: str, filename: str, url: str) -> Optional[int]:
         """

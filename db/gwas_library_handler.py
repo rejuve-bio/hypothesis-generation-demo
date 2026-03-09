@@ -314,6 +314,8 @@ class GWASLibraryHandler(BaseHandler):
                 entry.setdefault('minio_path', None)
                 entry.setdefault('file_size', None)
                 entry.setdefault('last_accessed', None)
+                entry.setdefault('sample_size', None)
+                entry.setdefault('genome_build', None)
                 
                 try:
                     # Insert with unique constraint on file_id
