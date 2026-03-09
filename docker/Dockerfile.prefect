@@ -26,10 +26,10 @@ COPY pyproject.toml .
 RUN uv sync
 
 # Install dependencies for the virutal environment
-RUN pip install -U prefect open-cravat
+# RUN pip install -U prefect open-cravat
 
 # Install the annotators
-RUN oc module install-base && oc module install clinvar cosmic --yes
+# RUN oc module install-base && oc module install clinvar cosmic --yes
 
 # Copy application code
 COPY . /app

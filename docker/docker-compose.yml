@@ -4,8 +4,11 @@ services:
 
   mongo:
     image: mongo:latest
-    ports:
-      - "27096:27017"
+    # ports:
+    #   - "27099:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
     volumes:
       - mongo-data:/data/db
     networks:
@@ -13,21 +16,23 @@ services:
 
   prolog-service:
     build:
-      context: .
-      dockerfile: Dockerfile.prolog
+      context: ..
+      dockerfile: docker/Dockerfile.prolog
     ports:
-      - "4291:4242"
+      - "4242:4242"
     volumes:
-      - ./pl:/app/pl
-      - /mnt/hdd_1/tesnim/version1/prolog_out_v2:/mnt/prolog_out_v2
-      - /mnt/hdd_1/tesnim/version1/prolog_out_v3:/mnt/prolog_out_v3
+      - ../pl:/app/pl
+      # - /mnt/hdd_1/tesnim/version1/prolog_out_v2:/mnt/prolog_out_v2
+      # - /mnt/hdd_1/tesnim/version1/prolog_out_v3:/mnt/prolog_out_v3
+      - /mnt/hdd_1/biocypher-kg/output/human/prolog_out_v2:/mnt/prolog_out_v2
+      - /mnt/hdd_1/biocypher-kg/output/human/prolog_out_v3:/mnt/prolog_out_v3
     networks:
       - app_network
 
   dask-scheduler:
     build:
-      context: .
-      dockerfile: Dockerfile  
+      context: ..
+      dockerfile: docker/Dockerfile
     hostname: dask-scheduler
     ports:
       - "8786:8786" 
@@ -36,12 +41,12 @@ services:
       - PYTHONPATH=/app
       - SKIP_SEED=true 
     volumes:
-      - .:/app
+      - ..:/app
     entrypoint: []
     command: >
       sh -c "uv run dask scheduler --host 0.0.0.0 --port 8786 --dashboard-address :8787"
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.connect(('localhost', 8786))"]
+      test: ["CMD", "python", "-c", "from dask.distributed import Client; c = Client('tcp://127.0.0.1:8786', connection_limit=1, timeout='5s'); c.close()"]
       interval: 5s
       timeout: 10s
       retries: 20
@@ -51,8 +56,8 @@ services:
 
   dask-worker:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     environment:
       - DASK_ADDRESS=tcp://dask-scheduler:8786
       - PREFECT_API_URL=http://prefect-service:4200/api
@@ -62,12 +67,15 @@ services:
       - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
-      - SKIP_SEED=true 
+      - SKIP_SEED=true
+      - API_HOST=api-service
+      - API_PORT=5000
+      - OPENAI_API_KEY=${OpenAI}
     env_file:
-      - .env
+      - ../.env
     volumes:
-      - .:/app
-      - ./data:/app/data
+      - ..:/app
+      - ../data:/app/data
       - /mnt/hdd_1/rediet/hypothesis-generation-demo/data:/app/data/external_data
     depends_on:
       dask-scheduler:
@@ -78,16 +86,16 @@ services:
         condition: service_started
     command: >
       uv run dask worker tcp://dask-scheduler:8786 
-      --nworkers 8
+      --nworkers 4
       --nthreads 1 
-      --memory-limit 0 
+      --memory-limit 40GB
       --preload dask_preload
     deploy:
       mode: replicated
       replicas: 1  
       resources:
         limits:
-          cpus: '32.0'   
+          cpus: '64.0'   
           memory: 180G    
 
     networks:
@@ -95,10 +103,10 @@ services:
 
   api-service:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     ports:
-      - "5098:5000"
+      - "5008:5000"
     environment:
       - FLASK_ENV=development
       - PREFECT_API_URL=http://prefect-service:4200/api
@@ -109,40 +117,49 @@ services:
       - GO_MAP=/app/data/go_map.pkl
       - SWIPL_HOST=prolog-service
       - SWIPL_PORT=4242
+      - OPENAI_API_KEY=${OpenAI}
+      - REDIS_URL=redis://redis:6379
     env_file:
-      - .env
+      - ../.env
     volumes:
-      - .:/app
-      - ./data:/app/data
+      - ..:/app
+      - ../data:/app/data
     depends_on:
-      - mongo
-      - prefect-service
-      - dask-scheduler
+      mongo:
+        condition: service_started
+      prefect-service:
+        condition: service_healthy
+      dask-scheduler:
+        condition: service_healthy
+      redis:
+        condition: service_started
     command: >
-      uv run python main.py 
-      --ensembl-hgnc-map data/ensembl_to_hgnc.pkl 
-      --hgnc-ensembl-map data/hgnc_to_ensembl.pkl 
-      --go-map data/go_map.pkl 
-      --swipl-host prolog-service 
-      --swipl-port 4242
+      uv run gunicorn "server:create_app_with_config"
+      --workers 4
+      --worker-class uvicorn.workers.UvicornWorker
+      --bind 0.0.0.0:5000
+      --timeout 120
+      --graceful-timeout 30
+      --keep-alive 5
+      --access-logfile -
+      --error-logfile -
     networks:
       - app_network
-
   prefect-service:
     build:
-      context: .
-      dockerfile: Dockerfile.prefect
+      context: ..
+      dockerfile: docker/Dockerfile.prefect
     ports:
       - "4292:4200"
     volumes:
-      - .:/app
+      - ..:/app
       - prefect-data:/root/.prefect 
     environment:
       - PREFECT_API_URL=http://localhost:4200/api
       - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
       - DASK_ADDRESS=tcp://dask-scheduler:8786
     env_file:
-      - .env
+      - ../.env
     command: > 
       sh -c "uv run prefect server start --host 0.0.0.0"
     networks:
@@ -156,22 +173,36 @@ services:
   
   prefect-deployment:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
+    deploy:
+      resources:
+        limits:
+          memory: 8G
     volumes:
-      - .:/app
-      - ./data:/app/data
+      - ..:/app
+      - ../data:/app/data
       - /mnt/hdd_1/rediet/hypothesis-generation-demo/data:/app/data/external_data
     env_file:
-      - .env
+      - ../.env
     command: >
-      sh -c "
-      uv run python deployments.py 
-      --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl 
-      --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl 
-      --go-map /app/data/go_map.pkl 
-      --swipl-host prolog-service 
-      --swipl-port 4242
+      bash -c "
+      echo '--- 1. Enforcing Safety Limits (Creating Pools) ---' &&
+      uv run prefect work-pool create 'analysis-pool' --type process --overwrite &&
+      uv run prefect work-pool update 'analysis-pool' --concurrency-limit 3 &&
+      uv run prefect work-pool create 'interactive-pool' --type process --overwrite &&
+      uv run prefect work-pool update 'interactive-pool' --concurrency-limit 10 &&
+      uv run prefect concurrency-limit create harmonize_tag 2 || true &&
+
+      echo '--- 2. Registering Flows ---' &&
+      uv run python deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl --go-map /app/data/go_map.pkl --swipl-host prolog-service --swipl-port 4242 &&
+
+      echo '--- 3. Starting The Chefs (Workers) ---' &&
+      uv run prefect worker start --pool 'analysis-pool' --name 'heavy-worker' &
+      uv run prefect worker start --pool 'interactive-pool' --name 'light-worker' &
+      
+      echo '--- 4. Keeping Container Alive ---' &&
+      tail -f /dev/null
       "
     environment:
       - PREFECT_API_URL=http://prefect-service:4200/api
@@ -181,6 +212,9 @@ services:
       - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
+      - API_HOST=api-service
+      - API_PORT=5000
+      - OPENAI_API_KEY=${OpenAI}
     depends_on:
       prefect-service:
         condition: service_healthy
@@ -188,6 +222,13 @@ services:
         condition: service_started
       mongo:
         condition: service_started
+    networks:
+      - app_network
+  
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6399:6379"
     networks:
       - app_network
 
