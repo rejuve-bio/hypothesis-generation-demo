@@ -47,14 +47,12 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
     # Convert to absolute paths
     gwas_file = os.path.abspath(gwas_file)
     output_prefix = os.path.abspath(output_prefix)
+    output_dir = os.path.dirname(output_prefix)
     
-    # Use the LDSC data directory
-    ldsc_data_dir = "data/ldsc"
-    
-    # Convert SSF format to LDSC format
-    gwas_filename = os.path.basename(gwas_file)
-    ldsc_gwas_filename = gwas_filename.replace('.tsv.gz', '.ldsc.tsv.gz').replace('.h.tsv.gz', '.ldsc.tsv.gz')
-    local_gwas_path = os.path.join(ldsc_data_dir, ldsc_gwas_filename)
+    ldsc_data_dir = os.path.abspath("data/ldsc")
+    ldsc_work_dir = os.path.join(output_dir, "ldsc_analysis")
+    os.makedirs(ldsc_work_dir, exist_ok=True)
+    local_gwas_path = os.path.abspath(os.path.join(ldsc_work_dir, "gwas_input.ldsc.tsv.gz"))
     
     logger.info(f"Converting SSF format to LDSC format...")
     try:
@@ -82,50 +80,55 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
         ldsc_df.to_csv(local_gwas_path, sep='\t', index=False, compression='gzip')
         logger.info(f"Converted GWAS file saved to: {local_gwas_path}")
         
-        gwas_filename = ldsc_gwas_filename  # Use the converted file
-        
     except Exception as e:
         logger.error(f"Failed to convert SSF to LDSC format: {e}")
         shutil.copy2(gwas_file, local_gwas_path)
         logger.warning(f"Using original file without conversion: {local_gwas_path}")
     
-    # Use the wrapper script from Dockerfile
+    # Use the wrapper script from Dockerfile; cwd= for subprocess (no os.chdir - thread-safe)
     cmd = [
         '/usr/local/bin/ldsc',  # Uses the wrapper script that activates conda env
-        '--h2-cts', gwas_filename,
+        '--h2-cts', local_gwas_path,  # absolute path - project-specific file
         '--ref-ld-chr', '1000G_Phase3_baselineLD_ldscores/baselineLD.',
         '--out', output_prefix,
         '--ref-ld-chr-cts', 'Multi_tissue_gene_expr_gtex.ldcts',
         '--w-ld-chr', '1000G_Phase3_weights_hm3_no_MHC/weights.hm3_noMHC.'
     ]
     
-    original_dir = os.getcwd()
-    os.chdir(ldsc_data_dir)
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+        cwd=ldsc_data_dir,
+    )
     
-    try:
-        process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, universal_newlines=True
-        )
-        
-        output_lines = []
-        while True:
-            output = process.stdout.readline()
-            if output == '' and process.poll() is not None:
-                break
-            if output:
-                logger.info(output.strip())
-                output_lines.append(output.strip())
-        
-        rc = process.poll()
-        if rc != 0:
-            logger.error(f"LDSC command failed with return code: {rc}")
-            raise RuntimeError(f"LDSC failed with return code: {rc}")
-        
-        logger.info("LDSC command completed successfully")
-        return True
-    finally:
-        os.chdir(original_dir)
+    output_lines = []
+    while True:
+        output = process.stdout.readline()
+        if output == '' and process.poll() is not None:
+            break
+        if output:
+            logger.info(output.strip())
+            output_lines.append(output.strip())
+    
+    rc = process.poll()
+    if rc != 0:
+        logger.error(f"LDSC command failed with return code: {rc}")
+        raise RuntimeError(f"LDSC failed with return code: {rc}")
+    
+    # Clean up intermediate file to save disk space
+    if os.path.exists(local_gwas_path):
+        try:
+            os.remove(local_gwas_path)
+            logger.info(f"[LDSC] Cleaned up intermediate file: {local_gwas_path}")
+        except OSError as e:
+            logger.warning(f"[LDSC] Could not remove intermediate file: {e}")
+    
+    logger.info("LDSC command completed successfully")
+    return True
 
 
 @task(log_prints=True)
@@ -353,6 +356,8 @@ def map_tissues_to_cellxgene(top_tissues, gtex_uberon_mapping, cellxgene_uberon_
     
     return ontology_mapping_results
 
+
+@task(log_prints=True)
 def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k=500, batch_size=1000):
     logger.info(f"Starting coexpression analysis for gene '{gene}' in tissue '{tissue_uberon_id}'")
     
@@ -565,7 +570,7 @@ def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k
         
         return top_positive, top_negative, all_genes_list
 
-@task(log_prints=True, cache_policy=None)
+@task(log_prints=True)
 def run_combined_ldsc_tissue_analysis( munged_file, output_dir, project_id, user_id):
     """Combined LDSC + tissue analysis as part of main analysis pipeline"""
     analysis_run_id = None
@@ -593,21 +598,21 @@ def run_combined_ldsc_tissue_analysis( munged_file, output_dir, project_id, user
         
         # Step 1: Setup LDSC environment
         logger.info("[PIPELINE] Setting up LDSC environment...")
-        ldsc_dir = setup_ldsc_environment.submit(ldsc_work_dir).result()
+        ldsc_dir = setup_ldsc_environment(ldsc_work_dir)
         
         # Step 2: Run LDSC analysis
         logger.info("[PIPELINE] Running LDSC heritability analysis...")
         output_prefix = f"{output_dir}/ldsc_project_analysis"
-        ldsc_success = run_ldsc_analysis.submit(ldsc_dir, munged_file, output_prefix).result()
+        ldsc_success = run_ldsc_analysis(ldsc_dir, munged_file, output_prefix)
         
         if not ldsc_success:
             raise RuntimeError("LDSC analysis failed")
         
         # Step 3: Process LDSC results
         logger.info("[PIPELINE] Processing LDSC results...")
-        top_tissues, ldsc_results_data = process_ldsc_results.submit(
+        top_tissues, ldsc_results_data = process_ldsc_results(
             output_dir, "ldsc_project_analysis", 10
-        ).result()
+        )
         
         # Step 4: Tissue mapping analysis
         logger.info("[PIPELINE] Running tissue mapping analysis...")
@@ -615,13 +620,13 @@ def run_combined_ldsc_tissue_analysis( munged_file, output_dir, project_id, user
         os.makedirs(work_dir, exist_ok=True)
         
         # Load ontology mappings
-        gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology = load_ontology_mappings.submit(work_dir).result()
+        gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology = load_ontology_mappings(work_dir)
         
         # Map tissues to CellxGene format
         tissue_names = [t.get('Name', '') for t in ldsc_results_data]
-        ontology_mapping_results = map_tissues_to_cellxgene.submit(
+        ontology_mapping_results = map_tissues_to_cellxgene(
             top_tissues, gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology
-        ).result()
+        )
         
         # Step 5: Save comprehensive results to database        
         gene_expression.save_ldsc_results(analysis_run_id, ldsc_results_data)

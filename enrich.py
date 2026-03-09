@@ -35,9 +35,9 @@ class Enrich:
         with open(fallback_path, "rb") as f:
             return pickle.load(f)
     
-    def _get_tissue_uberon_id(self, user_id: str, project_id: str, tissue_name: str) -> Optional[str]:
+    def get_tissue_uberon_id(self, user_id: str, project_id: str, tissue_name: str) -> Optional[str]:
         """
-        Retrieve UBERON ID from database for a given tissue name.
+        Retrieve UBERON ID from database for a given tissue name (public, for flow use).
         """
         deps = create_dependencies(self.config)
         gene_expression = deps['gene_expression']
@@ -74,44 +74,46 @@ class Enrich:
 
         return ensembl_ids
 
-    def get_coexpression_net(self, relevant_gene, tissue_name=None, cell_type=None, k=500, user_id=None, project_id=None):
+    def get_coexpression_net(self, relevant_gene, tissue_name=None, cell_type=None, k=500, user_id=None, project_id=None, coexpression_data=None):
         """
         Given a gene, tissue and cell_type, return the top correlated genes using CellxGene API.
+        If coexpression_data is provided (top_positive_tuples, top_negative_tuples, all_genes), use it
+        instead of computing (allows Dask-offloaded pre-computation).
         """
-        if not tissue_name:
+        if coexpression_data is not None:
+            top_positive_tuples, top_negative_tuples, all_genes = coexpression_data
+        elif not tissue_name:
             return self._load_fallback_coexpression_data()
-        
-        if not user_id or not project_id:
+        elif not user_id or not project_id:
             logger.warning(f"user_id and project_id required for tissue-specific analysis, falling back to hardcoded data")
             return self._load_fallback_coexpression_data()
-        
-        try:
-            # Get UBERON ID from database
-            tissue_uberon_id = self._get_tissue_uberon_id(user_id, project_id, tissue_name)
-            
-            if not tissue_uberon_id:
-                logger.warning(f"No UBERON ID found for tissue '{tissue_name}', falling back to hardcoded data")
+        else:
+            try:
+                # Get UBERON ID from database
+                tissue_uberon_id = self.get_tissue_uberon_id(user_id, project_id, tissue_name)
+                
+                if not tissue_uberon_id:
+                    logger.warning(f"No UBERON ID found for tissue '{tissue_name}', falling back to hardcoded data")
+                    return self._load_fallback_coexpression_data()
+                
+                logger.info(f"Using tissue mapping from database: {tissue_name} -> {tissue_uberon_id}")
+                
+                # Run tissue-specific coexpression analysis using UBERON ID (inline - not Dask)
+                top_positive_tuples, top_negative_tuples, all_genes = get_coexpression_matrix_for_tissue(
+                    relevant_gene, tissue_uberon_id, cell_type, k=k
+                )
+            except Exception as e:
+                logger.error(f"Error running CellxGene coexpression analysis: {e}")
                 return self._load_fallback_coexpression_data()
-            
-            logger.info(f"Using tissue mapping from database: {tissue_name} -> {tissue_uberon_id}")
-            
-            # Run tissue-specific coexpression analysis using UBERON ID
-            top_positive_tuples, top_negative_tuples, all_genes = get_coexpression_matrix_for_tissue(
-                relevant_gene, tissue_uberon_id, cell_type, k=k
-            )
-            
-            # Extract gene symbols from tuples
-            if top_positive_tuples and isinstance(top_positive_tuples[0], tuple):
-                top_positive_genes = [gene_data[0] for gene_data in top_positive_tuples]
-            else:
-                top_positive_genes = top_positive_tuples
-            
-            # Return both top genes and all genes for background
-            return top_positive_genes, all_genes
-            
-        except Exception as e:
-            logger.error(f"Error running CellxGene coexpression analysis: {e}")
-            return self._load_fallback_coexpression_data()
+        
+        # Extract gene symbols from tuples
+        if top_positive_tuples and isinstance(top_positive_tuples[0], tuple):
+            top_positive_genes = [gene_data[0] for gene_data in top_positive_tuples]
+        else:
+            top_positive_genes = top_positive_tuples
+        
+        # Return both top genes and all genes for background
+        return top_positive_genes, all_genes
 
 
     def _process_enrichment_results(self, res: pd.DataFrame) -> pd.DataFrame:
@@ -138,15 +140,19 @@ class Enrich:
         res = res[["ID", "Term", "Desc", "Adjusted P-value", "Genes"]].copy()        
         return res
 
-    def run(self, relevant_gene, tissue_name=None, user_id=None, project_id=None):
+    def run(self, relevant_gene, tissue_name=None, user_id=None, project_id=None, coexpression_data=None):
         """
         Given a gene, return the enriched GO terms based on its co-expression network.
+        If coexpression_data is provided (from Dask task), use it instead of computing.
         """
         library = "GO_Biological_Process_2023"
         organism = "Human"
         
-        # Get coexpressed genes
-        coexpression_result = self.get_coexpression_net(relevant_gene, tissue_name, user_id=user_id, project_id=project_id)
+        # Get coexpressed genes (or use pre-computed from Dask)
+        coexpression_result = self.get_coexpression_net(
+            relevant_gene, tissue_name, user_id=user_id, project_id=project_id,
+            coexpression_data=coexpression_data
+        )
         
         # Handle different return types (tuple for tissue-specific, list for fallback)
         if isinstance(coexpression_result, tuple):

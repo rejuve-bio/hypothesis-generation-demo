@@ -22,7 +22,8 @@ from project_tasks import (
 )
 
 from gene_expression_tasks import (
-run_combined_ldsc_tissue_analysis
+    run_combined_ldsc_tissue_analysis,
+    get_coexpression_matrix_for_tissue,
 )
 
 import pandas as pd
@@ -157,8 +158,18 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                 )
                 
                 if selected_tissue:
-                    enrich_tbl = enrichr.run(this_causal_gene, tissue_name=selected_tissue, 
-                                            user_id=current_user_id, project_id=project_id)
+                    # Offload coexpression to Dask (avoids OOM in prefect-deployment)
+                    tissue_uberon_id = enrichr.get_tissue_uberon_id(current_user_id, project_id, selected_tissue)
+                    coexpression_data = None
+                    if tissue_uberon_id:
+                        coexpression_data = get_coexpression_matrix_for_tissue.submit(
+                            this_causal_gene, tissue_uberon_id, cell_type=None, k=500
+                        ).result()
+                    enrich_tbl = enrichr.run(
+                        this_causal_gene, tissue_name=selected_tissue,
+                        user_id=current_user_id, project_id=project_id,
+                        coexpression_data=coexpression_data
+                    )
                 else:
                     enrich_tbl = enrichr.run(this_causal_gene)
                 
