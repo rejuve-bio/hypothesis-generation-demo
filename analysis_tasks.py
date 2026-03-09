@@ -116,8 +116,8 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
     return result
 
 # === NEXTFLOW HARMONIZATION ===
-@task(cache_policy=None)
-def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh38", 
+@task(tags=["harmonize_tag"])
+def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh37", 
                                      ref_dir=None, code_repo=None, script_dir=None,
                                      threshold=0.99, sample_size=None, timeout_seconds=14400, 
                                      cleanup_upload=True, user_id=None, project_id=None):
@@ -407,7 +407,7 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         raise
 
 
-@task(cache_policy=None)
+@task()
 def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
     """Filter significant variants from harmonized sumstats."""
     logger.info(f"[FILTER] Filtering variants with p_value < {p_threshold}")
@@ -423,7 +423,7 @@ def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
 
 
 # ===  COJO ANALYSIS ===
-@task(cache_policy=None)
+@task()
 def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold=0.01, population="EUR", ref_genome="GRCh38"):
     """
     Run GCTA COJO analysis per chromosome and combine results.
@@ -1067,7 +1067,7 @@ def create_region_batches(cojo_results, batch_size=3):
     logger.info(f"[BATCH] Created {len(batches)} batches from {len(regions)} regions")
     return batches
 
-@task(retries=3, cache_policy=None)
+@task(retries=3)
 def finemap_region_batch_worker(batch_data):
 
     # Unpack the batch_data tuple
@@ -1323,7 +1323,7 @@ def finemap_region_batch_worker(batch_data):
     return batch_results
 
 # === MEMORY-EFFICIENT DATA SHARING ===
-@task(cache_policy=None)
+@task()
 def save_sumstats_for_workers(sumstats_df, temp_dir=None):
     """Save sumstats to a temporary file for memory-efficient worker access"""
     if temp_dir is None:
@@ -1352,7 +1352,7 @@ def load_sumstats_from_file(temp_path):
         logger.error(f"[WORKER] Error loading sumstats from {temp_path}: {e}")
         return None
 
-@task(cache_policy=None)
+@task()
 def cleanup_sumstats_file(temp_path):
     """Clean up temporary sumstats file after all workers are done"""
     try:

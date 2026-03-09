@@ -136,6 +136,7 @@ def create_dependencies(config):
     minio_storage = create_minio_client_from_env()
     
     return {
+        'config': config,
         'enrichr': enrichr,
         'llm': llm,
         'prolog_query': prolog_query,

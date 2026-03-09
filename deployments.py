@@ -3,8 +3,7 @@
 import os
 import argparse
 import logging
-from prefect import serve
-from flows import enrichment_flow, analysis_pipeline_flow, child_enrichment_batch_flow, hypothesis_flow
+from flows import enrichment_flow, analysis_pipeline_flow, child_enrichment_batch_flow
 from config import Config
 from dotenv import load_dotenv
 
@@ -26,7 +25,6 @@ def parse_deployment_arguments():
 def setup_deployments(config):
     """Create and configure Prefect deployments"""
     
-    # Set environment variables from config for the deployment
     os.environ.update({
         "ENSEMBL_HGNC_MAP": config.ensembl_hgnc_map,
         "HGNC_ENSEMBL_MAP": config.hgnc_ensembl_map,
@@ -35,55 +33,52 @@ def setup_deployments(config):
         "SWIPL_PORT": str(config.swipl_port),
     })
     
-    # 1. Enrichment Deployment
+    job_vars = {"working_dir": "/app"}
+    
+    # 1. Enrichment Deployment (interactive-pool: lighter workloads)
     enrich_deploy = enrichment_flow.to_deployment(
         name="enrichment-flow-deployment",
+        work_pool_name="interactive-pool",
         tags=["background_enrichment", "production"],
         description="Background enrichment processing for gene hypothesis generation",
-        version="1.0.0"
+        version="1.0.0",
+        job_variables=job_vars
     )
 
-    # 2. Analysis Pipeline Deployment
+    # 2. Analysis Pipeline Deployment (analysis-pool: heavy workloads, limit 3)
     analysis_deploy = analysis_pipeline_flow.to_deployment(
         name="analysis-pipeline-deployment",
+        work_pool_name="analysis-pool",
         tags=["analysis", "production"],
         description="GWAS Analysis Pipeline (Harmonization -> Fine-mapping)",
-        version="1.0.0"
+        version="1.0.0",
+        job_variables=job_vars
     )
     
-    # 3. Child Enrichment Batch Deployment
+    # 3. Child Enrichment Batch Deployment (interactive-pool)
     child_batch_deploy = child_enrichment_batch_flow.to_deployment(
         name="child-batch-deployment",
+        work_pool_name="interactive-pool",
         tags=["background_hypothesis", "production"],
         description="Background processing for child enrichment hypotheses",
-        version="1.0.0"
+        version="1.0.0",
+        job_variables=job_vars
     )
 
-    # 4. Hypothesis Generation Deployment
-    hypothesis_deploy = hypothesis_flow.to_deployment(
-        name="hypothesis-generation-deployment",
-        tags=["hypothesis", "production"],
-        description="Generate hypothesis from enrichment data",
-        version="1.0.0"
-    )
-    
-    return [enrich_deploy, analysis_deploy, child_batch_deploy, hypothesis_deploy]
+    return [enrich_deploy, analysis_deploy, child_batch_deploy]
 
 def main():
     """Main deployment service entry point"""
     load_dotenv()
     
-    # Try to get config from arguments first, fallback to environment
     try:
         args = parse_deployment_arguments()
         config = Config.from_args(args)
-        logger.info("✅ Configuration loaded from command line arguments")
+        logger.info("Configuration loaded from command line arguments")
     except SystemExit:
-        # If no args provided, use environment variables
         config = Config.from_env()
-        logger.info("✅ Configuration loaded from environment variables")
+        logger.info("Configuration loaded from environment variables")
     
-    # Validate critical configuration
     if not all([config.ensembl_hgnc_map, config.hgnc_ensembl_map, config.go_map]):
         raise ValueError("Missing required configuration: ensembl_hgnc_map, hgnc_ensembl_map, go_map")
     
@@ -93,9 +88,11 @@ def main():
     
     deployments = setup_deployments(config)
     
-    # Start serving deployments
-    logger.info(f"Serving {len(deployments)} deployments...")
-    serve(*deployments)
+    logger.info(f"Registering {len(deployments)} deployments with Work Pools...")
+    for deployment in deployments:
+        deployment.apply()
+    
+    logger.info("Deployments registered successfully. Workers can now pick up runs.")
 
 if __name__ == "__main__":
     main()
