@@ -13,6 +13,11 @@ services:
       - mongo-data:/data/db
     networks:
       - app_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   prolog-service:
     build:
@@ -22,8 +27,6 @@ services:
       - "4242:4242"
     volumes:
       - ../pl:/app/pl
-      # - /mnt/hdd_1/tesnim/version1/prolog_out_v2:/mnt/prolog_out_v2
-      # - /mnt/hdd_1/tesnim/version1/prolog_out_v3:/mnt/prolog_out_v3
       - /mnt/hdd_1/biocypher-kg/output/human/prolog_out_v2:/mnt/prolog_out_v2
       - /mnt/hdd_1/biocypher-kg/output/human/prolog_out_v3:/mnt/prolog_out_v3
     networks:
@@ -81,7 +84,7 @@ services:
       dask-scheduler:
         condition: service_healthy  
       mongo:
-        condition: service_started
+        condition: service_healthy
       prolog-service:
         condition: service_started
     command: >
@@ -97,7 +100,6 @@ services:
         limits:
           cpus: '64.0'   
           memory: 180G    
-
     networks:
       - app_network
 
@@ -126,13 +128,13 @@ services:
       - ../data:/app/data
     depends_on:
       mongo:
-        condition: service_started
+        condition: service_healthy
       prefect-service:
         condition: service_healthy
       dask-scheduler:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     command: >
       uv run gunicorn "server:create_app_with_config"
       --workers 4
@@ -145,6 +147,25 @@ services:
       --error-logfile -
     networks:
       - app_network
+
+  prefect-postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${PREFECT_DB_USER}
+      POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD}
+      POSTGRES_DB: ${PREFECT_DB_NAME}
+    ports:
+      - "5409:5432" 
+    volumes:
+      - prefect-postgres-data:/var/lib/postgresql/data
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PREFECT_DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   prefect-service:
     build:
       context: ..
@@ -158,6 +179,10 @@ services:
       - PREFECT_API_URL=http://localhost:4200/api
       - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
       - DASK_ADDRESS=tcp://dask-scheduler:8786
+      - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-postgres:5432/${PREFECT_DB_NAME}
+    depends_on:
+      prefect-postgres:
+        condition: service_healthy
     env_file:
       - ../.env
     command: > 
@@ -221,7 +246,7 @@ services:
       dask-scheduler:
         condition: service_started
       mongo:
-        condition: service_started
+        condition: service_healthy
     networks:
       - app_network
   
@@ -231,10 +256,16 @@ services:
       - "6399:6379"
     networks:
       - app_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   mongo-data:
   prefect-data:
+  prefect-postgres-data:
 
 networks:
   app_network:
