@@ -213,15 +213,6 @@ async def handle_task_update(sid: str, data: dict) -> None:
         logger.error(f"[SIO] Error in handle_task_update: {exc}")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Internal bridge: Prefect workers → Socket.IO rooms (HTTP POST path)
-#
-# Prefect workers call emit_task_update() → POST /internal/task-update
-# FastAPI receives it here and uses sio.emit() to push to the room.
-# This is the recommended path; the @sio.on('task_update') handler above is
-# retained as a fallback for any worker still using a Socket.IO client.
-# ──────────────────────────────────────────────────────────────────────────────
-
 @router.post("/internal/task-update", status_code=200)
 async def internal_task_update(
     payload: dict = Body(...),
@@ -811,11 +802,11 @@ async def post_analysis_pipeline(
         form = await request.form()
 
         project_name: str | None = form.get("project_name")
-        phenotype: str | None = form.get("phenotype")
-        ref_genome: str = form.get("ref_genome", "GRCh37")
         population: str = form.get("population", "EUR")
         max_workers: int = int(form.get("max_workers", 3))
         is_uploaded: bool = form.get("is_uploaded", "false").lower() == "true"
+
+        gwas_file = form.get("gwas_file") if is_uploaded else None
 
         maf_threshold: float = float(form.get("maf_threshold", 0.01))
         seed: int = int(form.get("seed", 42))
@@ -834,10 +825,35 @@ async def post_analysis_pipeline(
         storage = _deps.get("storage")
         gwas_library = _deps.get("gwas_library")
 
+        gwas_entry = None
+        file_id_param: str | None = form.get("gwas_file") if not is_uploaded else None
+        
+        if not is_uploaded and file_id_param and gwas_library:
+            gwas_entry = gwas_library.get_gwas_entry(file_id=file_id_param)
+
+        phenotype: str | None = form.get("phenotype")
+        if not phenotype and gwas_entry:
+            phenotype = gwas_entry.get("description") or gwas_entry.get("phenotype_code")
+            # Clean up leading '#' if it exists in the library description
+            if isinstance(phenotype, str) and phenotype.startswith("#"):
+                phenotype = phenotype.lstrip("#").strip()
+
+        raw_ref_genome = form.get("ref_genome")
+        ref_genome: str = raw_ref_genome or "GRCh37"
+        
+        if gwas_entry and (not raw_ref_genome or raw_ref_genome == "GRCh37"):
+            inferred_build = gwas_entry.get("genome_build")
+            if inferred_build:
+                # Normalize common library build string formats
+                if "38" in inferred_build:
+                    ref_genome = "GRCh38"
+                elif "37" in inferred_build or "19" in inferred_build:
+                    ref_genome = "GRCh37"
+
         if not project_name:
             raise HTTPException(status_code=400, detail="project_name is required")
         if not phenotype:
-            raise HTTPException(status_code=400, detail="phenotype is required")
+            raise HTTPException(status_code=400, detail="phenotype is required (could not be inferred from library)")
 
         if is_uploaded and gwas_file and not allowed_file(gwas_file.filename):
             raise HTTPException(
@@ -942,7 +958,6 @@ async def post_analysis_pipeline(
                 file_metadata_id = file_id_param
                 original_filename = filename
             else:
-                gwas_entry = gwas_library.get_gwas_entry(file_id=file_id_param) if gwas_library else None
                 if not gwas_entry:
                     raise HTTPException(
                         status_code=404,
