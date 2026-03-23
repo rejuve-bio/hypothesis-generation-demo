@@ -959,6 +959,12 @@ async def post_analysis_pipeline(
         file_size: int = 0
         gwas_records_count: int = 0
         original_filename: str | None = None
+        file_id_new: str | None = None
+        _file_needs_processing: bool = False
+        _source_minio_path: str | None = None
+        _source_download_url: str | None = None
+        _minio_cache_key: str | None = None
+        _gwas_library_id: str | None = None
 
         if not is_uploaded:
             file_id_param: str | None = form.get("gwas_file")
@@ -981,6 +987,7 @@ async def post_analysis_pipeline(
                 filename = file_meta.get("filename")
                 file_size = file_meta.get("file_size", 0)
                 gwas_records_count = file_meta.get("record_count", 0)
+                original_filename = filename
 
                 if not storage_key:
                     raise HTTPException(
@@ -992,19 +999,11 @@ async def post_analysis_pipeline(
                         status_code=500, detail="Storage service not available"
                     )
 
-                temp_dir = get_shared_temp_dir(
-                    user_id=current_user_id, prefix="user_file"
-                )
-                temp_file_path = os.path.join(temp_dir, filename)
-                if not storage.download_file(storage_key, temp_file_path):
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to retrieve file from storage",
-                    )
-
-                file_path = temp_file_path
+                # Let Prefect download from MinIO — no blocking I/O in the API.
+                file_path = ""
                 file_metadata_id = file_id_param
-                original_filename = filename
+                _file_needs_processing = True
+                _source_minio_path = storage_key
             else:
                 if not gwas_entry:
                     raise HTTPException(
@@ -1015,25 +1014,36 @@ async def post_analysis_pipeline(
                 filename = gwas_entry.get("filename", file_id_param)
                 original_filename = filename
                 minio_path_lib = f"gwas_cache/{filename}"
+                file_size = gwas_entry.get("file_size", 0)
 
                 if storage and gwas_entry.get("downloaded") and gwas_entry.get("minio_path"):
                     minio_path = gwas_entry["minio_path"]
                     loop = asyncio.get_running_loop()
                     file_exists = await loop.run_in_executor(None, storage.exists, minio_path)
                     if file_exists:
-                        temp_dir = get_shared_temp_dir(
-                            user_id=current_user_id, prefix="gwas_cache"
-                        )
-                        candidate = os.path.join(temp_dir, filename)
-                        if storage.download_file(minio_path, candidate):
-                            file_path = candidate
-                            file_size = os.path.getsize(file_path)
+                        # Cached in MinIO — Prefect will download it.
+                        file_path = ""
+                        _file_needs_processing = True
+                        _source_minio_path = minio_path
                     else:
                         gwas_library.update_gwas_entry(
                             file_id_param, {"downloaded": False, "minio_path": None}
                         )
 
-                if not file_path:
+                if not _source_minio_path:
+                    # Check local raw directory (rare edge case, already on disk)
+                    raw_data_path = os.path.join(config.data_dir, "raw")
+                    for ext in (".tsv", ".tsv.gz", ".tsv.bgz", ".txt", ".txt.gz", ".csv", ".csv.gz"):
+                        candidate = os.path.join(raw_data_path, f"{file_id_param}{ext}")
+                        if os.path.exists(candidate):
+                            file_path = candidate
+                            filename = f"{file_id_param}{ext}"
+                            file_size = os.path.getsize(file_path)
+                            _file_needs_processing = True
+                            break
+
+                if not _source_minio_path and not file_path:
+                    # Not cached anywhere — Prefect will download from external URL.
                     download_url = (
                         gwas_entry.get("aws_url")
                         or (
@@ -1043,46 +1053,24 @@ async def post_analysis_pipeline(
                         )
                         or gwas_entry.get("dropbox_url")
                     )
-
                     if not download_url:
                         raise HTTPException(
                             status_code=404,
                             detail=f"No download URL available for {file_id_param}",
                         )
+                    file_path = ""
+                    _file_needs_processing = True
+                    _source_download_url = download_url
+                    _minio_cache_key = minio_path_lib if storage else None
+                    _gwas_library_id = file_id_param
 
-                    temp_dir = get_shared_temp_dir(
-                        user_id=current_user_id, prefix="gwas_download"
-                    )
-                    dl_path = os.path.join(temp_dir, filename)
-                    loop = asyncio.get_running_loop()
-                    file_size = await loop.run_in_executor(
-                        None, _download_to_path_sync, download_url, dl_path
-                    )
-                    file_path = dl_path
-
-                    if storage:
-                        if storage.upload_file(file_path, minio_path_lib):
-                            gwas_library.mark_as_downloaded(
-                                file_id_param, minio_path_lib, file_size
-                            )
-
-                if not file_path:
-                    raw_data_path = os.path.join(config.data_dir, "raw")
-                    for ext in (".tsv", ".tsv.gz", ".tsv.bgz", ".txt", ".txt.gz", ".csv", ".csv.gz"):
-                        candidate = os.path.join(raw_data_path, f"{file_id_param}{ext}")
-                        if os.path.exists(candidate):
-                            file_path = candidate
-                            filename = f"{file_id_param}{ext}"
-                            file_size = os.path.getsize(file_path)
-                            break
-
-                if not file_path:
+                if not _source_minio_path and not _source_download_url and not file_path:
                     raise HTTPException(
                         status_code=404,
                         detail=f"GWAS file not found: {file_id_param}",
                     )
 
-                gwas_records_count = count_gwas_records(file_path)
+                gwas_records_count = 0  # filled in by prepare_gwas_file_task
 
         else:
             # Uploaded file
@@ -1126,30 +1114,16 @@ async def post_analysis_pipeline(
                         detail="Failed to retrieve existing file from storage",
                     )
             else:
-                gwas_records_count = count_gwas_records(temp_file_path)
-
-                if storage:
-                    object_key = f"uploads/{current_user_id}/{file_id_new}/{filename}"
-                    if not storage.upload_file(temp_file_path, object_key):
-                        raise HTTPException(
-                            status_code=500, detail="File upload failed"
-                        )
-                    file_path = temp_file_path
-                    md5_hash_param: str | None = md5_hash
-                else:
-                    user_upload_dir = os.path.join(
-                        "data", "uploads", str(current_user_id)
-                    )
-                    os.makedirs(user_upload_dir, exist_ok=True)
-                    file_path = os.path.join(
-                        user_upload_dir, f"{file_id_new}_{filename}"
-                    )
-                    with open(file_path, "wb") as fh:
-                        fh.write(content)
-                    file_size = os.path.getsize(file_path)
-                    gwas_records_count = count_gwas_records(file_path)
-                    object_key = None
-                    md5_hash_param = None
+                # New file — hand off upload + record counting to the Prefect flow
+                # so this HTTP response returns as soon as project_id is created.
+                file_path = temp_file_path
+                gwas_records_count = 0  # filled in by process_uploaded_file_task
+                object_key = (
+                    f"uploads/{current_user_id}/{file_id_new}/{filename}"
+                    if storage else None
+                )
+                md5_hash_param: str | None = md5_hash if storage else None
+                _file_needs_processing = True
 
         if not file_metadata_id:
             source = "gwas_library" if not is_uploaded else "user_upload"
@@ -1208,7 +1182,7 @@ async def post_analysis_pipeline(
             json.dump(metadata, fh)
 
         total_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"[API] Completed: {filename} in {total_time:.1f}s")
+        logger.info(f"[API] Project {project_id} ready in {total_time:.1f}s, firing Prefect")
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
@@ -1228,6 +1202,14 @@ async def post_analysis_pipeline(
                 coverage=coverage,
                 min_abs_corr=min_abs_corr,
                 sample_size=sample_size,
+                file_metadata_id=file_metadata_id if _file_needs_processing else None,
+                file_needs_processing=_file_needs_processing,
+                file_storage_key=object_key if _file_needs_processing else None,
+                file_id_new=file_id_new if _file_needs_processing else None,
+                file_source_minio_path=_source_minio_path,
+                file_source_download_url=_source_download_url,
+                file_minio_cache_key=_minio_cache_key,
+                file_gwas_library_id=_gwas_library_id,
             ),
         )
 

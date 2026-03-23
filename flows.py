@@ -18,8 +18,8 @@ from analysis_tasks import (
 )
 
 from project_tasks import (
-    save_analysis_state_task, create_analysis_result_task, 
-    get_project_analysis_path_task
+    save_analysis_state_task, create_analysis_result_task,
+    get_project_analysis_path_task, prepare_gwas_file_task,
 )
 
 from gene_expression_tasks import (
@@ -459,10 +459,14 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
     persist_result=False, 
     task_runner=DaskTaskRunner(address=os.getenv("DASK_ADDRESS"))
 )
-def analysis_pipeline_flow(user_id, project_id, gwas_file_path, ref_genome="GRCh38", 
+def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome="GRCh38",
                            population="EUR", batch_size=5, max_workers=3,
-                           maf_threshold=0.01, seed=42, window=2000, L=-1, 
-                           coverage=0.95, min_abs_corr=0.5, sample_size=None):
+                           maf_threshold=0.01, seed=42, window=2000, L=-1,
+                           coverage=0.95, min_abs_corr=0.5, sample_size=None,
+                           file_metadata_id=None, file_needs_processing=False,
+                           file_storage_key=None, file_id_new=None,
+                           file_source_minio_path=None, file_source_download_url=None,
+                           file_minio_cache_key=None, file_gwas_library_id=None):
     """
     Complete analysis pipeline flow using Prefect for orchestration
     but multiprocessing for fine-mapping batches (R safety)
@@ -479,7 +483,21 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path, ref_genome="GRCh
         # Get project-specific output directory (using Prefect task)
         output_dir = get_project_analysis_path_task.submit(user_id, project_id).result()
         logger.info(f"[PIPELINE] Using output directory: {output_dir}")
-        
+
+        if file_needs_processing:
+            logger.info(f"[PIPELINE] Stage 0: preparing GWAS file")
+            gwas_file_path = prepare_gwas_file_task.submit(
+                user_id, project_id, file_metadata_id, gwas_file_path,
+                storage_key=file_storage_key,
+                file_id_new=file_id_new,
+                source_minio_path=file_source_minio_path,
+                source_download_url=file_source_download_url,
+                minio_cache_key=file_minio_cache_key,
+                gwas_library_id=file_gwas_library_id,
+                output_dir=output_dir,
+            ).result()
+            logger.info(f"[PIPELINE] Stage 0 complete: file ready at {gwas_file_path}")
+
         # Save initial analysis state
         initial_state = {
             "status": "Running",
@@ -503,6 +521,16 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path, ref_genome="GRCh
         else:
             harmonized_file = harmonized_file_result
             harmonized_df = pd.read_csv(harmonized_file, sep='\t', index_col=0)
+
+        # Clean up the raw GWAS input file 
+        if gwas_file_path and os.path.exists(gwas_file_path):
+            try:
+                parent_dir = os.path.dirname(gwas_file_path)
+                import shutil as _shutil
+                _shutil.rmtree(parent_dir, ignore_errors=True)
+                logger.info(f"[PIPELINE] Cleaned up raw GWAS temp dir: {parent_dir}")
+            except Exception as _cleanup_e:
+                logger.warning(f"[PIPELINE] Could not clean up {gwas_file_path}: {_cleanup_e}")
 
         # Start LDSC + tissue analysis immediately after harmonization (runs in parallel)
         logger.info(f"[PIPELINE] Starting LDSC + tissue analysis in parallel after harmonization")
