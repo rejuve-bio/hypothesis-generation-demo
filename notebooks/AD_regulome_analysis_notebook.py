@@ -508,62 +508,53 @@ def __(mo):
 
 @app.cell
 def __(subprocess, os, all_cell_types, python27_path):
-    from concurrent.futures import ProcessPoolExecutor
+    import concurrent.futures
     import multiprocessing
 
     os.makedirs("data/ldscores", exist_ok=True)
     HM3_SNP_LIST = "data/reference/hm3_no_MHC.list.txt"
-
     def calculate_single_chrom(args):
-        import os, subprocess
-        ct, chrom, py_path, hm3 = args
+        ct, chrom = args
         out_dir = f"data/ldscores/{ct}"
         os.makedirs(out_dir, exist_ok=True)
-
+        
         ldscore_file = f"{out_dir}/{ct}.{chrom}.l2.ldscore.gz"
         if os.path.exists(ldscore_file):
-            return f"[{ct}] Chr {chrom} skipped (exists)"
+            return f"[{ct}] Chr {chrom} already exists. Skipping."
 
         try:
             subprocess.run([
-                py_path, "tools/ldsc/ldsc.py",
+                python27_path, "tools/ldsc/ldsc.py",
                 "--l2",
                 "--bfile",      f"data/reference/GRCh38/plink_files/1000G.EUR.hg38.{chrom}",
                 "--ld-wind-cm", "1.0",
                 "--annot",      f"data/annotations/{ct}.{chrom}.annot.gz",
                 "--thin-annot",
-                "--print-snps", hm3,
+                "--print-snps", HM3_SNP_LIST,
                 "--out",        f"{out_dir}/{ct}.{chrom}"
             ], check=True, capture_output=True)
-            return f"[{ct}] Chr {chrom} done"
-        except subprocess.CalledProcessError as e:
-            return f"ERROR [{ct}] Chr {chrom}: {e.stderr[:200]}"
-
-    tasks = [
-        (ct, chrom, python27_path, HM3_SNP_LIST)
-        for ct in all_cell_types
-        for chrom in range(1, 23)
-        if not os.path.exists(f"data/ldscores/{ct}/{ct}.{chrom}.l2.ldscore.gz")
-    ]
-
-    print(f"{len(tasks)} chromosome-level tasks remaining")
-
-    if tasks:
-        max_workers = min(multiprocessing.cpu_count() - 2, 22)
-        print(f"Running with {max_workers} workers...")
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            for result in executor.map(calculate_single_chrom, tasks):
-                print(result)
+            return f"[{ct}] Chr {chrom} calculation complete."
+        except subprocess.CalledProcessError as e: 
+            return f"ERROR on [{ct}] Chr {chrom}: {e.stderr}"
+    tasks = []
+    for ct in all_cell_types:
+        for chrom in range(1, 23):
+            tasks.append((ct, chrom))
+    max_workers = min(multiprocessing.cpu_count() - 1, 6)
+    
+    print(f"Starting parallel LDSC calculation with {max_workers} workers...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for result in executor.map(calculate_single_chrom, tasks):
+            print(result)
 
     print("\nAll LD scores calculated using HapMap3 SNPs")
     return
 
 
 
-
 @app.cell
 def __(mo):
-    mo.md("## 7. Create CTS (cell-type–specific) reference file") 
+    mo.md("## 7. Create CTS (cell-type–specific) reference file")
     return
 
 
@@ -610,8 +601,7 @@ def __(cts_path, python27_path, SUMSTATS_FILE, RESULTS_PREFIX, os, subprocess):
 
     else:
         os.makedirs("results", exist_ok=True)
-
-        print("Running LDSC cell-type–specific heritability analysis (single run)...")
+        print("Running LDSC cell-type–specific heritability analysis...")
 
         subprocess.run([
             python27_path, "tools/ldsc/ldsc.py",
