@@ -193,6 +193,53 @@ async def handle_subscribe(sid: str, data: dict | str) -> dict:
         return {"error": str(exc)}
 
 
+@sio.on("subscribe_analysis")
+async def handle_subscribe_analysis(sid: str, data: dict | str) -> dict:
+    """Join an analysis pipeline room and push the current saved analysis state."""
+    try:
+        session = await sio.get_session(sid)
+        user_id: str | None = session.get("user_id")
+        if not user_id:
+            return {"error": "Authentication required"}
+
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                return {"error": "Invalid JSON format"}
+
+        if not isinstance(data, dict) or "project_id" not in data:
+            return {"error": 'Expected format: {"project_id": "value"}'}
+
+        project_id: str | None = data.get("project_id")
+        if not project_id:
+            return {"error": "project_id is required"}
+
+        projects = _deps["projects"]
+        project = projects.get_projects(user_id, project_id)
+        if not project:
+            raise ValueError("Project not found or access denied")
+
+        room = f"analysis_{project_id}"
+        await sio.enter_room(sid, room)
+        logger.info(f"[SIO] {sid} joined room '{room}'")
+
+        analysis_state = projects.load_analysis_state(user_id, project_id) or {}
+        response_data = {
+            "project_id": project_id,
+            "user_id": user_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds") + "Z",
+            **analysis_state,
+        }
+        response_data = serialize_datetime_fields(response_data)
+        await sio.emit("analysis_update", response_data, to=sid)
+        return {"status": "subscribed", "room": room}
+
+    except Exception as exc:
+        logger.error(f"[SIO] Error in subscribe_analysis: {exc}")
+        return {"error": str(exc)}
+
+
 @sio.on("task_update")
 async def handle_task_update(sid: str, data: dict) -> None:
     try:
@@ -223,9 +270,10 @@ async def internal_task_update(
     if not target_room:
         raise HTTPException(status_code=400, detail="target_room is required")
 
-    await sio.emit("task_update", payload, room=target_room)
-    logger.info(f"[HTTP bridge] Broadcast task_update to room '{target_room}'")
-    return {"status": "broadcasted", "room": target_room}
+    event_name = payload.pop("event", "task_update")
+    await sio.emit(event_name, payload, room=target_room)
+    logger.info(f"[HTTP bridge] Broadcast {event_name} to room '{target_room}'")
+    return {"status": "broadcasted", "room": target_room, "event": event_name}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -970,7 +1018,9 @@ async def post_analysis_pipeline(
 
                 if storage and gwas_entry.get("downloaded") and gwas_entry.get("minio_path"):
                     minio_path = gwas_entry["minio_path"]
-                    if storage.exists(minio_path):
+                    loop = asyncio.get_running_loop()
+                    file_exists = await loop.run_in_executor(None, storage.exists, minio_path)
+                    if file_exists:
                         temp_dir = get_shared_temp_dir(
                             user_id=current_user_id, prefix="gwas_cache"
                         )
@@ -1535,3 +1585,7 @@ async def get_user_files(current_user_id: str = Depends(get_current_user_id)):
         raise HTTPException(
             status_code=500, detail=f"Failed to fetch user files: {exc}"
         )
+
+@router.get("/health")
+async def health_check():
+    return {"status": "healthy"}

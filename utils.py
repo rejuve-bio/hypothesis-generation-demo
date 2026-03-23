@@ -76,6 +76,41 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         logger.info(f"Status saved locally (no delivery): {task_name} – {state}")
 
 
+def emit_analysis_update(user_id, project_id, state_data):
+    """Push analysis pipeline progress to Socket.IO clients in room analysis_{project_id}."""
+    service_token = os.getenv("PREFECT_SERVICE_TOKEN")
+    if not service_token:
+        logger.error("PREFECT_SERVICE_TOKEN not set – analysis update will not be emitted.")
+        return
+
+    api_host = os.getenv("API_HOST") or os.getenv("FLASK_HOST", "localhost")
+    api_port = os.getenv("API_PORT") or os.getenv("FLASK_PORT", "5000")
+    url = f"http://{api_host}:{api_port}/internal/task-update"
+
+    room = f"analysis_{project_id}"
+    payload = {
+        "target_room": room,
+        "event": "analysis_update",
+        "project_id": project_id,
+        "user_id": user_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds") + "Z",
+        **state_data,
+    }
+
+    try:
+        resp = _requests.post(
+            url,
+            json=payload,
+            headers={"Authorization": f"Bearer {service_token}"},
+            timeout=5,
+        )
+        logger.info(
+            f"Emitted analysis update [{resp.status_code}]: project={project_id} "
+            f"stage={state_data.get('stage')} status={state_data.get('status')}"
+        )
+    except Exception as exc:
+        logger.error(f"Failed to POST analysis update to {url}: {exc}")
+
 
 def save_analysis_state(user_id, state):
     """Save the analysis state for the second flow"""

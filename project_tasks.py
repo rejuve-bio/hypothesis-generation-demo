@@ -4,7 +4,7 @@ from prefect import task
 from loguru import logger
 import gzip
 import re
-from utils import get_deps
+from utils import emit_analysis_update, get_deps
 
 
 @task()
@@ -15,6 +15,7 @@ def save_analysis_state_task(user_id, project_id, state_data):
         projects_handler = deps["projects"]
         projects_handler.save_analysis_state(user_id, project_id, state_data)
         logger.info(f"Saved analysis state for project {project_id}")
+        emit_analysis_update(user_id, project_id, state_data)
         return True
     except Exception as e:
         logger.info(f"Error saving analysis state: {str(e)}")
