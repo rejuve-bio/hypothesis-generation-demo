@@ -1,5 +1,6 @@
 from loguru import logger
 from prefect import flow
+from prefect.runtime import flow_run as _prefect_flow_run
 from status_tracker import TaskState
 import multiprocessing as mp
 
@@ -486,6 +487,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path, ref_genome="GRCh
             "progress": 10,
             "message": "Starting Nextflow harmonization",
             "started_at": datetime.now(timezone.utc).isoformat(),
+            "flow_run_id": _prefect_flow_run.id,
         }
         save_analysis_state_task.submit(user_id, project_id, initial_state).result()
         

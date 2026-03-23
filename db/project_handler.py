@@ -2,6 +2,8 @@ from bson.objectid import ObjectId
 from datetime import datetime, timezone
 import os
 import json
+import requests as _req
+from datetime import timedelta
 
 from loguru import logger
 from .base_handler import BaseHandler
@@ -243,14 +245,73 @@ class ProjectHandler(BaseHandler):
         """Save analysis state to file"""
         state_path = self.get_analysis_state_path(user_id, project_id)
         os.makedirs(os.path.dirname(state_path), exist_ok=True)
-        
+        data = {**state_data, "state_updated_at": datetime.now(timezone.utc).isoformat()}
         with open(state_path, 'w') as f:
-            json.dump(state_data, f, default=str)
+            json.dump(data, f, default=str)
 
     def load_analysis_state(self, user_id, project_id):
         """Load analysis state from file"""
         state_path = self.get_analysis_state_path(user_id, project_id)
-        if os.path.exists(state_path):
-            with open(state_path, 'r') as f:
-                return json.load(f)
-        return None
+        if not os.path.exists(state_path):
+            return None
+        with open(state_path, 'r') as f:
+            state = json.load(f)
+        if state.get("status") == "Running":
+            reconciled = self._reconcile_running_state(state)
+            if reconciled["status"] != "Running":
+                logger.info(
+                    f"[ProjectHandler] Reconciled stale Running state for project "
+                    f"{project_id} → {reconciled['status']}"
+                )
+                self.save_analysis_state(user_id, project_id, reconciled)
+                return reconciled
+        return state
+
+    def _reconcile_running_state(self, state: dict) -> dict:
+        """
+        Verify whether a Running state is still running.
+        """
+        flow_run_id = state.get("flow_run_id")
+        if flow_run_id:
+            prefect_url = os.getenv("PREFECT_API_URL", "http://prefect-service:4200/api")
+            try:
+                resp = _req.get(f"{prefect_url}/flow_runs/{flow_run_id}", timeout=3)
+                if resp.status_code == 200:
+                    prefect_state_type = resp.json().get("state", {}).get("type", "")
+                    terminal_failed = {"FAILED", "CRASHED"}
+                    terminal_ok = {"COMPLETED"}
+                    terminal_stopped = {"CANCELLED"}
+                    if prefect_state_type in terminal_failed:
+                        return {**state, "status": "Failed",
+                                "message": f"Pipeline {prefect_state_type.lower()} (confirmed via Prefect)"}
+                    if prefect_state_type in terminal_ok:
+                        return {**state, "status": "Completed",
+                                "message": "Pipeline completed (confirmed via Prefect)"}
+                    if prefect_state_type in terminal_stopped:
+                        return {**state, "status": "Interrupted",
+                                "message": "Pipeline was cancelled"}
+                    return state
+            except Exception as prefect_exc:
+                logger.warning(f"[ProjectHandler] Could not reach Prefect API to reconcile run {flow_run_id}: {prefect_exc}")
+
+        # time-based staleness check
+        staleness_minutes = int(os.getenv("ANALYSIS_STALENESS_MINUTES", "360"))
+        updated_at_str = state.get("state_updated_at")
+        if updated_at_str:
+            try:
+                updated_at = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+                age = datetime.now(timezone.utc) - updated_at
+                if age > timedelta(minutes=staleness_minutes):
+                    hours = int(age.total_seconds() / 3600)
+                    return {
+                        **state,
+                        "status": "Interrupted",
+                        "message": (
+                            f"Pipeline status unconfirmed: no update for {hours}h "
+                            f"(process may have been terminated)"
+                        ),
+                    }
+            except Exception:
+                pass
+
+        return state
