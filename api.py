@@ -999,7 +999,6 @@ async def post_analysis_pipeline(
                         status_code=500, detail="Storage service not available"
                     )
 
-                # Let Prefect download from MinIO — no blocking I/O in the API.
                 file_path = ""
                 file_metadata_id = file_id_param
                 _file_needs_processing = True
@@ -1031,7 +1030,7 @@ async def post_analysis_pipeline(
                         )
 
                 if not _source_minio_path:
-                    # Check local raw directory (rare edge case, already on disk)
+                    # Check local raw directory 
                     raw_data_path = os.path.join(config.data_dir, "raw")
                     for ext in (".tsv", ".tsv.gz", ".tsv.bgz", ".txt", ".txt.gz", ".csv", ".csv.gz"):
                         candidate = os.path.join(raw_data_path, f"{file_id_param}{ext}")
@@ -1114,10 +1113,8 @@ async def post_analysis_pipeline(
                         detail="Failed to retrieve existing file from storage",
                     )
             else:
-                # New file — hand off upload + record counting to the Prefect flow
-                # so this HTTP response returns as soon as project_id is created.
                 file_path = temp_file_path
-                gwas_records_count = 0  # filled in by process_uploaded_file_task
+                gwas_records_count = 0
                 object_key = (
                     f"uploads/{current_user_id}/{file_id_new}/{filename}"
                     if storage else None

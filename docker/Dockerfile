@@ -117,9 +117,8 @@ RUN Rscript -e " \
 
 # Install vautils from GitHub
 RUN Rscript -e " \
-    library(devtools); \
     withr::with_envvar(c('GITHUB_PAT' = ''), { \
-        install_github('oyhel/vautils', upgrade='never') \
+        remotes::install_github('oyhel/vautils', upgrade='never') \
     }) \
     "
 
