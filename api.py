@@ -960,6 +960,7 @@ async def post_analysis_pipeline(
         gwas_records_count: int = 0
         original_filename: str | None = None
         file_id_new: str | None = None
+        object_key: str | None = None
         _file_needs_processing: bool = False
         _source_minio_path: str | None = None
         _source_download_url: str | None = None

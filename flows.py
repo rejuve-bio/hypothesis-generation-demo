@@ -571,7 +571,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         logger.info(f"[PIPELINE] Stage 3: COJO analysis")
        
         config = Config.from_env()
-        plink_dir = config.get_plink_dir(ref_genome)
+        plink_dir = config.plink_dir_38
         cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, maf_threshold=maf_threshold, population=population, ref_genome=ref_genome).result()
         
         # Extract the actual DataFrame

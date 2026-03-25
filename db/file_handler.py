@@ -52,6 +52,15 @@ class FileHandler(BaseHandler):
         })
         return result.deleted_count > 0
     
+    def update_file_metadata(self, file_id: str, updates: dict) -> bool:
+        """Patch specific fields on an existing file metadata record."""
+        updates = {**updates, "updated_at": datetime.now(timezone.utc)}
+        result = self.file_metadata_collection.update_one(
+            {"_id": ObjectId(file_id)},
+            {"$set": updates},
+        )
+        return result.matched_count > 0
+
     def find_file_by_md5(self, user_id, md5_hash):
         """
         Find a file by MD5 hash for a specific user
