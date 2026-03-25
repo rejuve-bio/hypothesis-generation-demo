@@ -179,6 +179,8 @@ COPY . .
 # Make entrypoint script executable
 RUN chmod +x /app/entrypoint.sh
 
+# Clone gwas-sumstats-harmoniser repository
+RUN git clone https://github.com/EBISPOT/gwas-sumstats-harmoniser.git
 # Create separate Python environment for harmonizer
 RUN python3 -m venv /opt/harmonizer-venv
 
