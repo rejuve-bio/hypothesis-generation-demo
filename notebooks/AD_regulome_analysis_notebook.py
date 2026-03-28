@@ -270,7 +270,7 @@ def __(subprocess, os):
 
     nested_files = [
         ("data/reference/GRCh38/baselineLD_v2.2.tgz", "data/reference", "baselineLD_v2.2"),
-        ("data/reference/GRCh38/plink_files.tgz", "data/reference/GRCh38", "plink_files/1000G.EUR.hg38.1.bim"), 
+        ("data/reference/GRCh38/plink_files.tgz", "data/reference/GRCh38", "plink_files/1000G.EUR.hg38.1.bim"),
         ("data/reference/GRCh38/weights.tgz", "data/reference/GRCh38", "weights")
     ]
 
@@ -306,36 +306,43 @@ def __(GWAS_INPUT_FILE, SSF_FILE, SSF_YAML, pd, os, gzip, subprocess, hashlib, d
         print(f"Converting {GWAS_INPUT_FILE} -> {SSF_FILE}")
 
         _df = pd.read_csv(GWAS_INPUT_FILE, sep="\t", compression="gzip")
-        _cols_lower = {col.lower(): col for col in _df.columns}
-        _col_map = {}
 
-        if "variant" in _cols_lower:
-            print("Detected Neale format")
-            _df[['chromosome', 'base_pair_location', 'other_allele', 'effect_allele']] = \
-                _df[_cols_lower['variant']].str.split(':', expand=True)
+        _has_hm = any(c.startswith("hm_") for c in _df.columns)
+
+        if _has_hm:
+            print("Detected GWAS Catalog harmonised format (hm_ columns)")
+            _df2 = pd.DataFrame()
+            _df2['chromosome']            = _df['hm_chrom'].astype(str)
+            _df2['base_pair_location']    = pd.to_numeric(_df['hm_pos'], errors='coerce')
+            _df2['effect_allele']         = _df['hm_effect_allele'].str.upper()
+            _df2['other_allele']          = _df['hm_other_allele'].str.upper()
+            _df2['beta']                  = pd.to_numeric(_df['hm_beta'], errors='coerce')
+            _df2['standard_error']        = pd.to_numeric(_df['standard_error'], errors='coerce')
+            _df2['p_value']               = pd.to_numeric(_df['p_value'], errors='coerce')
+            _df2['effect_allele_frequency'] = pd.to_numeric(_df['hm_effect_allele_frequency'], errors='coerce').fillna('NA')
+            _df2['rsid']                  = _df['hm_rsid'].fillna('NA')
+            _df = _df2
         else:
-            print("Detected PLINK/standard format")
-            _col_map['chromosome'] = _cols_lower.get('chr') or _cols_lower.get('chrom') or _cols_lower.get('chromosome')
-            _col_map['base_pair_location'] = _cols_lower.get('bp') or _cols_lower.get('pos') or _cols_lower.get('base_pair_location')
-            _col_map['effect_allele'] = _cols_lower.get('a1') or _cols_lower.get('effect_allele')
-            _col_map['other_allele'] = _cols_lower.get('a2') or _cols_lower.get('other_allele')
-
-        _col_map['beta'] = _cols_lower.get('beta')
-        _col_map['standard_error'] = _cols_lower.get('se') or _cols_lower.get('stderr') or _cols_lower.get('standard_error')
-        _col_map['p_value'] = _cols_lower.get('p') or _cols_lower.get('pval') or _cols_lower.get('p_value')
-        _col_map['effect_allele_frequency'] = (
-            _cols_lower.get('a1_freq') or _cols_lower.get('frq') or
-            _cols_lower.get('af') or _cols_lower.get('effect_allele_frequency')
-        )
-        _col_map['rsid'] = (
-            _cols_lower.get('id') or _cols_lower.get('snp') or
-            _cols_lower.get('rsid') or _cols_lower.get('variant_id')
-        )
-        _col_map['n_total'] = _cols_lower.get('n') or _cols_lower.get('n_total') or _cols_lower.get('sample_size')
-
-        if "variant" not in _cols_lower:
-            _rename_map = {v: k for k, v in _col_map.items() if v is not None}
-            _df = _df.rename(columns=_rename_map)
+            _cols_lower = {col.lower(): col for col in _df.columns}
+            if "variant" in _cols_lower:
+                print("Detected Neale format")
+                _df[['chromosome', 'base_pair_location', 'other_allele', 'effect_allele']] = \
+                    _df[_cols_lower['variant']].str.split(':', expand=True)
+            else:
+                print("Detected PLINK/standard format")
+                _col_map = {}
+                _col_map['chromosome']          = _cols_lower.get('chr') or _cols_lower.get('chrom') or _cols_lower.get('chromosome')
+                _col_map['base_pair_location']  = _cols_lower.get('bp') or _cols_lower.get('pos') or _cols_lower.get('base_pair_location')
+                _col_map['effect_allele']       = _cols_lower.get('a1') or _cols_lower.get('effect_allele')
+                _col_map['other_allele']        = _cols_lower.get('a2') or _cols_lower.get('other_allele')
+                _col_map['beta']                = _cols_lower.get('beta')
+                _col_map['standard_error']      = _cols_lower.get('se') or _cols_lower.get('stderr') or _cols_lower.get('standard_error')
+                _col_map['p_value']             = _cols_lower.get('p') or _cols_lower.get('pval') or _cols_lower.get('p_value')
+                _col_map['effect_allele_frequency'] = _cols_lower.get('a1_freq') or _cols_lower.get('frq') or _cols_lower.get('af') or _cols_lower.get('effect_allele_frequency')
+                _col_map['rsid']                = _cols_lower.get('id') or _cols_lower.get('snp') or _cols_lower.get('rsid') or _cols_lower.get('variant_id')
+                _col_map['n_total']             = _cols_lower.get('n') or _cols_lower.get('n_total') or _cols_lower.get('sample_size')
+                _rename_map = {v: k for k, v in _col_map.items() if v is not None}
+                _df = _df.rename(columns=_rename_map)
 
         _df['chromosome'] = _df['chromosome'].astype(str).str.replace('chr', '', regex=False)
         _df['chromosome'] = _df['chromosome'].replace({'23': 'X', '24': 'Y', '26': 'MT'})
@@ -344,18 +351,12 @@ def __(GWAS_INPUT_FILE, SSF_FILE, SSF_YAML, pd, os, gzip, subprocess, hashlib, d
         _df = _df[~_df['chromosome'].isin(['X', 'Y', 'MT'])]
         print(f"  Removed {_before - len(_df)} variants on sex/MT chromosomes")
 
-        _df['base_pair_location'] = pd.to_numeric(_df['base_pair_location'], errors='coerce')
-        _df['effect_allele'] = _df['effect_allele'].str.upper()
-        _df['other_allele'] = _df['other_allele'].str.upper()
-        _df['effect_allele_frequency'] = _df['effect_allele_frequency'].fillna('NA') if 'effect_allele_frequency' in _df.columns else 'NA'
-        _df['rsid'] = _df['rsid'].fillna('NA') if 'rsid' in _df.columns else 'NA'
-
         _ssf_cols = ['chromosome', 'base_pair_location', 'effect_allele', 'other_allele',
                      'beta', 'standard_error', 'p_value', 'effect_allele_frequency', 'rsid']
         if 'n_total' in _df.columns:
             _ssf_cols.append('n_total')
 
-        _df_ssf = _df[_ssf_cols]
+        _df_ssf = _df[[c for c in _ssf_cols if c in _df.columns]]
         _df_ssf.to_csv(SSF_FILE, sep="\t", index=False, compression="gzip")
 
         subprocess.run(
@@ -374,7 +375,7 @@ coordinate_system: 1-based
 data_file_name: {os.path.basename(SSF_FILE)}
 file_type: GWAS-SSF v0.1
 data_file_md5sum: {_md5}
-is_harmonised: false
+is_harmonised: true
 is_sorted: false
 """)
         print("SSF conversion complete")
@@ -414,18 +415,12 @@ def __(SSF_FILE, SUMSTATS_FILE, pd, np, os):
 
         _ldsc['A1'] = _df['effect_allele'].str.upper()
         _ldsc['A2'] = _df['other_allele'].str.upper()
-        _ldsc['Z'] = _df['beta'] / _df['standard_error']
-
-        _n_col = next((c for c in _df.columns if c.lower() in ['n', 'n_total', 'sample_size']), None)
-        if _n_col:
-            _ldsc['N'] = 1030836
-            print(f"Using N from column '{_n_col}' (median: {int(_df[_n_col].median()):,})")
-        else:
-            print("WARNING: No N column found. Columns available:", list(_df.columns))
-            _ldsc['N'] = np.nan
+        _ldsc['Z']  = pd.to_numeric(_df['beta'], errors='coerce') / pd.to_numeric(_df['standard_error'], errors='coerce')
+        _ldsc['N']  = 1030836
+        print("Using hardcoded N = 1,030,836 (Nielsen et al. 2018 AF GWAS)")
 
         if 'p_value' in _df.columns:
-            _ldsc['P'] = _df['p_value']
+            _ldsc['P'] = pd.to_numeric(_df['p_value'], errors='coerce')
 
         _before = len(_ldsc)
         _ldsc = _ldsc[np.isfinite(_ldsc['Z'])]
@@ -436,7 +431,7 @@ def __(SSF_FILE, SUMSTATS_FILE, pd, np, os):
         _ldsc = _ldsc.drop_duplicates(subset=['SNP'])
         if _before > len(_ldsc):
             print(f"Removed {_before - len(_ldsc)} duplicate variants")
- 
+
         print(f"Output: {len(_ldsc)} variants")
         _ldsc.to_csv(SUMSTATS_FILE, sep='\t', index=False, compression='gzip')
 
@@ -513,11 +508,12 @@ def __(subprocess, os, all_cell_types, python27_path):
 
     os.makedirs("data/ldscores", exist_ok=True)
     HM3_SNP_LIST = "data/reference/hm3_no_MHC.list.txt"
+
     def calculate_single_chrom(args):
         ct, chrom = args
         out_dir = f"data/ldscores/{ct}"
         os.makedirs(out_dir, exist_ok=True)
-        
+
         ldscore_file = f"{out_dir}/{ct}.{chrom}.l2.ldscore.gz"
         if os.path.exists(ldscore_file):
             return f"[{ct}] Chr {chrom} already exists. Skipping."
@@ -534,14 +530,15 @@ def __(subprocess, os, all_cell_types, python27_path):
                 "--out",        f"{out_dir}/{ct}.{chrom}"
             ], check=True, capture_output=True)
             return f"[{ct}] Chr {chrom} calculation complete."
-        except subprocess.CalledProcessError as e: 
+        except subprocess.CalledProcessError as e:
             return f"ERROR on [{ct}] Chr {chrom}: {e.stderr}"
+
     tasks = []
     for ct in all_cell_types:
         for chrom in range(1, 23):
             tasks.append((ct, chrom))
     max_workers = min(multiprocessing.cpu_count() - 1, 6)
-    
+
     print(f"Starting parallel LDSC calculation with {max_workers} workers...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         for result in executor.map(calculate_single_chrom, tasks):
@@ -549,7 +546,6 @@ def __(subprocess, os, all_cell_types, python27_path):
 
     print("\nAll LD scores calculated using HapMap3 SNPs")
     return
-
 
 
 @app.cell
@@ -591,9 +587,7 @@ def __(mo):
 
 
 @app.cell
-def __(cts_path, python27_path, SUMSTATS_FILE, RESULTS_PREFIX, os, subprocess, pd):
-    import concurrent.futures as _concurrent_futures
-    import math as _math
+def __(cts_path, python27_path, SUMSTATS_FILE, RESULTS_PREFIX, os, subprocess):
 
     _final_output = f"{RESULTS_PREFIX}.cell_type_results"
 
@@ -608,50 +602,51 @@ def __(cts_path, python27_path, SUMSTATS_FILE, RESULTS_PREFIX, os, subprocess, p
 
     else:
         os.makedirs("results", exist_ok=True)
+        print("Running LDSC cell-type–specific heritability analysis...")
 
-        with open(cts_path) as _f:
-            _all_lines = _f.readlines()
+        subprocess.run([
+            python27_path, "tools/ldsc/ldsc.py",
+            "--h2-cts",         SUMSTATS_FILE,
+            "--ref-ld-chr",     "data/reference/baselineLD_v2.2/baselineLD.",
+            "--ref-ld-chr-cts", cts_path,
+            "--w-ld-chr",       "data/reference/GRCh38/weights/weights.hm3_noMHC.",
+            "--out",            RESULTS_PREFIX,
+        ], check=True)
 
-        _N_BATCHES = 4
-        _batch_size = _math.ceil(len(_all_lines) / _N_BATCHES)
-        _batches = [_all_lines[i:i+_batch_size] for i in range(0, len(_all_lines), _batch_size)]
-
-        _batch_cts_files = []
-        for _i, _batch in enumerate(_batches):
-            _batch_cts = f"{cts_path}.batch{_i}.cts"
-            with open(_batch_cts, "w") as _f:
-                _f.writelines(_batch)
-            _batch_cts_files.append((_i, _batch_cts))
-
-        def _run_batch(args):
-            _i, _batch_cts = args
-            _batch_out = f"{RESULTS_PREFIX}_batch{_i}"
-            print(f"Starting batch {_i} ({len(_batches[_i])} cell types)...")
-            subprocess.run([
-                python27_path, "tools/ldsc/ldsc.py",
-                "--h2-cts",         SUMSTATS_FILE,
-                "--ref-ld-chr",     "data/reference/baselineLD_v2.2/baselineLD.",
-                "--ref-ld-chr-cts", _batch_cts,
-                "--w-ld-chr",       "data/reference/GRCh38/weights/weights.hm3_noMHC.",
-                "--out",            _batch_out,
-            ], check=True)
-            print(f"Batch {_i} done!")
-            return f"{_batch_out}.cell_type_results"
-
-        print(f"Running {_N_BATCHES} batches in parallel...")
-        with _concurrent_futures.ThreadPoolExecutor(max_workers=_N_BATCHES) as _executor:
-            _result_files = list(_executor.map(_run_batch, _batch_cts_files))
-
-        _dfs = [pd.read_csv(_f, sep="\t") for _f in _result_files if os.path.exists(_f)]
-        _merged = pd.concat(_dfs).sort_values("Coefficient_P_value")
-        _merged.to_csv(_final_output, sep="\t", index=False)
-
-        for _, _batch_cts in _batch_cts_files:
-            os.remove(_batch_cts)
-
-        print(f"Done! {len(_merged)} cell types analyzed.")
+        print("LDSC CTS analysis completed")
 
     return
+
+
+@app.cell
+def __(RESULTS_PREFIX, pd, os):
+    results_file = f"{RESULTS_PREFIX}.cell_type_results.txt"
+
+    if not os.path.exists(results_file):
+        print(f"Results file not found: {results_file}")
+        ranked = None
+    else:
+        results = pd.read_csv(results_file, sep="\t")
+
+        ranked = results.sort_values("Coefficient_P_value")
+
+        ranked_csv = f"{RESULTS_PREFIX}_ranked_by_pvalue.csv"
+        ranked_txt = f"{RESULTS_PREFIX}_ranked_by_pvalue.txt"
+
+        ranked.to_csv(ranked_csv, index=False)
+        ranked.to_csv(ranked_txt, sep="\t", index=False)
+
+        print("\nTop enriched cell types:\n")
+        print(
+            ranked[
+                ["Name", "Coefficient", "Coefficient_std_error", "Coefficient_P_value"]
+            ].head(10).to_string(index=False)
+        )
+
+        print(f"\nRanked CSV saved to: {ranked_csv}")
+        print(f"Ranked TXT saved to: {ranked_txt}")
+    return (ranked,)
+
 
 if __name__ == "__main__":
     app.run()
