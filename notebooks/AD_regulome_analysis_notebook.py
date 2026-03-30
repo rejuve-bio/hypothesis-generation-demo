@@ -28,23 +28,23 @@ from *Epigenomic dissection of Alzheimer's disease pinpoints causal variants and
 
 All analyses are performed using **GRCh38 / hg38** coordinates.
 """)
-    return 
+    return
 
 
 @app.cell
 def __(mo):
-    GWAS_INPUT_FILE = "data/gwas/28714975-GCST004787-EFO_0001645.h.tsv.gz.2"
+    GWAS_INPUT_FILE = "data/gwas/6152_9.gwas.imputed_v3.both_sexes.tsv.bgz"
     gwas_stem = mo.state(GWAS_INPUT_FILE)
     return (GWAS_INPUT_FILE, gwas_stem)
 
 
 @app.cell
-def __(GWAS_INPUT_FILE, os): 
+def __(GWAS_INPUT_FILE, os):
     import re as _re
 
     _basename = os.path.basename(GWAS_INPUT_FILE)
     _no_ext = _basename
-    for _ext in [".tsv.gz", ".txt.gz", ".gz", ".tsv", ".txt", ".csv"]: 
+    for _ext in [".tsv.gz", ".txt.gz", ".gz", ".tsv", ".txt", ".csv"]:
         if _no_ext.endswith(_ext):
             _no_ext = _no_ext[: -len(_ext)]
             break
@@ -297,7 +297,7 @@ def __(mo):
 
 
 @app.cell
-def __(GWAS_INPUT_FILE, SSF_FILE, SSF_YAML, pd, os, gzip, subprocess, hashlib, datetime): 
+def __(GWAS_INPUT_FILE, SSF_FILE, SSF_YAML, pd, os, gzip, subprocess, hashlib, datetime):
     os.makedirs("data/ssf", exist_ok=True)
 
     if os.path.exists(SSF_FILE):
@@ -305,51 +305,85 @@ def __(GWAS_INPUT_FILE, SSF_FILE, SSF_YAML, pd, os, gzip, subprocess, hashlib, d
     else:
         print(f"Converting {GWAS_INPUT_FILE} -> {SSF_FILE}")
 
-        _df = pd.read_csv(GWAS_INPUT_FILE, sep="\t", compression="gzip")
+        _compression = "gzip" if GWAS_INPUT_FILE.endswith((".gz", ".bgz")) else None
+        _sep = r"\s+" if GWAS_INPUT_FILE.endswith((".txt", ".txt.gz")) else "\t"
+        _engine = "c" if GWAS_INPUT_FILE.endswith(".bgz") else "python"
+        _df = pd.read_csv(GWAS_INPUT_FILE, sep=_sep, compression=_compression, engine=_engine)
+
+        print(f"  Columns detected: {list(_df.columns)}")
 
         _has_hm = any(c.startswith("hm_") for c in _df.columns) and _df['hm_chrom'].notna().any()
 
         if _has_hm:
             print("Detected GWAS Catalog harmonised format (hm_ columns)")
             _df2 = pd.DataFrame()
-            _df2['chromosome']            = _df['hm_chrom'].astype(str)
-            _df2['base_pair_location']    = pd.to_numeric(_df['hm_pos'], errors='coerce')
-            _df2['effect_allele']         = _df['hm_effect_allele'].str.upper()
-            _df2['other_allele']          = _df['hm_other_allele'].str.upper()
-            _df2['beta']                  = pd.to_numeric(_df['hm_beta'], errors='coerce')
-            _df2['standard_error']        = pd.to_numeric(_df['standard_error'], errors='coerce')
-            _df2['p_value']               = pd.to_numeric(_df['p_value'], errors='coerce')
+            _df2['chromosome']              = _df['hm_chrom'].astype(str)
+            _df2['base_pair_location']      = pd.to_numeric(_df['hm_pos'], errors='coerce')
+            _df2['effect_allele']           = _df['hm_effect_allele'].str.upper()
+            _df2['other_allele']            = _df['hm_other_allele'].str.upper()
+            _df2['beta']                    = pd.to_numeric(_df['hm_beta'], errors='coerce')
+            _df2['standard_error']          = pd.to_numeric(_df['standard_error'], errors='coerce')
+            _df2['p_value']                 = pd.to_numeric(_df['p_value'], errors='coerce')
             _df2['effect_allele_frequency'] = pd.to_numeric(_df['hm_effect_allele_frequency'], errors='coerce').fillna('NA')
-            _df2['rsid']                  = _df['hm_rsid'].fillna('NA')
+            _df2['rsid']                    = _df['hm_rsid'].fillna('NA')
             _df = _df2
         else:
             _cols_lower = {col.lower(): col for col in _df.columns}
+
             if "variant" in _cols_lower:
                 print("Detected Neale format")
                 _df[['chromosome', 'base_pair_location', 'other_allele', 'effect_allele']] = \
                     _df[_cols_lower['variant']].str.split(':', expand=True)
+                _cols_lower = {col.lower(): col for col in _df.columns}
+                _col_map = {}
+                _col_map['standard_error'] = _cols_lower.get('se') or _cols_lower.get('stderr')
+                _col_map['p_value']        = _cols_lower.get('pval') or _cols_lower.get('p_value') or _cols_lower.get('p')
+                _col_map['n_total']        = _cols_lower.get('n_complete_samples') or _cols_lower.get('n') or _cols_lower.get('n_total')
+                _col_map['effect_allele_frequency'] = _cols_lower.get('minor_af') or _cols_lower.get('af') or _cols_lower.get('freq')
+                _rename_map = {v: k for k, v in _col_map.items() if v is not None}
+                _df = _df.rename(columns=_rename_map)
             else:
                 print("Detected PLINK/standard format")
                 _col_map = {}
-                _col_map['chromosome']          = _cols_lower.get('chr') or _cols_lower.get('chrom') or _cols_lower.get('chromosome')
-                _col_map['base_pair_location']  = _cols_lower.get('bp') or _cols_lower.get('pos') or _cols_lower.get('base_pair_location')
-                _col_map['effect_allele']       = _cols_lower.get('a1') or _cols_lower.get('effect_allele')
-                _col_map['other_allele']        = _cols_lower.get('a2') or _cols_lower.get('other_allele')
-                _col_map['beta'] = _cols_lower.get('beta') or _cols_lower.get('logor')
-                _col_map['n_total'] = _cols_lower.get('n_samples') or _cols_lower.get('n') or _cols_lower.get('n_total') or _cols_lower.get('sample_size')
-                _col_map['standard_error']      = _cols_lower.get('se') or _cols_lower.get('stderr') or _cols_lower.get('standard_error')
-                _col_map['p_value']             = _cols_lower.get('p') or _cols_lower.get('pval') or _cols_lower.get('p_value')
-                _col_map['effect_allele_frequency'] = _cols_lower.get('a1_freq') or _cols_lower.get('frq') or _cols_lower.get('af') or _cols_lower.get('effect_allele_frequency')
-                _col_map['rsid']                = _cols_lower.get('id') or _cols_lower.get('snp') or _cols_lower.get('rsid') or _cols_lower.get('variant_id')
+                _col_map['chromosome']              = _cols_lower.get('chr') or _cols_lower.get('chrom') or _cols_lower.get('chromosome')
+                _col_map['base_pair_location']      = _cols_lower.get('bp') or _cols_lower.get('pos') or _cols_lower.get('base_pair_location')
+                _col_map['effect_allele']           = _cols_lower.get('a1') or _cols_lower.get('effect_allele') or _cols_lower.get('allele1') or _cols_lower.get('alt')
+                _col_map['other_allele']            = _cols_lower.get('a2') or _cols_lower.get('other_allele') or _cols_lower.get('allele2') or _cols_lower.get('ref')
+                _col_map['beta']                    = _cols_lower.get('beta') or _cols_lower.get('logor') or _cols_lower.get('log_odds') or _cols_lower.get('effect')
+                _col_map['standard_error']          = _cols_lower.get('se') or _cols_lower.get('stderr') or _cols_lower.get('standard_error') or _cols_lower.get('stderrlogor') or _cols_lower.get('se_beta')
+                _col_map['p_value']                 = _cols_lower.get('p') or _cols_lower.get('pval') or _cols_lower.get('p_value') or _cols_lower.get('pvalue') or _cols_lower.get('p.value')
+                _col_map['effect_allele_frequency'] = _cols_lower.get('freq') or _cols_lower.get('a1_freq') or _cols_lower.get('frq') or _cols_lower.get('af') or _cols_lower.get('eaf') or _cols_lower.get('effect_allele_frequency')
+                _col_map['rsid']                    = _cols_lower.get('markername') or _cols_lower.get('snp') or _cols_lower.get('rsid') or _cols_lower.get('id') or _cols_lower.get('variant_id') or _cols_lower.get('snpid')
+                _col_map['n_total']                 = _cols_lower.get('n') or _cols_lower.get('n_total') or _cols_lower.get('n_samples') or _cols_lower.get('sample_size') or _cols_lower.get('neff')
+
                 _rename_map = {v: k for k, v in _col_map.items() if v is not None}
                 _df = _df.rename(columns=_rename_map)
 
-        _df['chromosome'] = _df['chromosome'].astype(str).str.replace('chr', '', regex=False)
-        _df['chromosome'] = _df['chromosome'].replace({'23': 'X', '24': 'Y', '26': 'MT'})
+                if 'effect_allele' in _df.columns:
+                    _df['effect_allele'] = _df['effect_allele'].astype(str).str.upper()
+                if 'other_allele' in _df.columns:
+                    _df['other_allele'] = _df['other_allele'].astype(str).str.upper()
 
-        _before = len(_df)
-        _df = _df[~_df['chromosome'].isin(['X', 'Y', 'MT'])]
-        print(f"  Removed {_before - len(_df)} variants on sex/MT chromosomes")
+        if 'chromosome' in _df.columns:
+            _df['chromosome'] = _df['chromosome'].astype(str).str.replace('chr', '', regex=False).str.strip()
+            _df['chromosome'] = _df['chromosome'].replace({'23': 'X', '24': 'Y', '26': 'MT'})
+            _before = len(_df)
+            _df = _df[~_df['chromosome'].isin(['X', 'Y', 'MT', 'nan', 'None', ''])]
+            _df = _df.dropna(subset=['chromosome', 'base_pair_location'])
+            _df = _df[_df['chromosome'].astype(str).str.strip().str.match(r'^\d+$')]
+            print(f"  Removed {_before - len(_df)} variants on sex/MT/invalid chromosomes")
+        else:
+            print("  No chromosome column found — will use rsID for SNP matching")
+
+        if 'effect_allele_frequency' not in _df.columns:
+            _df['effect_allele_frequency'] = 'NA'
+        else:
+            _df['effect_allele_frequency'] = _df['effect_allele_frequency'].fillna('NA')
+
+        if 'rsid' not in _df.columns:
+            _df['rsid'] = 'NA'
+        else:
+            _df['rsid'] = _df['rsid'].fillna('NA')
 
         _ssf_cols = ['chromosome', 'base_pair_location', 'effect_allele', 'other_allele',
                      'beta', 'standard_error', 'p_value', 'effect_allele_frequency', 'rsid']
@@ -357,6 +391,10 @@ def __(GWAS_INPUT_FILE, SSF_FILE, SSF_YAML, pd, os, gzip, subprocess, hashlib, d
             _ssf_cols.append('n_total')
 
         _df_ssf = _df[[c for c in _ssf_cols if c in _df.columns]]
+
+        print(f"  SSF columns: {list(_df_ssf.columns)}")
+        print(f"  SSF rows: {len(_df_ssf)}")
+
         _df_ssf.to_csv(SSF_FILE, sep="\t", index=False, compression="gzip")
 
         subprocess.run(
@@ -369,13 +407,13 @@ def __(GWAS_INPUT_FILE, SSF_FILE, SSF_YAML, pd, os, gzip, subprocess, hashlib, d
 
         with open(SSF_YAML, 'w') as _f:
             _f.write(f"""# Study meta-data
-date_metadata_last_modified: {datetime.now().strftime('%Y-%m-%d')} 
+date_metadata_last_modified: {datetime.now().strftime('%Y-%m-%d')}
 genome_assembly: GRCh38
 coordinate_system: 1-based
 data_file_name: {os.path.basename(SSF_FILE)}
 file_type: GWAS-SSF v0.1
 data_file_md5sum: {_md5}
-is_harmonised: true
+is_harmonised: false
 is_sorted: false
 """)
         print("SSF conversion complete")
@@ -388,7 +426,7 @@ def __(mo):
     mo.md("## 4. Convert SSF to LDSC format")
     return
 
-#TODO: Extract "N" directly from the metadata
+
 @app.cell
 def __(SSF_FILE, SUMSTATS_FILE, pd, np, os):
     os.makedirs("data/ldsc_input", exist_ok=True)
@@ -396,28 +434,36 @@ def __(SSF_FILE, SUMSTATS_FILE, pd, np, os):
     if os.path.exists(SUMSTATS_FILE):
         print(f"LDSC sumstats file already exists: {SUMSTATS_FILE}")
     else:
-        print(f"Converting {SSF_FILE} -> {SUMSTATS_FILE}") 
+        print(f"Converting {SSF_FILE} -> {SUMSTATS_FILE}")
 
         _df = pd.read_csv(SSF_FILE, sep='\t', compression='gzip')
         print(f"Input: {len(_df)} variants")
 
-        _ldsc = pd.DataFrame() 
+        _ldsc = pd.DataFrame()
 
-        if 'rsid' in _df.columns and (_df['rsid'] != 'NA').any():
-            _ldsc['SNP'] = _df['rsid']
-            _missing = (_ldsc['SNP'].isna()) | (_ldsc['SNP'] == 'NA')
-            _ldsc.loc[_missing, 'SNP'] = (
-                _df.loc[_missing, 'chromosome'].astype(str) + ':' +
-                _df.loc[_missing, 'base_pair_location'].astype(str)
+        _has_rsid = 'rsid' in _df.columns and (_df['rsid'] != 'NA').any() and _df['rsid'].notna().any()
+        _has_chrpos = 'chromosome' in _df.columns and 'base_pair_location' in _df.columns
+
+        if _has_rsid:
+            _ldsc['SNP'] = _df['rsid'].astype(str)
+            if _has_chrpos:
+                _missing = (_ldsc['SNP'].isna()) | (_ldsc['SNP'] == 'NA') | (_ldsc['SNP'] == 'nan')
+                _ldsc.loc[_missing, 'SNP'] = (
+                    _df.loc[_missing, 'chromosome'].astype(float).astype(int).astype(str) + ':' +
+                    _df.loc[_missing, 'base_pair_location'].astype(float).astype(int).astype(str)
+                )
+        elif _has_chrpos:
+            _ldsc['SNP'] = (
+                _df['chromosome'].astype(float).astype(int).astype(str) + ':' +
+                _df['base_pair_location'].astype(float).astype(int).astype(str)
             )
         else:
-            _ldsc['SNP'] = _df['chromosome'].astype(str) + ':' + _df['base_pair_location'].astype(str)
+            raise ValueError("No SNP identifier found — need either rsid or chromosome:position columns")
 
-        _ldsc['A1'] = _df['effect_allele'].str.upper()
-        _ldsc['A2'] = _df['other_allele'].str.upper()
+        _ldsc['A1'] = _df['effect_allele'].astype(str).str.upper()
+        _ldsc['A2'] = _df['other_allele'].astype(str).str.upper()
         _ldsc['Z']  = pd.to_numeric(_df['beta'], errors='coerce') / pd.to_numeric(_df['standard_error'], errors='coerce')
-        _ldsc['N']  = 63731
-        print("Using hardcoded N (Nielsen et al. 2018 AF GWAS)")
+        _ldsc['N']  = 360527
 
         if 'p_value' in _df.columns:
             _ldsc['P'] = pd.to_numeric(_df['p_value'], errors='coerce')
@@ -433,6 +479,7 @@ def __(SSF_FILE, SUMSTATS_FILE, pd, np, os):
             print(f"Removed {_before - len(_ldsc)} duplicate variants")
 
         print(f"Output: {len(_ldsc)} variants")
+        print(f"  Sample SNP IDs: {list(_ldsc['SNP'].head(3))}")
         _ldsc.to_csv(SUMSTATS_FILE, sep='\t', index=False, compression='gzip')
 
         print(f"LDSC format conversion complete")
