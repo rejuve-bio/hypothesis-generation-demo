@@ -25,6 +25,7 @@ dependencies = [
     "pengines",
     "prefect>=2.14.0,<3.0.0",
     "asyncpg",
+    "bokeh>=3.1.0",
 
 
     "requests",

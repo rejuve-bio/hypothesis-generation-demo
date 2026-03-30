@@ -176,7 +176,8 @@ services:
       - ..:/app
       - prefect-data:/root/.prefect 
     environment:
-      - PREFECT_API_URL=http://localhost:4200/api
+      - PREFECT_API_URL=http://prefect-service:4200/api
+      - PREFECT_UI_API_URL=https://dev.rejuve.bio:5054/api
       - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
       - DASK_ADDRESS=tcp://dask-scheduler:8786
       - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-postgres:5432/${PREFECT_DB_NAME}
