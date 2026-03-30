@@ -1,84 +1,25 @@
 from datetime import datetime, timezone
 import os
-from flask import json
 from loguru import logger
-from socketio_instance import socketio
 from status_tracker import status_tracker, TaskState
-import socketio as sio
-import os
+import requests as _requests
 import pandas as pd
 import numpy as np
-import threading
-import time
+import hashlib
+import uuid
+from dask.distributed import get_worker
 
-# Global persistent client for Prefect connections
-_prefect_client = None
-_client_lock = threading.Lock()
-_last_connection_time = 0
-_connection_timeout = 300  # 5 minutes
-
-def _get_or_create_prefect_client():
-    """Get or create a persistent SocketIO client for Prefect updates"""
-    global _prefect_client, _last_connection_time
-    
-    with _client_lock:
-        current_time = time.time()
-        
-        # Check if we need to create a new client or reconnect
-        if (_prefect_client is None or 
-            not _prefect_client.connected or 
-            (current_time - _last_connection_time) > _connection_timeout):
-            
-            # Clean up old client
-            if _prefect_client:
-                try:
-                    _prefect_client.disconnect()
-                except:
-                    pass
-            
-            # Create new client
-            flask_host = os.getenv('FLASK_HOST', 'flask-app')
-            flask_port = os.getenv('FLASK_PORT', '5000')
-            flask_url = f'http://{flask_host}:{flask_port}'
-            
-            service_token = os.getenv('PREFECT_SERVICE_TOKEN')
-            if not service_token:
-                logger.error("Warning: PREFECT_SERVICE_TOKEN not found. Task update will not be emitted.")
-                return None
-            
-            try:
-                _prefect_client = sio.SimpleClient()
-                headers = {'Authorization': f'Bearer {service_token}'}
-                _prefect_client.connect(
-                    flask_url, 
-                    headers=headers, 
-                    transports=['websocket', 'polling'],
-                    wait_timeout=10
-                )
-                _last_connection_time = current_time
-                logger.info(f"Established persistent SocketIO connection to Flask server at {flask_url}")
-                
-            except Exception as e:
-                logger.error(f"Failed to create persistent SocketIO connection: {e}")
-                _prefect_client = None
-                return None
-        
-        return _prefect_client
 
 def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, next_task=None, error=None):
-    """
-    Emits real-time updates via WebSocket - only for progress tracking
-    """
+    """Emit a real-time progress update to WebSocket clients."""
     task_history = status_tracker.get_history(hypothesis_id)
 
-    # Filter to only include 'started' state entries and keep the latest 5
     filtered_history = [entry for entry in task_history if entry["state"] == "completed"]
     latest_5_started_tasks = filtered_history[-5:]
 
     if progress == 0:
         progress = status_tracker.calculate_progress(task_history)
 
-    # Update the status tracker first
     status_tracker.add_update(hypothesis_id, progress, task_name, state, details, error)
 
     room = f"hypothesis_{hypothesis_id}"
@@ -88,7 +29,8 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         "task": task_name,
         "state": state.value,
         "progress": progress,
-        "task_history": latest_5_started_tasks
+        "task_history": latest_5_started_tasks,
+        "target_room": room,
     }
 
     if next_task:
@@ -96,54 +38,78 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
     if error:
         update["error"] = error
         update["status"] = "failed"
-    
-    # Handle completion status
+
     if state == TaskState.COMPLETED:
-        if task_name == "Creating enrich data" or (task_name =="Verifying existence of enrichment data" and progress == 80):
+        if task_name == "Creating enrich data" or (
+            task_name == "Verifying existence of enrichment data" and progress == 80
+        ):
             update["status"] = "Enrichment_completed"
-            update["progress"] = 80  # enrichment completion is 80%
-        elif task_name == "Generating hypothesis" or (task_name == "Verifying existence of hypothesis data" and progress == 100):
+            update["progress"] = 80
+        elif task_name == "Generating hypothesis" or (
+            task_name == "Verifying existence of hypothesis data" and progress == 100
+        ):
             update["status"] = "Hypothesis_completed"
-            update["progress"] = 100  # hypothesis completion is 100%
+            update["progress"] = 100
     elif state == TaskState.FAILED:
         update["status"] = "failed"
         update["error"] = error
 
-    try:
-        # Check if we're in Flask context (socketio server available)
-        if socketio and hasattr(socketio, 'server') and socketio.server:
-            socketio.emit('task_update', update, room=room)
-            logger.info(f"Emitted task update to room {room}")
-            socketio.sleep(0)
-        else:
-            # We're in Prefect context
-            client = _get_or_create_prefect_client()
-            if not client:
-                logger.info(f"Status update saved locally (no connection): {update['task']} - {update['state']}")
-                return
-            
-            try:
-                # Include room information in the update data since client.emit() doesn't support room parameter
-                update_with_room = {**update, 'target_room': room}
-                client.emit('task_update', update_with_room)
-                logger.info(f"Emitted task update via persistent connection: {update['task']} - {update['state']}")
-                
-            except Exception as client_e:
-                logger.error(f"Failed to emit via persistent connection: {client_e}")
-                # Reset client on error
-                with _client_lock:
-                    if _prefect_client:
-                        try:
-                            _prefect_client.disconnect()
-                        except:
-                            pass
-                        _prefect_client = None
-                # Fall back to just updating status without emission
-                logger.info(f"Status update saved locally: {update['task']} - {update['state']}")
-                
-    except Exception as e:
-        logger.error(f"Error emitting task update: {e}")
+    service_token = os.getenv("PREFECT_SERVICE_TOKEN")
+    if not service_token:
+        logger.error("PREFECT_SERVICE_TOKEN not set – task update will not be emitted.")
+        return
 
+    api_host = os.getenv("API_HOST") or os.getenv("FLASK_HOST", "localhost")
+    api_port = os.getenv("API_PORT") or os.getenv("FLASK_PORT", "5000")
+    url = f"http://{api_host}:{api_port}/internal/task-update"
+
+    try:
+        resp = _requests.post(
+            url,
+            json=update,
+            headers={"Authorization": f"Bearer {service_token}"},
+            timeout=5,
+        )
+        logger.info(f"Emitted task update [{resp.status_code}]: {task_name} – {state}")
+    except Exception as exc:
+        logger.error(f"Failed to POST task update to {url}: {exc}")
+        logger.info(f"Status saved locally (no delivery): {task_name} – {state}")
+
+
+def emit_analysis_update(user_id, project_id, state_data):
+    """Push analysis pipeline progress to Socket.IO clients in room analysis_{project_id}."""
+    service_token = os.getenv("PREFECT_SERVICE_TOKEN")
+    if not service_token:
+        logger.error("PREFECT_SERVICE_TOKEN not set – analysis update will not be emitted.")
+        return
+
+    api_host = os.getenv("API_HOST") or os.getenv("FLASK_HOST", "localhost")
+    api_port = os.getenv("API_PORT") or os.getenv("FLASK_PORT", "5000")
+    url = f"http://{api_host}:{api_port}/internal/task-update"
+
+    room = f"analysis_{project_id}"
+    payload = {
+        "target_room": room,
+        "event": "analysis_update",
+        "project_id": project_id,
+        "user_id": user_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds") + "Z",
+        **state_data,
+    }
+
+    try:
+        resp = _requests.post(
+            url,
+            json=payload,
+            headers={"Authorization": f"Bearer {service_token}"},
+            timeout=5,
+        )
+        logger.info(
+            f"Emitted analysis update [{resp.status_code}]: project={project_id} "
+            f"stage={state_data.get('stage')} status={state_data.get('status')}"
+        )
+    except Exception as exc:
+        logger.error(f"Failed to POST analysis update to {url}: {exc}")
 
 
 def save_analysis_state(user_id, state):
@@ -158,6 +124,36 @@ def allowed_file(filename):
     """Check if the file extension is allowed"""
     ALLOWED_EXTENSIONS = {'tsv', 'csv', 'txt', 'bgz', 'gz'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def compute_file_md5(file_path, chunk_size=8192):
+    """
+    Compute MD5 hash of a file
+    """
+    md5_hash = hashlib.md5()
+    
+    try:
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(chunk_size), b''):
+                md5_hash.update(chunk)
+        return md5_hash.hexdigest()
+    except Exception as e:
+        logger.error(f"Error computing MD5 for {file_path}: {e}")
+        return None
+
+def get_shared_temp_dir(user_id=None, prefix=""):
+    base = "/app/data/temp"
+    
+    if user_id:
+        base = os.path.join(base, str(user_id))
+    
+    if prefix:
+        dir_name = f"{prefix}_{uuid.uuid4().hex[:8]}"
+    else:
+        dir_name = uuid.uuid4().hex[:8]
+    
+    path = os.path.join(base, dir_name)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 def get_user_file_path(files_handler, file_id, user_id):
     """Get file path from file ID using database metadata"""
@@ -266,3 +262,21 @@ def convert_variants_to_object_array(variants_data):
         result.append(variant_obj)
     
     return result
+
+
+def get_deps():    
+    try:
+        worker = get_worker()
+        worker_id = getattr(worker, 'id', 'unknown')
+    except ValueError as e:
+        raise RuntimeError(f"Task not running on Dask worker: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to get Dask worker context: {e}")
+    
+    deps = getattr(worker, "deps", None)
+    
+    if not deps:
+        err = getattr(worker, "deps_error", "unknown")
+        raise RuntimeError(f"Worker dependencies not initialized: {err}")
+    
+    return deps

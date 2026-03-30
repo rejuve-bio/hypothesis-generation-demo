@@ -1,20 +1,23 @@
-from flask import json
-from flask_socketio import SocketIO
+import os
+import socketio
 
-socketio = SocketIO(
-    cors_allowed_origins="*", 
-    json=json, 
-    engineio_logger=False,  
-    logger=False,           
-    async_mode="threading", 
-    ping_interval=25,       
-    ping_timeout=20,        
-    transports=['polling', 'websocket'],
-    allow_upgrades=True,
-    max_http_buffer_size=1000000,
-    always_connect=False,   
-    cookie=None,           
-    manage_session=False,
-    http_compression=False, # Disable HTTP compression
-    compression=False      # Disable compression
+redis_url = os.getenv("REDIS_URL")
+_sio_kwargs = dict(
+    async_mode="asgi",
+    cors_allowed_origins="*",
+    engineio_logger=False,
+    logger=False,
+    ping_interval=25,
+    ping_timeout=20,
+    max_http_buffer_size=1_000_000,
+    always_connect=False,
+    cookie=None,
+    http_compression=False,
+    transports=['websocket']
 )
+
+if redis_url:
+    mgr = socketio.AsyncRedisManager(redis_url)
+    sio = socketio.AsyncServer(client_manager=mgr, **_sio_kwargs)
+else:
+    sio = socketio.AsyncServer(**_sio_kwargs)

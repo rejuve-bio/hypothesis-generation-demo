@@ -128,7 +128,7 @@ user:file_search_path(eqtl, prolog_out('gtex/eqtl')).
 user:file_search_path(abc, prolog_out('abc')).
 % user:file_search_path(cell_line_ontology, prolog_out('cell_line_ontology')).
 % user:file_search_path(uberon, prolog_out('uberon')).
-% user:file_search_path(efo, prolog_out('experimental_factor_ontology')).
+user:file_search_path(efo, prolog_out('experimental_factor_ontology')).
 % user:file_search_path(bto, prolog_out('brenda_tissue_ontology')).
 % user:file_search_path(cadd, prolog_out('cadd')).
 user:file_search_path(dbsnp, prolog_out('dbsnp')).
@@ -158,7 +158,7 @@ load_atomspace :-
     load_with_time([abc(edges)], "abc"),
     %load_with_time([cell_line_ontology(nodes), cell_line_ontology(edges)], "cell_line ontology"),
     %load_with_time([uberon(nodes), uberon(edges)], "uberon"),
-    %load_with_time([efo(nodes), efo(edges)], "experimental factor ontology"),
+    load_with_time([efo(nodes), efo(edges)], "experimental factor ontology"),
     %load_with_time([bto(nodes), bto(edges)], "brenda tissue ontology"),
     % load_with_time([cadd(nodes)], "cadd"),
     load_with_time([dbsnp(nodes)], "dbsnp"),

@@ -53,8 +53,12 @@ class StatusTracker:
     def _persist_and_clear(self, hypothesis_id):
         """Persist task history to DB and clear from memory"""
         if hypothesis_id in self.task_history:
+            # Check if task handler is initialized
+            if not hasattr(self.__class__, '_task_handler'):
+                raise RuntimeError("StatusTracker not initialized")
+            
             # Get existing history from DB
-            db_history = self._task_handler.get_task_history(hypothesis_id) or []
+            db_history = self.__class__._task_handler.get_task_history(hypothesis_id) or []
             new_history = self.task_history[hypothesis_id]
             
             # Combine and deduplicate
@@ -68,7 +72,7 @@ class StatusTracker:
             final_history = sorted(deduplicated.values(), key=lambda x: x['timestamp'])
             
             # Save to DB
-            self._task_handler.save_task_history(hypothesis_id, final_history)
+            self.__class__._task_handler.save_task_history(hypothesis_id, final_history)
             
             # Clear from memory
             del self.task_history[hypothesis_id]
@@ -77,7 +81,7 @@ class StatusTracker:
     def get_history(self, hypothesis_id):
         """Get complete task history from memory and DB without duplicates"""
         memory_history = self.task_history.get(hypothesis_id, [])
-        db_history = self._task_handler.get_task_history(hypothesis_id) if hypothesis_id in self.completed_hypotheses else []
+        db_history = self.__class__._task_handler.get_task_history(hypothesis_id) if hypothesis_id in self.completed_hypotheses else []
         
         # Combine histories
         combined_history = memory_history + db_history

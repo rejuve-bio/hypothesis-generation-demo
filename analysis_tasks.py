@@ -22,7 +22,8 @@ import optuna
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import Config
 import re
-from utils import transform_credible_sets_to_locuszoom
+from utils import transform_credible_sets_to_locuszoom, get_deps, get_shared_temp_dir
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -115,14 +116,18 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
     return result
 
 # === NEXTFLOW HARMONIZATION ===
-@task(cache_policy=None)
-def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh38", 
+@task()
+def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh37", 
                                      ref_dir=None, code_repo=None, script_dir=None,
                                      threshold=0.99, sample_size=None, timeout_seconds=14400, 
-                                     cleanup_upload=True):
+                                     cleanup_upload=True, user_id=None, project_id=None):
     """
     Harmonize GWAS summary statistics using Nextflow-based harmonization pipeline.
     """
+
+    deps = get_deps()
+    storage = deps["storage"]
+
     logger.info(f"[HARMONIZE] Starting Nextflow harmonization for {gwas_file_path}")
     start_time = datetime.now()
     
@@ -227,13 +232,12 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
                         os.remove(f)
                         logger.info(f"[HARMONIZE] Cleaned up: {f}")
             
-            # 2. Move logs to output_dir instead of deleting
-            upload_log_dir = os.path.join(upload_dir, "logs")
-            if os.path.exists(upload_log_dir):
-                output_log_dir = os.path.join(output_dir, "logs")
-                if not os.path.exists(output_log_dir):
-                    shutil.move(upload_log_dir, output_log_dir)
-                    logger.info(f"[HARMONIZE] Moved logs to: {output_log_dir}")
+            # Delete logs on success 
+            for logs_base_dir in [upload_dir, parent_upload_dir]:
+                upload_log_dir = os.path.join(logs_base_dir, "logs")
+                if os.path.exists(upload_log_dir):
+                    shutil.rmtree(upload_log_dir)
+                    logger.info(f"[HARMONIZE] Deleted logs (harmonization successful): {upload_log_dir}")
             
             # 3. Remove Nextflow work directories 
             nextflow_work_dir = os.path.join(upload_dir, "work")
@@ -247,19 +251,24 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
                 logger.info(f"[HARMONIZE] Removed Nextflow work directory: {parent_work_dir}")
             
             # 4. Remove Nextflow timestamp directories 
-            for item in os.listdir(upload_dir):
-                item_path = os.path.join(upload_dir, item)
-                if os.path.isdir(item_path) and (
-                    len(item.split('_')) >= 2 or  
-                    item.startswith('2') or  
-                    item == '.nextflow' or  
-                    item.startswith('results') 
-                ):
-                    try:
-                        shutil.rmtree(item_path)
-                        logger.info(f"[HARMONIZE] Removed directory: {item_path}")
-                    except Exception as e:
-                        logger.warning(f"[HARMONIZE] Could not remove directory {item_path}: {e}")
+            for cleanup_dir in [upload_dir, parent_upload_dir]:
+                if not os.path.exists(cleanup_dir):
+                    continue
+                    
+                for item in os.listdir(cleanup_dir):
+                    item_path = os.path.join(cleanup_dir, item)
+                    if os.path.isdir(item_path) and (
+                        len(item.split('_')) >= 2 or  
+                        item.startswith('2') or  
+                        item == '.nextflow' or  
+                        item.startswith('results') or
+                        item == os.path.splitext(os.path.basename(gwas_file_path))[0]  # Remove {basename} directory
+                    ):
+                        try:
+                            shutil.rmtree(item_path)
+                            logger.info(f"[HARMONIZE] Removed directory: {item_path}")
+                        except Exception as e:
+                            logger.warning(f"[HARMONIZE] Could not remove directory {item_path}: {e}")
             
             # 5. Remove .nextflow.log files from both upload_dir and parent_upload_dir
             for log_dir in [upload_dir, parent_upload_dir]:
@@ -272,8 +281,13 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
             
             # 6.  remove original uploaded file
             if cleanup_upload and os.path.exists(gwas_file_path):
-                os.remove(gwas_file_path)
-                logger.info(f"[HARMONIZE] Removed original uploaded file: {gwas_file_path}")
+                is_predefined = '/data/raw/' in gwas_file_path or '\\data\\raw\\' in gwas_file_path
+                
+                if is_predefined:
+                    logger.info(f"[HARMONIZE] Keeping predefined file: {gwas_file_path}")
+                else:
+                    os.remove(gwas_file_path)
+                    logger.info(f"[HARMONIZE] Removed original uploaded file: {gwas_file_path}")
             elif not cleanup_upload:
                 logger.info(f"[HARMONIZE] Keeping original uploaded file: {gwas_file_path}")
             
@@ -349,18 +363,51 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         # Calculate processing time
         elapsed_time = (datetime.now() - start_time).total_seconds()
         logger.info(f"[HARMONIZE] Processing completed in {elapsed_time:.2f} seconds")
+        
+        # Upload to MinIO
+        if storage and user_id and project_id:
+            harmonized_filename = os.path.basename(harmonized_file_path)
+            object_key = f"harmonized/{user_id}/{project_id}/{harmonized_filename}"
+            
+            upload_success = storage.upload_file(harmonized_file_path, object_key)
+            if upload_success:
+                logger.info(f"[HARMONIZE] Uploaded to MinIO: s3://hypothesis/{object_key}")
+            else:
+                logger.warning(f"[HARMONIZE] Failed to upload to MinIO, file remains local only")
 
         return harmonized_df, harmonized_file_path
         
     except subprocess.TimeoutExpired:
         logger.error(f"[HARMONIZE] Harmonization timeout after {timeout_seconds} seconds")
+        # Preserve logs on failure
+        try:
+            upload_dir = os.path.dirname(gwas_file_path)
+            upload_log_dir = os.path.join(upload_dir, "logs")
+            if os.path.exists(upload_log_dir):
+                output_log_dir = os.path.join(output_dir, "logs")
+                if not os.path.exists(output_log_dir):
+                    shutil.move(upload_log_dir, output_log_dir)
+                    logger.info(f"[HARMONIZE] Preserved logs on failure: {output_log_dir}")
+        except Exception as log_e:
+            logger.warning(f"[HARMONIZE] Could not preserve logs: {log_e}")
         raise RuntimeError(f"Harmonization timeout after {timeout_seconds} seconds")
     except Exception as e:
         logger.error(f"[HARMONIZE] Error in harmonization: {str(e)}")
+        # Preserve logs on failure
+        try:
+            upload_dir = os.path.dirname(gwas_file_path)
+            upload_log_dir = os.path.join(upload_dir, "logs")
+            if os.path.exists(upload_log_dir):
+                output_log_dir = os.path.join(output_dir, "logs")
+                if not os.path.exists(output_log_dir):
+                    shutil.move(upload_log_dir, output_log_dir)
+                    logger.info(f"[HARMONIZE] Preserved logs on failure: {output_log_dir}")
+        except Exception as log_e:
+            logger.warning(f"[HARMONIZE] Could not preserve logs: {log_e}")
         raise
 
 
-@task(cache_policy=None)
+@task()
 def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
     """Filter significant variants from harmonized sumstats."""
     logger.info(f"[FILTER] Filtering variants with p_value < {p_threshold}")
@@ -376,18 +423,23 @@ def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
 
 
 # ===  COJO ANALYSIS ===
-@task(cache_policy=None)
+@task()
 def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold=0.01, population="EUR", ref_genome="GRCh38"):
     """
     Run GCTA COJO analysis per chromosome and combine results.
     """
     logger.info(f"[COJO] Starting per-chromosome COJO analysis for population {population}")
-
+    
+    # Get configuration
     config = Config.from_env()
     
-    # Create temporary directory for COJO processing
-    with tempfile.TemporaryDirectory(prefix="cojo_analysis_") as temp_dir:
-        logger.info(f"[COJO] Using temporary directory: {temp_dir}")
+    # Create user-isolated temporary directory for COJO processing
+    # Extract user/project info from output_dir path (format: data/projects/{user_id}/{project_id}/analysis)
+    temp_base = get_shared_temp_dir(prefix="cojo")
+    
+    try:
+        temp_dir = temp_base
+        logger.info(f"[COJO] Using isolated temporary directory: {temp_dir}")
         
         # Support both old and new column names
         a1_col = 'effect_allele' if 'effect_allele' in significant_df.columns else 'A1'
@@ -419,11 +471,6 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
         cojo_input_path = os.path.join(temp_dir, "cojo_input.txt")
         cojo_df.to_csv(cojo_input_path, sep=' ', index=False)
         logger.info(f"[COJO] COJO input prepared: {len(cojo_df)} variants")
-        
-        # Debug: Show first few rows
-        logger.info(f"[COJO] Sample input (first 3 rows):")
-        for i, row in cojo_df.head(3).iterrows():
-            logger.info(f"  {row['SNP']} | A1={row['A1']} A2={row['A2']} | N={row['N']}")
         
         def run_cojo_for_chromosome(chrom):
             """Run COJO analysis for a single chromosome"""
@@ -460,8 +507,6 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
                 
                 if result.returncode != 0:
                     logger.warning(f"[COJO] GCTA failed for chromosome {chrom}")
-                    logger.warning(f"[COJO] STDOUT (full): {result.stdout}")  # Full output
-                    logger.warning(f"[COJO] STDERR (full): {result.stderr}")  # Full output
                     return None
                 
                 # Read COJO results for this chromosome  
@@ -533,8 +578,16 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
         else:
             logger.error("[COJO] No COJO results generated for any chromosome")
             raise RuntimeError("COJO analysis failed for all chromosomes")
+    finally:
+        # Cleanup isolated temp directory
+        try:
+            import shutil
+            if os.path.exists(temp_base):
+                shutil.rmtree(temp_base)
+                logger.info(f"[COJO] Cleaned up temp directory: {temp_base}")
+        except Exception as cleanup_e:
+            logger.warning(f"[COJO] Could not cleanup temp directory: {cleanup_e}")
 
-@task
 def check_ld_dimensions(ld_matrix, snp_df, bim_file_path):
     
     if ld_matrix.shape[0] != len(snp_df) or ld_matrix.shape[1] != len(snp_df):
@@ -558,7 +611,7 @@ def check_ld_dimensions(ld_matrix, snp_df, bim_file_path):
     logger.info("No dimension mismatch. No filtering needed.")
     return snp_df
 
-@task
+
 def check_ld_semidefiniteness(R_df):
     """
     Check if the LD matrix is semidefinite.
@@ -915,7 +968,6 @@ def run_susie_finemapping(seed, ld_df, sub_region_sumstats_ld, chr_num, lead_var
 
 
 # === FINE-MAPPING ORCHESTRATION ===
-@task(cache_policy=None)
 def finemap_region(seed, sumstats, chr_num, lead_variant_position, window=2000, 
                                  population="EUR", L=-1, coverage=0.95, min_abs_corr=0.5, maf=0.01, 
                                  ref_genome="GRCh38", plink_dir=None):
@@ -1015,6 +1067,7 @@ def create_region_batches(cojo_results, batch_size=3):
     logger.info(f"[BATCH] Created {len(batches)} batches from {len(regions)} regions")
     return batches
 
+@task(retries=3)
 def finemap_region_batch_worker(batch_data):
 
     # Unpack the batch_data tuple
@@ -1032,12 +1085,10 @@ def finemap_region_batch_worker(batch_data):
         logger.error(f"[BATCH-{batch_id}] Failed to load sumstats from file")
         return []
 
-    db = None
     user_id = None
     project_id = None
     
     if additional_params:
-        db_params = additional_params.get('db_params', None)
         user_id = additional_params.get('user_id', None)
         project_id = additional_params.get('project_id', None)
         finemap_params = additional_params.get('finemap_params', {})
@@ -1053,16 +1104,13 @@ def finemap_region_batch_worker(batch_data):
         maf_threshold = finemap_params.get('maf_threshold', 0.01)
         plink_dir = finemap_params.get('plink_dir', None)
         
-        # Recreate database connection in worker process
-        if db_params:
-            try:
-                # Import AnalysisHandler locally to avoid circular imports in multiprocessing
-                from db import AnalysisHandler
-                analysis_handler = AnalysisHandler(db_params['uri'], db_params['db_name'])
-                logger.info(f"[BATCH-{batch_id}] Analysis handler connection recreated in worker process")
-            except Exception as db_e:
-                logger.error(f"[BATCH-{batch_id}] Error recreating analysis handler connection: {db_e}")
-                analysis_handler = None
+        try:
+            deps = get_deps()
+            analysis_handler = deps["analysis"]
+            logger.info(f"[BATCH-{batch_id}] Analysis handler connection recreated in worker process")
+        except Exception as db_e:
+            logger.error(f"[BATCH-{batch_id}] Error recreating analysis handler connection: {db_e}")
+            analysis_handler = None
     else:
         raise ValueError("No additional_params provided to worker - this should not happen")
     
@@ -1275,17 +1323,16 @@ def finemap_region_batch_worker(batch_data):
     return batch_results
 
 # === MEMORY-EFFICIENT DATA SHARING ===
+@task()
 def save_sumstats_for_workers(sumstats_df, temp_dir=None):
     """Save sumstats to a temporary file for memory-efficient worker access"""
     if temp_dir is None:
-        temp_dir = tempfile.gettempdir()
+        # Create isolated temp directory for sumstats sharing between workers
+        temp_dir = get_shared_temp_dir(prefix="sumstats")
     
-    # Create a unique temporary file
-    temp_file = tempfile.NamedTemporaryFile(
-        mode='w', suffix='.tsv', dir=temp_dir, delete=False
-    )
-    temp_path = temp_file.name
-    temp_file.close()
+    # Create temporary file with better naming
+    import uuid as uuid_module
+    temp_path = os.path.join(temp_dir, f'sumstats_{uuid_module.uuid4().hex[:8]}.tsv')
     
     # Save the DataFrame
     sumstats_df.to_csv(temp_path, sep='\t', index=True)
@@ -1305,6 +1352,7 @@ def load_sumstats_from_file(temp_path):
         logger.error(f"[WORKER] Error loading sumstats from {temp_path}: {e}")
         return None
 
+@task()
 def cleanup_sumstats_file(temp_path):
     """Clean up temporary sumstats file after all workers are done"""
     try:

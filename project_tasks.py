@@ -4,21 +4,115 @@ from prefect import task
 from loguru import logger
 import gzip
 import re
+from utils import emit_analysis_update, get_deps
 
 
-@task(cache_policy=None)
-def save_analysis_state_task(projects_handler, user_id, project_id, state_data):
+@task()
+def prepare_gwas_file_task(
+    user_id: str,
+    project_id: str,
+    file_metadata_id: str | None,
+    gwas_file_path: str | None = None,
+    storage_key: str | None = None,
+    file_id_new: str | None = None,
+    source_minio_path: str | None = None,
+    source_download_url: str | None = None,
+    minio_cache_key: str | None = None,
+    gwas_library_id: str | None = None,
+    output_dir: str | None = None,
+) -> str:
+    """
+    Ensure the GWAS file is available locally.  
+    """
+    import shutil
+    import requests as _req
+
+    deps = get_deps()
+    files_handler = deps["files"]
+    storage = deps.get("storage")
+    projects_handler = deps["projects"]
+    gwas_library = deps.get("gwas_library")
+
+    uploading_state = {
+        "status": "Uploading",
+        "stage": "File_upload",
+        "progress": 3,
+        "message": "Preparing GWAS file...",
+    }
+    projects_handler.save_analysis_state(user_id, project_id, uploading_state)
+    emit_analysis_update(user_id, project_id, uploading_state)
+
+    final_path = gwas_file_path
+    dest_dir = output_dir or os.path.join("data", "temp", str(user_id))
+
+    if source_minio_path and storage:
+        os.makedirs(dest_dir, exist_ok=True)
+        filename = os.path.basename(source_minio_path)
+        final_path = os.path.join(dest_dir, filename)
+        if not storage.download_file(source_minio_path, final_path):
+            raise RuntimeError(f"MinIO download failed: {source_minio_path}")
+
+    elif source_download_url:
+        os.makedirs(dest_dir, exist_ok=True)
+        raw_name = source_download_url.split("/")[-1].split("?")[0] or "gwas_file"
+        final_path = os.path.join(dest_dir, raw_name)
+        with _req.get(source_download_url, stream=True, timeout=600) as r:
+            r.raise_for_status()
+            with open(final_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        file_size = os.path.getsize(final_path)
+        if storage and minio_cache_key:
+            if storage.upload_file(final_path, minio_cache_key):
+                if gwas_library and gwas_library_id:
+                    gwas_library.mark_as_downloaded(gwas_library_id, minio_cache_key, file_size)
+
+    elif gwas_file_path and storage and storage_key:
+        if not storage.upload_file(gwas_file_path, storage_key):
+            raise RuntimeError(f"MinIO upload failed: {storage_key}")
+        final_path = gwas_file_path
+
+    elif gwas_file_path and file_id_new:
+        filename = os.path.basename(gwas_file_path)
+        user_upload_dir = os.path.join("data", "uploads", str(user_id))
+        os.makedirs(user_upload_dir, exist_ok=True)
+        final_path = os.path.join(user_upload_dir, f"{file_id_new}_{filename}")
+        shutil.move(gwas_file_path, final_path)
+
+    if not final_path or not os.path.exists(final_path):
+        raise RuntimeError(f"GWAS file not available at: {final_path!r}")
+
+    record_count = count_gwas_records(final_path)
+
+    if file_metadata_id:
+        metadata_updates: dict = {"record_count": record_count, "file_path": final_path}
+        effective_storage_key = minio_cache_key or storage_key
+        if effective_storage_key:
+            metadata_updates["storage_key"] = effective_storage_key
+        files_handler.update_file_metadata(file_metadata_id, metadata_updates)
+
+    logger.info(
+        f"[FILE_PREP] Done: {record_count} records, path={final_path}, project={project_id}"
+    )
+    return final_path
+
+
+@task()
+def save_analysis_state_task(user_id, project_id, state_data):
     """Save analysis state to file system"""
     try:
+        deps = get_deps()
+        projects_handler = deps["projects"]
         projects_handler.save_analysis_state(user_id, project_id, state_data)
         logger.info(f"Saved analysis state for project {project_id}")
+        emit_analysis_update(user_id, project_id, state_data)
         return True
     except Exception as e:
         logger.info(f"Error saving analysis state: {str(e)}")
         raise
 
 
-@task(cache_policy=None)
+@task()
 def load_analysis_state_task(projects_handler, user_id, project_id):
     """Load analysis state from file system"""
     try:
@@ -33,15 +127,20 @@ def load_analysis_state_task(projects_handler, user_id, project_id):
         raise
 
 
-@task(cache_policy=None)
-def create_analysis_result_task(analysis_handler, user_id, project_id, combined_results, output_dir):
+@task()
+def create_analysis_result_task(user_id, project_id, combined_results, output_dir):
     """Create and save analysis results"""
     try:
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        
         # Save to output directory
         results_file = os.path.join(output_dir, "analysis_results.csv")
         combined_results.to_csv(results_file, index=False)
         
         # Save to database
+        deps = get_deps()
+        analysis_handler = deps["analysis"]
         analysis_handler.save_analysis_results(user_id, project_id, combined_results.to_dict('records'))
         
         logger.info(f"Analysis results saved: {results_file}")
@@ -52,10 +151,12 @@ def create_analysis_result_task(analysis_handler, user_id, project_id, combined_
 
 
 
-@task(cache_policy=None)
-def get_project_analysis_path_task(projects_handler, user_id, project_id):
+@task()
+def get_project_analysis_path_task(user_id, project_id):
     """Get the analysis path for a project"""
     try:
+        deps = get_deps()
+        projects_handler = deps["projects"]
         analysis_path = projects_handler.get_project_analysis_path(user_id, project_id)
         
         # Create directory structure if it doesn't exist
@@ -180,14 +281,16 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
                         selected_tissue = None
                         if gene_expression_handler:
                             try:
-                                variant_id = h.get("variant") or h.get("variant_id")
+                                variant_id = h.get("variant_rsid") or h.get("variant") or h.get("variant_id")
                                 if variant_id:
                                     tissue_selection = gene_expression_handler.get_tissue_selection(
                                         user_id, project_id, variant_id
                                     )
                                     if tissue_selection:
                                         selected_tissue = tissue_selection.get('tissue_name')
-                                        logger.info(f"Retrieved tissue selection from DB for hypothesis {h['id']}: {selected_tissue}")
+                                        logger.info(f"Retrieved tissue selection from DB for hypothesis {h['id']} using variant_id={variant_id}: {selected_tissue}")
+                                    else:
+                                        logger.info(f"No tissue selection found for hypothesis {h['id']} with variant_id={variant_id}")
                             except Exception as ts_e:
                                 logger.warning(f"Could not get tissue selection for hypothesis {h['id']}: {ts_e}")
                         

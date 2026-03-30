@@ -1,0 +1,3 @@
+[submodule "gwas-sumstats-harmoniser"]
+	path = gwas-sumstats-harmoniser
+	url = https://github.com/EBISPOT/gwas-sumstats-harmoniser.git

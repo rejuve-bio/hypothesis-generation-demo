@@ -117,9 +117,8 @@ RUN Rscript -e " \
 
 # Install vautils from GitHub
 RUN Rscript -e " \
-    library(devtools); \
     withr::with_envvar(c('GITHUB_PAT' = ''), { \
-        install_github('oyhel/vautils', upgrade='never') \
+        remotes::install_github('oyhel/vautils', upgrade='never') \
     }) \
     "
 
@@ -171,17 +170,17 @@ COPY pyproject.toml .
 # Set up Python environment with uv
 ENV UV_PROJECT_ENVIRONMENT=/opt/flask-venv
 ENV PATH="/opt/flask-venv/bin:$PATH"
-RUN uv sync
-RUN uv pip install '.[r-integration]'
 
-# Install pyarrow for harmonizer workflow (need version compatible with NumPy 2.0)
-RUN uv pip install 'pyarrow>=17.0.0'
+RUN uv sync --no-cache --extra r-integration
 
 # Copy application
 COPY . .
 
+# Make entrypoint script executable
+RUN chmod +x /app/entrypoint.sh
+
 # Clone gwas-sumstats-harmoniser repository
-RUN git clone https://github.com/EBISPOT/gwas-sumstats-harmoniser.git
+RUN rm -rf gwas-sumstats-harmoniser && git clone https://github.com/EBISPOT/gwas-sumstats-harmoniser.git
 # Create separate Python environment for harmonizer
 RUN python3 -m venv /opt/harmonizer-venv
 
@@ -191,5 +190,8 @@ RUN uv pip install --python=/opt/harmonizer-venv/bin/python -r gwas-sumstats-har
 
 # Also install minimal harmonizer deps in main venv (without gwas-sumstats-tools to avoid pydantic conflict)
 RUN uv pip install 'duckdb>=0.9.2' 'pyliftover>=0.4'
+
+# Set entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 EXPOSE 5000

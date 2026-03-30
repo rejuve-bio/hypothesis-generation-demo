@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from loguru import logger
 import pandas as pd
+import re
 
 from .base_handler import BaseHandler
 
@@ -227,17 +228,20 @@ class GeneExpressionHandler(BaseHandler):
                 logger.warning(f"No completed LDSC analysis found for project {project_id}")
                 return None
             
+            # Clean tissue name to match GTEx format (same as when saving)
+            cleaned_tissue_name = re.sub(r"_\(", "_", tissue_name).replace(")", "")
+            
             # Get the tissue mapping for this tissue name
             mapping = self.tissue_mappings_collection.find_one({
                 'analysis_run_id': latest_run['id'],
-                'gtex_tissue_name': tissue_name
+                'gtex_tissue_name': cleaned_tissue_name
             })
             
             if mapping:
                 mapping['_id'] = str(mapping['_id'])
-                logger.info(f"Found tissue mapping for '{tissue_name}': {mapping.get('cellxgene_parent_uberon_id')} or {mapping.get('cellxgene_descendant_uberon_id')}")
+                logger.info(f"Found tissue mapping for '{tissue_name}' (cleaned: '{cleaned_tissue_name}'): {mapping.get('cellxgene_parent_uberon_id')} or {mapping.get('cellxgene_descendant_uberon_id')}")
             else:
-                logger.warning(f"No tissue mapping found for '{tissue_name}' in analysis {latest_run['id']}")
+                logger.warning(f"No tissue mapping found for '{tissue_name}' (cleaned: '{cleaned_tissue_name}') in analysis {latest_run['id']}")
                 
             return mapping
             

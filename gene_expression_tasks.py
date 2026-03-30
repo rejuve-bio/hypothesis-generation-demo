@@ -8,7 +8,7 @@ from prefect import task
 from loguru import logger
 import requests
 from scipy.stats import pearsonr
-from scipy import sparse
+from scipy import sparse, stats
 import cellxgene_census
 import tiledbsoma as soma
 import multiprocessing
@@ -16,6 +16,7 @@ import re
 from config import Config
 import shutil
 import pickle
+from utils import get_deps
 
 try:
     import warnings
@@ -46,14 +47,12 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
     # Convert to absolute paths
     gwas_file = os.path.abspath(gwas_file)
     output_prefix = os.path.abspath(output_prefix)
+    output_dir = os.path.dirname(output_prefix)
     
-    # Use the LDSC data directory
-    ldsc_data_dir = "data/ldsc"
-    
-    # Convert SSF format to LDSC format
-    gwas_filename = os.path.basename(gwas_file)
-    ldsc_gwas_filename = gwas_filename.replace('.tsv.gz', '.ldsc.tsv.gz').replace('.h.tsv.gz', '.ldsc.tsv.gz')
-    local_gwas_path = os.path.join(ldsc_data_dir, ldsc_gwas_filename)
+    ldsc_data_dir = os.path.abspath("data/ldsc")
+    ldsc_work_dir = os.path.join(output_dir, "ldsc_analysis")
+    os.makedirs(ldsc_work_dir, exist_ok=True)
+    local_gwas_path = os.path.abspath(os.path.join(ldsc_work_dir, "gwas_input.ldsc.tsv.gz"))
     
     logger.info(f"Converting SSF format to LDSC format...")
     try:
@@ -68,6 +67,10 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
         ldsc_df['A1'] = df['effect_allele']
         ldsc_df['A2'] = df['other_allele']
         
+        # Add sample size column (required by LDSC)
+        if 'N' in df.columns:
+            ldsc_df['N'] = df['N']
+        
         # Remove rows with missing rsid/SNP
         ldsc_df = ldsc_df.dropna(subset=['SNP'])
         ldsc_df = ldsc_df[ldsc_df['SNP'] != '.']  # Remove missing rs IDs
@@ -77,50 +80,55 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
         ldsc_df.to_csv(local_gwas_path, sep='\t', index=False, compression='gzip')
         logger.info(f"Converted GWAS file saved to: {local_gwas_path}")
         
-        gwas_filename = ldsc_gwas_filename  # Use the converted file
-        
     except Exception as e:
         logger.error(f"Failed to convert SSF to LDSC format: {e}")
         shutil.copy2(gwas_file, local_gwas_path)
         logger.warning(f"Using original file without conversion: {local_gwas_path}")
     
-    # Use the wrapper script from Dockerfile
+    # Use the wrapper script from Dockerfile; cwd= for subprocess (no os.chdir - thread-safe)
     cmd = [
         '/usr/local/bin/ldsc',  # Uses the wrapper script that activates conda env
-        '--h2-cts', gwas_filename,
+        '--h2-cts', local_gwas_path,  # absolute path - project-specific file
         '--ref-ld-chr', '1000G_Phase3_baselineLD_ldscores/baselineLD.',
         '--out', output_prefix,
         '--ref-ld-chr-cts', 'Multi_tissue_gene_expr_gtex.ldcts',
         '--w-ld-chr', '1000G_Phase3_weights_hm3_no_MHC/weights.hm3_noMHC.'
     ]
     
-    original_dir = os.getcwd()
-    os.chdir(ldsc_data_dir)
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+        cwd=ldsc_data_dir,
+    )
     
-    try:
-        process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, universal_newlines=True
-        )
-        
-        output_lines = []
-        while True:
-            output = process.stdout.readline()
-            if output == '' and process.poll() is not None:
-                break
-            if output:
-                logger.info(output.strip())
-                output_lines.append(output.strip())
-        
-        rc = process.poll()
-        if rc != 0:
-            logger.error(f"LDSC command failed with return code: {rc}")
-            raise RuntimeError(f"LDSC failed with return code: {rc}")
-        
-        logger.info("LDSC command completed successfully")
-        return True
-    finally:
-        os.chdir(original_dir)
+    output_lines = []
+    while True:
+        output = process.stdout.readline()
+        if output == '' and process.poll() is not None:
+            break
+        if output:
+            logger.info(output.strip())
+            output_lines.append(output.strip())
+    
+    rc = process.poll()
+    if rc != 0:
+        logger.error(f"LDSC command failed with return code: {rc}")
+        raise RuntimeError(f"LDSC failed with return code: {rc}")
+    
+    # Clean up intermediate file to save disk space
+    if os.path.exists(local_gwas_path):
+        try:
+            os.remove(local_gwas_path)
+            logger.info(f"[LDSC] Cleaned up intermediate file: {local_gwas_path}")
+        except OSError as e:
+            logger.warning(f"[LDSC] Could not remove intermediate file: {e}")
+    
+    logger.info("LDSC command completed successfully")
+    return True
 
 
 @task(log_prints=True)
@@ -313,16 +321,20 @@ def map_tissues_to_cellxgene(top_tissues, gtex_uberon_mapping, cellxgene_uberon_
     ontology_mapping_results = {}
     
     for gtex_tissue in top_tissues:
-        gtex_uberon_id = gtex_uberon_mapping.get(gtex_tissue)
-        gtex_ontology_name = get_tissue_name_from_ontology(gtex_uberon_id, uberon_ontology) if gtex_uberon_id else None
-        
         mapped_parent_id, match_type, notes = map_gtex_to_cellxgene_tissue(gtex_tissue)
+        
+        # Get GTEx UBERON ID
+        gtex_uberon_id = gtex_uberon_mapping.get(gtex_tissue)
+        
+        # Convert to colon format for consistency with CellxGene
+        gtex_uberon_id_converted = gtex_uberon_id.replace('_', ':') if gtex_uberon_id else None
+        gtex_ontology_name = get_tissue_name_from_ontology(gtex_uberon_id_converted, uberon_ontology) if gtex_uberon_id_converted else None
         
         parent_ontology_name = get_tissue_name_from_ontology(mapped_parent_id, uberon_ontology) if mapped_parent_id else None
         
-        # Determine descendant info
-        if mapped_parent_id and gtex_uberon_id and mapped_parent_id != gtex_uberon_id:
-            descendant_id = gtex_uberon_id
+        # Determine descendant info 
+        if mapped_parent_id and gtex_uberon_id_converted and mapped_parent_id != gtex_uberon_id_converted:
+            descendant_id = gtex_uberon_id_converted
             descendant_name = gtex_ontology_name
         else:
             descendant_id = None
@@ -330,7 +342,7 @@ def map_tissues_to_cellxgene(top_tissues, gtex_uberon_mapping, cellxgene_uberon_
         
         ontology_mapping_results[gtex_tissue] = {
             "gtex_tissue_name": gtex_tissue,
-            "gtex_uberon_id": gtex_uberon_id,
+            "gtex_uberon_id": gtex_uberon_id_converted,
             "gtex_ontology_name": gtex_ontology_name,
             "cellxgene_parent_uberon_id": mapped_parent_id,
             "cellxgene_parent_ontology_name": parent_ontology_name,
@@ -344,16 +356,18 @@ def map_tissues_to_cellxgene(top_tissues, gtex_uberon_mapping, cellxgene_uberon_
     
     return ontology_mapping_results
 
+
+@task(log_prints=True)
 def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k=500, batch_size=1000):
+    logger.info(f"Starting coexpression analysis for gene '{gene}' in tissue '{tissue_uberon_id}'")
+    
     with cellxgene_census.open_soma(census_version="2024-07-01") as census:
         experiment = census["census_data"]["homo_sapiens"]
         
         # Use tissue_ontology_term_id to filter by UBERON ID
         if cell_type:
-            # Filter by both tissue and cell type
             value_filter = f"tissue_ontology_term_id == '{tissue_uberon_id}' and cell_type == '{cell_type}'"
         else:
-            # Filter by tissue only
             value_filter = f"tissue_ontology_term_id == '{tissue_uberon_id}'"
         
         try:
@@ -361,11 +375,12 @@ def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k
                 measurement_name="RNA",
                 obs_query=soma.AxisQuery(value_filter=value_filter)
             )
-        except ValueError:
-            logger.warning(f"No cells found for tissue UBERON ID '{tissue_uberon_id}'")
+        except ValueError as e:
+            logger.warning(f"No cells found for tissue UBERON ID '{tissue_uberon_id}': {e}")
             return [], [], []
 
         obs_joinids = axis_query.obs_joinids().to_numpy()
+        logger.info(f"Found {len(obs_joinids)} cells for tissue '{tissue_uberon_id}'")
 
         if len(obs_joinids) > 100000:
             obs_joinids = obs_joinids[:100000] 
@@ -377,30 +392,78 @@ def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k
             logger.warning(f"No cells found for tissue UBERON ID '{tissue_uberon_id}'")
             return [], [], []
 
-        var_df = experiment.ms["RNA"].var.read(
-            column_names=["soma_joinid", "feature_id"]
-        ).concat().to_pandas().set_index("feature_id")
-        genes = var_df.index.tolist()
+        # Get library sizes from obs metadata
+        logger.info("Getting library sizes from obs metadata...")
+        obs_df = experiment.obs.read(
+            coords=(obs_joinids.tolist(),),
+            column_names=["soma_joinid", "n_measured_vars"]
+        ).concat().to_pandas()
+        
+        # Create mapping from joinid to library size
+        obs_df = obs_df.set_index("soma_joinid")
+        cell_sums = obs_df.loc[obs_joinids, "n_measured_vars"].values.astype(np.float32)
+        
+        # Avoid division by zero
+        cell_sums = np.where(cell_sums > 0, cell_sums, 1.0)
+        logger.info(f"Loaded library sizes for {n} cells (mean: {np.mean(cell_sums):.0f} counts/cell)")
 
-        if gene not in genes:
+        # Pre-filter to highly variable genes
+        logger.info("Loading gene metadata and filtering to highly expressed genes...")
+        var_df = experiment.ms["RNA"].var.read(
+            column_names=["soma_joinid", "feature_id", "feature_name", "n_measured_obs"]
+        ).concat().to_pandas()
+        
+        # Filter genes: expressed in at least 1% of cells (1000 cells for 100k sample)
+        min_cells = max(10, int(n * 0.01))
+        var_df_filtered = var_df[var_df["n_measured_obs"] >= min_cells].copy()
+        
+        # Sort by number of cells expressing (keep top ~15k genes)
+        var_df_filtered = var_df_filtered.nlargest(15000, "n_measured_obs")
+        var_df_filtered = var_df_filtered.set_index("feature_id")
+        
+        genes_filtered = var_df_filtered.index.tolist()
+        all_genes_list = var_df.set_index("feature_id").index.tolist()
+        
+        logger.info(f"Filtered from {len(all_genes_list)} to {len(genes_filtered)} highly expressed genes")
+        
+        # CellxGene uses uppercase Ensembl IDs - convert input to uppercase
+        gene = gene.upper()
+        
+        if gene not in all_genes_list:
             logger.warning(f"Gene of interest '{gene}' not found in dataset")
-            return [], [], genes
+            return [], [], all_genes_list
+        
+        # Make sure gene of interest is in filtered set
+        if gene not in genes_filtered:
+            logger.info(f"Gene of interest not in filtered set, adding it")
+            genes_filtered.append(gene)
+            # Add gene info to var_df_filtered
+            gene_info = var_df[var_df.index == gene]
+            var_df_filtered = pd.concat([var_df_filtered, gene_info.set_index("feature_id")])
+        
+        logger.info(f"Found gene '{gene}' in dataset")
+        
+        # Use filtered genes for correlation analysis
+        var_df = var_df_filtered
 
         gene_joinid = var_df.loc[gene]["soma_joinid"]
 
-        # Get gene expression
-        gene_table_iter = experiment.ms["RNA"].X["log1p"].read((obs_joinids.tolist(), [gene_joinid])).tables()
+        # Get gene expression from raw counts  
+        gene_table_iter = experiment.ms["RNA"].X["raw"].read((obs_joinids.tolist(), [gene_joinid])).tables()
         gene_expr = np.zeros(n, dtype=np.float32)
-        joinid_to_idx = {jid: idx for idx, jid in enumerate(obs_joinids)}
+        gene_joinid_to_idx = {jid: idx for idx, jid in enumerate(obs_joinids)}
         
         for batch in gene_table_iter:
             obs_jids = batch["soma_dim_0"].to_numpy()
             values = batch["soma_data"].to_numpy()
             
             for obs_jid, value in zip(obs_jids, values):
-                if obs_jid in joinid_to_idx:
-                    idx = joinid_to_idx[obs_jid]
+                if obs_jid in gene_joinid_to_idx:
+                    idx = gene_joinid_to_idx[obs_jid]
                     gene_expr[idx] = value
+        
+        # Normalize by library size (CPM-like: counts per 10k) then log1p
+        gene_expr = np.log1p((gene_expr / cell_sums) * 1e4)
 
         # Filter cells with non-zero expression
         nonzero_mask = gene_expr > 0
@@ -410,8 +473,13 @@ def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k
 
         sub_joinids = obs_joinids[nonzero_mask]
         gene_expr_sub = gene_expr[nonzero_mask]
+        cell_sums_sub = cell_sums[nonzero_mask]  # Subset library sizes too
+        
+        n_sub = len(sub_joinids)
+        logger.info(f"Gene expressed in {n_sub} cells, computing correlations...")
 
-        # Get other genes
+        # Get other genes (exclude gene of interest)
+        genes = var_df.index.tolist()
         mask = np.array([g != gene for g in genes])
         other_gene_joinids = var_df.loc[mask, "soma_joinid"].values
         other_genes = np.array(genes)[mask]
@@ -419,45 +487,80 @@ def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k
         # Pre-compute cell index mapping
         sub_joinid_to_idx = {jid: idx for idx, jid in enumerate(sub_joinids)}
 
-        # Process correlations in batches
-        correlations = {}
-        num_genes = len(other_gene_joinids)
-        batch_size = min(batch_size, 1000)
+        # Vectorized correlation computation
+        logger.info(f"Reading expression for {len(other_genes)} genes...")
+        all_table_iter = experiment.ms["RNA"].X["raw"].read(
+            (sub_joinids.tolist(), other_gene_joinids.tolist())
+        ).tables()
         
-        for batch_start in range(0, num_genes, batch_size):
-            batch_end = min(batch_start + batch_size, num_genes)
-            batch_gene_joinids = other_gene_joinids[batch_start:batch_end]
-            batch_genes = other_genes[batch_start:batch_end]
+        # Build full expression matrix
+        all_expr = np.zeros((n_sub, len(other_genes)), dtype=np.float32)
+        gene_jid_to_idx = {jid: idx for idx, jid in enumerate(other_gene_joinids)}
+        
+        for table in all_table_iter:
+            obs_jids = table["soma_dim_0"].to_numpy()
+            gene_jids = table["soma_dim_1"].to_numpy()
+            values = table["soma_data"].to_numpy()
             
-            # Get expression data for this batch
-            batch_table_iter = experiment.ms["RNA"].X["log1p"].read(
-                (sub_joinids.tolist(), batch_gene_joinids.tolist())
-            ).tables()
+            for obs_jid, gene_jid, value in zip(obs_jids, gene_jids, values):
+                if obs_jid in sub_joinid_to_idx and gene_jid in gene_jid_to_idx:
+                    obs_idx = sub_joinid_to_idx[obs_jid]
+                    gene_idx = gene_jid_to_idx[gene_jid]
+                    all_expr[obs_idx, gene_idx] = value
+        
+        logger.info("Normalizing expression matrix...")
+        all_expr = (all_expr / cell_sums_sub[:, np.newaxis]) * 1e4
+        all_expr = np.log1p(all_expr)
+        
+        logger.info("Computing correlations (vectorized pre-filtering)...")
+        
+        # Filter genes with sufficient expression (at least 10 cells)
+        gene_counts = np.sum(all_expr > 0, axis=0)
+        valid_genes = gene_counts >= 10
+        
+        if np.sum(valid_genes) == 0:
+            logger.warning("No genes with sufficient expression for correlation")
+            return [], [], all_genes_list
+        
+        all_expr_filtered = all_expr[:, valid_genes]
+        other_genes_filtered = other_genes[valid_genes]
+        
+        # Standardize for correlation
+        gene_expr_centered = gene_expr_sub - np.mean(gene_expr_sub)
+        other_expr_centered = all_expr_filtered - np.mean(all_expr_filtered, axis=0)
+        
+        gene_std = np.std(gene_expr_sub)
+        other_std = np.std(all_expr_filtered, axis=0)
+        
+        # Avoid division by zero
+        valid_std = (gene_std > 1e-10) & (other_std > 1e-10)
+        
+        correlations_vec = np.zeros(len(other_genes_filtered))
+        if gene_std > 1e-10:
+            correlations_vec[valid_std] = np.dot(gene_expr_centered, other_expr_centered[:, valid_std]) / (
+                n_sub * gene_std * other_std[valid_std]
+            )
+        
+        # Get top candidates (top 2000 by absolute correlation for efficiency)
+        top_n = min(2000, len(correlations_vec))
+        top_indices = np.argsort(np.abs(correlations_vec))[-top_n:]
+        
+        logger.info(f"Pre-filtered to top {len(top_indices)} candidates, running scipy.stats.pearsonr...")
+        
+        correlations = {}
+        for idx in top_indices:
+            gene_symbol = other_genes_filtered[idx]
+            other_expr = all_expr_filtered[:, idx]
             
-            batch_expr = np.zeros((len(sub_joinids), len(batch_gene_joinids)), dtype=np.float32)
-            
-            for table in batch_table_iter:
-                obs_jids = table["soma_dim_0"].to_numpy()
-                gene_jids = table["soma_dim_1"].to_numpy()
-                values = table["soma_data"].to_numpy()
-                
-                for obs_jid, gene_jid, value in zip(obs_jids, gene_jids, values):
-                    if obs_jid in sub_joinid_to_idx:
-                        obs_idx = sub_joinid_to_idx[obs_jid]
-                        gene_idx = np.where(batch_gene_joinids == gene_jid)[0]
-                        if gene_idx.size > 0:
-                            batch_expr[obs_idx, gene_idx[0]] = value
-            
-            # Calculate correlations for this batch
-            for i, gene_symbol in enumerate(batch_genes):
-                other_expr = batch_expr[:, i]
-                if np.sum(other_expr > 0) >= 10:
-                    try:
-                        corr, p_value = pearsonr(gene_expr_sub, other_expr)
-                        if p_value <= 0.05 and not np.isnan(corr):
-                            correlations[gene_symbol] = corr
-                    except:
-                        continue
+            if np.sum(other_expr > 0) >= 10:
+                try:
+                    corr, p_value = pearsonr(gene_expr_sub, other_expr)
+                    if p_value <= 0.05 and not np.isnan(corr):
+                        correlations[gene_symbol] = corr
+                except:
+                    continue
+        
+        logger.info(f"Found {len(correlations)} significant correlations (p <= 0.05)")
 
         # Sort by correlation and get top k
         sorted_correlations = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
@@ -465,12 +568,16 @@ def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k
         top_positive = sorted_correlations[:k]
         top_negative = sorted_correlations[-k:]
         
-        return top_positive, top_negative, genes
+        return top_positive, top_negative, all_genes_list
 
-@task(log_prints=True, cache_policy=None)
-def run_combined_ldsc_tissue_analysis(gene_expression, projects_handler, munged_file, output_dir, project_id, user_id):
+@task(log_prints=True)
+def run_combined_ldsc_tissue_analysis( munged_file, output_dir, project_id, user_id):
     """Combined LDSC + tissue analysis as part of main analysis pipeline"""
     analysis_run_id = None
+
+    deps = get_deps()
+    gene_expression = deps["gene_expression"]
+
     try:
         logger.info("[PIPELINE] Starting combined LDSC + tissue analysis")
         
@@ -491,21 +598,21 @@ def run_combined_ldsc_tissue_analysis(gene_expression, projects_handler, munged_
         
         # Step 1: Setup LDSC environment
         logger.info("[PIPELINE] Setting up LDSC environment...")
-        ldsc_dir = setup_ldsc_environment.submit(ldsc_work_dir).result()
+        ldsc_dir = setup_ldsc_environment(ldsc_work_dir)
         
         # Step 2: Run LDSC analysis
         logger.info("[PIPELINE] Running LDSC heritability analysis...")
         output_prefix = f"{output_dir}/ldsc_project_analysis"
-        ldsc_success = run_ldsc_analysis.submit(ldsc_dir, munged_file, output_prefix).result()
+        ldsc_success = run_ldsc_analysis(ldsc_dir, munged_file, output_prefix)
         
         if not ldsc_success:
             raise RuntimeError("LDSC analysis failed")
         
         # Step 3: Process LDSC results
         logger.info("[PIPELINE] Processing LDSC results...")
-        top_tissues, ldsc_results_data = process_ldsc_results.submit(
+        top_tissues, ldsc_results_data = process_ldsc_results(
             output_dir, "ldsc_project_analysis", 10
-        ).result()
+        )
         
         # Step 4: Tissue mapping analysis
         logger.info("[PIPELINE] Running tissue mapping analysis...")
@@ -513,13 +620,13 @@ def run_combined_ldsc_tissue_analysis(gene_expression, projects_handler, munged_
         os.makedirs(work_dir, exist_ok=True)
         
         # Load ontology mappings
-        gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology = load_ontology_mappings.submit(work_dir).result()
+        gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology = load_ontology_mappings(work_dir)
         
         # Map tissues to CellxGene format
         tissue_names = [t.get('Name', '') for t in ldsc_results_data]
-        ontology_mapping_results = map_tissues_to_cellxgene.submit(
-            tissue_names, gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology
-        ).result()
+        ontology_mapping_results = map_tissues_to_cellxgene(
+            top_tissues, gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology
+        )
         
         # Step 5: Save comprehensive results to database        
         gene_expression.save_ldsc_results(analysis_run_id, ldsc_results_data)
