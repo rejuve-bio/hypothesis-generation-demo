@@ -33,7 +33,6 @@ class MinIOStorage:
                 read_timeout=300,  # 5 minutes for large file uploads
                 retries={'max_attempts': 3}
             ),
-            region_name='us-east-1'
         )
         
         logger.info(f"MinIO client initialized for bucket '{bucket}' at {endpoint}")
