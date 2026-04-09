@@ -4,7 +4,7 @@ import os
 import argparse
 import logging
 from flows import enrichment_flow, analysis_pipeline_flow, child_enrichment_batch_flow
-from config import Config
+from src.config import Config
 from dotenv import load_dotenv
 
 # Set up logging

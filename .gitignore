@@ -225,7 +225,10 @@ data/ontology
 data/harmonizer_ref/
 data/Manifest_201807.csv
 data/gwas_catalog_phenotypes.json
-
+data/chr16
+data/per_chr
+diagrams
+docs
 uv.lock
 
 # Logs

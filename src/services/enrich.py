@@ -2,8 +2,8 @@ from collections import namedtuple
 from typing import List, Optional
 import pickle
 import gseapy as gp
-from config import Config
-from config import create_dependencies
+from src.config import Config
+from src.config import create_dependencies
 from gene_expression_tasks import get_coexpression_matrix_for_tissue
 import pandas as pd
 from loguru import logger
