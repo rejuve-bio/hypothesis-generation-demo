@@ -14,8 +14,8 @@ def dask_setup(worker):
     logger.info(f"[DASK PRELOAD] Worker ID: {getattr(worker, 'id', 'unknown')}")
     
     try:
-        from config import create_dependencies, Config
-        from status_tracker import status_tracker
+        from src.config import create_dependencies, Config
+        from services.status_tracker import status_tracker
         
         config = Config.from_env()
         logger.info("[DASK PRELOAD] Config created, creating dependencies...")

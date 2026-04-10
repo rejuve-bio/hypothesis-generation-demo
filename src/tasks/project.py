@@ -4,7 +4,7 @@ from prefect import task
 from loguru import logger
 import gzip
 import re
-from utils import emit_analysis_update, get_deps
+from src.utils import emit_analysis_update, get_deps
 
 
 @task()

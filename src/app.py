@@ -11,11 +11,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from config import Config, create_dependencies
-from logging_config import setup_logging
-from socketio_instance import sio 
-from status_tracker import StatusTracker
-from api import init_deps, router
+from src.config import Config, create_dependencies
+from src.logging_config import setup_logging
+from src.socketio_instance import sio 
+from services.status_tracker import StatusTracker
+from api import router
+from api.dependencies import init_deps
 
 
 

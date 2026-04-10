@@ -13,10 +13,10 @@ import cellxgene_census
 import tiledbsoma as soma
 import multiprocessing
 import re
-from config import Config
+from src.config import Config
 import shutil
 import pickle
-from utils import get_deps
+from src.utils import get_deps
 
 try:
     import warnings

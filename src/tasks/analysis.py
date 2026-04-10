@@ -20,9 +20,9 @@ import psutil
 import gc
 import optuna
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from config import Config
+from src.config import Config
 import re
-from utils import transform_credible_sets_to_locuszoom, get_deps, get_shared_temp_dir
+from src.utils import transform_credible_sets_to_locuszoom, get_deps, get_shared_temp_dir
 
 
 logging.basicConfig(level=logging.INFO)

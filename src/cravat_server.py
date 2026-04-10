@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from inference_util import analyze_coding_effect
+from scripts.inference_util import analyze_coding_effect
 
 app = Flask(__name__)
 
