@@ -39,7 +39,7 @@ def __(mo):
 @app.cell
 def __(mo, os):
     GWAS_INPUT_FILE = mo.ui.text(
-        value="data/gwas/mdd_symptoms_2023-Clin-MDD1_depressed.txt.gz",
+        value="data/gwas/PGC_UKB_depression_genome-wide.txt",
         label="GWAS input file path",
         full_width=True,
     )
@@ -311,27 +311,61 @@ def __(
         print(f"Munged sumstats already exists, skipping: {SUMSTATS_FILE}")
     else:
         if not os.path.exists(PREMUNGE_FILE):
-            _skip = 0
-            with _gzip.open(GWAS_FILE, "rt") as _fh:
+            _lower   = GWAS_FILE.lower()
+            _is_gz   = _lower.endswith(".gz") or _lower.endswith(".bgz")
+            _is_bz2  = _lower.endswith(".bz2")
+            _comp    = "gzip" if _is_gz else ("bz2" if _is_bz2 else None)
+            _open_fn = _gzip.open if _is_gz else open
+
+            _skip     = 0
+            _peek_line = ""
+            with _open_fn(GWAS_FILE, "rt") as _fh:
                 for _line in _fh:
                     if _line.startswith("##"):
                         _skip += 1
                     else:
+                        _peek_line = _line
                         break
 
-            _df = pd.read_csv(GWAS_FILE, sep="\t", compression="gzip", skiprows=_skip)
+            _sep = "\t" if "\t" in _peek_line else " "
+            print(f"  Separator: {'tab' if _sep == chr(9) else 'space'}")
+
+            _df = pd.read_csv(GWAS_FILE, sep=_sep, compression=_comp, skiprows=_skip)
             _df.columns = [c.lstrip("#").strip() for c in _df.columns]
             print(f"  Columns: {list(_df.columns)}")
 
             _cl = {c.lower(): c for c in _df.columns}
 
-            _rsid_col  = _cl.get("id") or _cl.get("snp") or _cl.get("rsid") or _cl.get("variant_id")
-            _a1_col    = _cl.get("a1") or _cl.get("alt") or _cl.get("effect_allele")
-            _a2_col    = _cl.get("a2") or _cl.get("ref") or _cl.get("reference") or _cl.get("other_allele")
-            _beta_col  = _cl.get("beta") or _cl.get("b") or _cl.get("logor")
-            _se_col    = _cl.get("se") or _cl.get("stderr") or _cl.get("standard_error")
-            _p_col     = _cl.get("pval") or _cl.get("pvalue") or _cl.get("p_value") or _cl.get("p")
-            _n_col     = _cl.get("neff") or _cl.get("n") or _cl.get("n_total") or _cl.get("sample_size")
+            _rsid_col = (
+                _cl.get("markername") or _cl.get("id") or _cl.get("snp") or
+                _cl.get("rsid") or _cl.get("variant_id") or _cl.get("hm_rsid")
+            )
+            _a1_col = (
+                _cl.get("a1") or _cl.get("alt") or _cl.get("effect_allele") or _cl.get("allele1")
+            )
+            _a2_col = (
+                _cl.get("a2") or _cl.get("ref") or _cl.get("reference") or
+                _cl.get("other_allele") or _cl.get("allele2")
+            )
+            _beta_col = (
+                _cl.get("logor") or _cl.get("log_or") or _cl.get("beta") or
+                _cl.get("b") or _cl.get("hm_beta")
+            )
+            _se_col = (
+                _cl.get("stderrlogor") or _cl.get("se") or _cl.get("stderr") or
+                _cl.get("standard_error") or _cl.get("se_gc")
+            )
+            _p_col = (
+                _cl.get("p") or _cl.get("pval") or _cl.get("pvalue") or
+                _cl.get("p_value") or _cl.get("p-value")
+            )
+            _n_col = (
+                _cl.get("neff") or _cl.get("n_eff") or _cl.get("n") or
+                _cl.get("n_total") or _cl.get("sample_size") or _cl.get("ns")
+            )
+
+            print(f"  Detected — snp:{_rsid_col} a1:{_a1_col} a2:{_a2_col} "
+                  f"beta:{_beta_col} se:{_se_col} p:{_p_col} n:{_n_col}")
 
             _df = _df.rename(columns={
                 _a1_col: "A1", _a2_col: "A2", _beta_col: "BETA",
@@ -339,29 +373,56 @@ def __(
             })
 
             if _rsid_col and _df[_rsid_col].astype(str).str.match(r"^rs\d+$", na=False).sum() > 0:
+                print(f"  Using rs IDs from '{_rsid_col}'")
                 _df["SNP"] = _df[_rsid_col]
             else:
+                print("  Mapping chr:pos -> rsID via bim files...")
                 _bim_map = pd.concat([
                     pd.read_csv(f, sep="\t", header=None, names=["CHR","SNP","CM","BP","A1b","A2b"])
                     .assign(key=lambda x: x["CHR"].astype(str) + ":" + x["BP"].astype(str))[["key","SNP"]]
                     for f in sorted(glob.glob("data/reference/GRCh38/plink_files/1000G.EUR.hg38.*.bim"))
                 ]).drop_duplicates("key").set_index("key")["SNP"]
                 _varid = _cl.get("varid") or _cl.get("variant")
-                _df["key"] = _df[_varid].str.split(":").str[:2].str.join(":") if _varid else (
-                    _df[_cl.get("chrom") or _cl.get("chr")].astype(str).str.replace("chr","",regex=False)
-                    + ":" + _df[_cl.get("pos") or _cl.get("position")].astype(str)
-                )
+                if _varid:
+                    _df["key"] = _df[_varid].str.split(":").str[:2].str.join(":")
+                else:
+                    _chr_col = _cl.get("chrom") or _cl.get("chromosome") or _cl.get("chr")
+                    _pos_col = _cl.get("pos") or _cl.get("position") or _cl.get("bp")
+                    if not _chr_col or not _pos_col:
+                        raise ValueError(
+                            f"Cannot find chr/pos columns. Available: {list(_df.columns)}"
+                        )
+                    _df["key"] = (
+                        _df[_chr_col].astype(str).str.replace("chr", "", regex=False)
+                        + ":" + _df[_pos_col].astype(str)
+                    )
+                _before = len(_df)
                 _df["SNP"] = _df["key"].map(_bim_map)
                 _df = _df.drop(columns=["key"])
+                print(f"  Mapped {_df['SNP'].notna().sum():,} / {_before:,} variants to rs IDs")
+
+            if "BETA" in _df.columns:
+                _df["BETA"] = pd.to_numeric(_df["BETA"], errors="coerce")
+            if "SE" in _df.columns:
+                _df["SE"] = pd.to_numeric(_df["SE"], errors="coerce")
+            if "P" in _df.columns:
+                _df["P"] = pd.to_numeric(_df["P"], errors="coerce")
+            if "A1" in _df.columns:
+                _df["A1"] = _df["A1"].str.upper()
+            if "A2" in _df.columns:
+                _df["A2"] = _df["A2"].str.upper()
+
+            _missing = [c for c in ["SNP","A1","A2","BETA","P"] if c not in _df.columns]
+            if _missing:
+                raise ValueError(f"Could not detect required columns: {_missing}. Available: {list(_df.columns)}")
 
             _keep = [c for c in ["SNP","A1","A2","BETA","SE","P","N"] if c in _df.columns]
-            _df[_keep].dropna(subset=["SNP","A1","A2","BETA","P"]).to_csv(
-                PREMUNGE_FILE, sep="\t", index=False, compression="gzip"
-            )
-            print(f"  Written {len(_df):,} variants to {PREMUNGE_FILE}")
+            _out  = _df[_keep].dropna(subset=["SNP","A1","A2","BETA","P"])
+            _out.to_csv(PREMUNGE_FILE, sep="\t", index=False, compression="gzip")
+            print(f"  Written {len(_out):,} variants to {PREMUNGE_FILE}")
 
         _peek = pd.read_csv(PREMUNGE_FILE, sep="\t", compression="gzip", nrows=2)
-        subprocess.run([
+        _munge_cmd = [
             python27_path, "tools/ldsc/munge_sumstats.py",
             "--sumstats",        PREMUNGE_FILE,
             "--out",             MUNGE_PREFIX,
@@ -371,15 +432,21 @@ def __(
             "--signed-sumstats", "BETA,0",
             "--p",               "P",
             "--merge-alleles",   W_HM3_SNPLIST,
-        ] + (["--N-col", "N"] if "N" in _peek.columns else []), check=True)
+        ]
+
+        if "N" in _peek.columns:
+            _munge_cmd += ["--N-col", "N"]
+        else:
+            _munge_cmd += ["--N", "500199"]
+
+        subprocess.run(_munge_cmd, check=True)
         print(f"Munging complete: {SUMSTATS_FILE}")
 
     return
 
-
 @app.cell
 def __(mo):
-    mo.md("## 4. Generate cell-type-specific binary annotations (BED -> .annot.gz)")
+    mo.md("## 4. Generate cell-type-specific binary annotations (BED -> .annot.gz)") 
     return
 
 
