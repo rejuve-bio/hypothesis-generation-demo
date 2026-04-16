@@ -3,7 +3,7 @@
 import os
 import argparse
 import logging
-from flows import enrichment_flow, analysis_pipeline_flow, child_enrichment_batch_flow
+from src.flows import enrichment_flow, analysis_pipeline_flow, child_enrichment_batch_flow
 from src.config import Config
 from dotenv import load_dotenv
 

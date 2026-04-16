@@ -9,7 +9,7 @@ from prefect.runtime import flow_run as _prefect_flow_run
 from prefect_dask import DaskTaskRunner
 
 from src.config import Config
-from tasks import (
+from src.tasks import (
     get_project_analysis_path_task,
     prepare_gwas_file_task,
     harmonize_sumstats_with_nextflow,

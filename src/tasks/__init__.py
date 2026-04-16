@@ -1,5 +1,5 @@
 # enrichment tasks and helpers
-from tasks.enrichment import (
+from src.tasks.enrichment import (
     parse_prolog_graphs,
     extract_causal_gene_from_graph,
     check_enrich,
@@ -12,7 +12,7 @@ from tasks.enrichment import (
 )
 
 # hypothesis tasks and helpers
-from tasks.hypothesis import (
+from src.tasks.hypothesis import (
     extract_probability,
     get_related_hypotheses,
     check_hypothesis,
@@ -26,7 +26,7 @@ from tasks.hypothesis import (
 )
 
 # GWAS analysis tasks
-from tasks.analysis import (
+from src.tasks.analysis import (
     harmonize_sumstats_with_nextflow,
     filter_significant_variants,
     run_cojo_per_chromosome,
@@ -37,13 +37,13 @@ from tasks.analysis import (
 )
 
 # gene expression tasks
-from tasks.gene_expression import (
+from src.tasks.gene_expression import (
     run_combined_ldsc_tissue_analysis,
     get_coexpression_matrix_for_tissue,
 )
 
 # project tasks and helpers
-from tasks.project import (
+from src.tasks.project import (
     prepare_gwas_file_task,
     save_analysis_state_task,
     load_analysis_state_task,

@@ -1,14 +1,14 @@
 import os
 import argparse
-from services.llm import LLM
-from services.prolog import PrologQuery
-from db import (
+from src.services.llm import LLM
+from src.services.prolog import PrologQuery
+from src.db import (
     UserHandler, ProjectHandler, FileHandler, AnalysisHandler,
     EnrichmentHandler, HypothesisHandler, SummaryHandler, TaskHandler,
     GeneExpressionHandler, GWASLibraryHandler,
     PhenotypeHandler
 )
-from services.storage import create_minio_client_from_env
+from src.services.storage import create_minio_client_from_env
 
 class Config:
     """Centralized configuration for the application"""
@@ -92,7 +92,7 @@ class Config:
 def create_dependencies(config):
     """Factory function to create all dependencies from config"""
     # Import here to avoid circular dependency
-    from services.enrich import Enrich
+    from src.services.enrich import Enrich
     
     enrichr = Enrich(
         config.ensembl_hgnc_map,

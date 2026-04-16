@@ -11,10 +11,10 @@ import sys
 from pathlib import Path
 from loguru import logger
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_root))
 
-from db import GWASLibraryHandler, PhenotypeHandler
+from src.db import GWASLibraryHandler, PhenotypeHandler
 from scripts.gwas_manifest_parser import GWASManifestParser
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException, Query
 from loguru import logger
 
-from api.dependencies import _deps
+from src.api.dependencies import _deps
 from src.utils import serialize_datetime_fields
 
 router = APIRouter()

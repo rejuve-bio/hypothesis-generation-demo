@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from loguru import logger
 
-from api.dependencies import _deps
+from src.api.dependencies import _deps
 
 router = APIRouter()
 

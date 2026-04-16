@@ -4,11 +4,11 @@
 set -e
 
 echo "=============================================="
-echo "🚀 Starting Application Initialization"
+echo "Starting Application Initialization"
 echo "=============================================="
 
 # Wait for MongoDB to be ready
-echo "⏳ Waiting for MongoDB to be ready..."
+echo "Waiting for MongoDB to be ready..."
 max_attempts=30
 attempt=0
 
@@ -24,23 +24,18 @@ while [ $attempt -lt $max_attempts ]; do
 done
 
 if [ $attempt -eq $max_attempts ]; then
-    echo "❌ MongoDB failed to become ready after $max_attempts attempts"
-    echo "⚠️  Continuing anyway - application will retry connections"
+    echo "MongoDB failed to become ready after $max_attempts attempts"
+    echo "Continuing anyway - application will retry connections"
 fi
 
 echo ""
 echo "=============================================="
-echo "🌱 Running Database Seeding"
+echo "Running Database Seeding"
 echo "=============================================="
 
 # Run database seeding
-python3 seed_database.py
+python3 src/seed_database.py
 
-echo ""
-echo "=============================================="
-echo "🏃 Starting Flask Application"
-echo "=============================================="
-echo ""
 
 # Execute the original command
 exec "$@"

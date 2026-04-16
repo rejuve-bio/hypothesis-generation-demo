@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 from prefect import task
-from services.status_tracker import TaskState, status_tracker
+from src.services.status_tracker import TaskState, status_tracker
 from src.utils import emit_task_update, get_deps
 
 

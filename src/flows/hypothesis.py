@@ -5,7 +5,7 @@ from prefect import flow
 from prefect_dask import DaskTaskRunner
 
 from src.config import Config, create_dependencies
-from tasks import (
+from src.tasks import (
     check_hypothesis,
     get_enrich,
     get_gene_ids,
