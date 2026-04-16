@@ -39,7 +39,7 @@ def __(mo):
 @app.cell
 def __(mo, os):
     GWAS_INPUT_FILE = mo.ui.text(
-        value="data/gwas/UKBB.GWAS1KG.EXOME.CAD.SOFT.META.PublicRelease.300517.txt.gz",
+        value="data/gwas/PGC_UKB_depression_genome-wide.txt",
         label="GWAS input file path",
         full_width=True,
     )
@@ -79,7 +79,7 @@ def __(GWAS_INPUT_FILE, os, re):
     GWAS_FILE      = _path
     SUMSTATS_FILE  = f"data/ldsc_input/{GWAS_STEM}.sumstats.gz"
     CTS_FILE       = f"data/{GWAS_STEM}_cell_types.cts"
-    RESULTS_PREFIX = f"results/{GWAS_STEM}_CellTypeSpecific"
+    RESULTS_PREFIX = f"new_results/{GWAS_STEM}_CellTypeSpecific"
 
     print(f"GWAS stem      : {GWAS_STEM}")
     print(f"GWAS file      : {GWAS_FILE}")
@@ -288,42 +288,129 @@ def __(subprocess, os):
 
 @app.cell
 def __(mo):
-    mo.md("## 3. Setup harmonization workflow")
+    mo.md("## 3. Reformat GWAS to harmonizer-compatible format")
+    return
+
+
+@app.cell
+def __(GWAS_FILE, pd, os, glob):
+    import gzip as _gzip
+
+    _lower   = GWAS_FILE.lower()
+    _is_gz   = _lower.endswith(".gz") or _lower.endswith(".bgz")
+    _comp    = "gzip" if _is_gz else None
+    _open_fn = _gzip.open if _is_gz else open
+
+    _skip = 0
+    _peek_line = ""
+    with _open_fn(GWAS_FILE, "rt") as _fh:
+        for _line in _fh:
+            if not _line.startswith("##"):
+                _peek_line = _line
+                break
+    _sep = "\t" if "\t" in _peek_line else " "
+
+    os.makedirs("data/gwas_reformatted", exist_ok=True)
+    REFORMATTED_GWAS = f"data/gwas_reformatted/{os.path.basename(GWAS_FILE)}.gz"
+
+    if os.path.exists(REFORMATTED_GWAS):
+        print(f"Reformatted file already exists: {REFORMATTED_GWAS}")
+    else:
+        _df = pd.read_csv(GWAS_FILE, sep=_sep, compression=_comp, skiprows=_skip)
+        _df.columns = [c.lstrip("#").strip() for c in _df.columns]
+        print(f"  Columns: {list(_df.columns)}")
+
+        _cl = {c.lower(): c for c in _df.columns}
+
+        _snp_col  = _cl.get("markername") or _cl.get("snptestid") or _cl.get("id") or _cl.get("snp") or _cl.get("rsid") or _cl.get("variant_id")
+        _chr_col  = _cl.get("chr") or _cl.get("chrom") or _cl.get("chromosome") or _cl.get("#chrom") or _cl.get("hm_chrom")
+        _pos_col  = _cl.get("pos") or _cl.get("bp") or _cl.get("position") or _cl.get("bp_hg19") or _cl.get("base_pair_location")
+        _a1_col   = _cl.get("a1") or _cl.get("effect_allele") or _cl.get("alt") or _cl.get("hm_effect_allele")
+        _a2_col   = _cl.get("a2") or _cl.get("noneffect_allele") or _cl.get("other_allele") or _cl.get("ref") or _cl.get("hm_other_allele")
+        _beta_col = _cl.get("logor") or _cl.get("log_or") or _cl.get("beta") or _cl.get("b") or _cl.get("hm_beta")
+        _se_col   = _cl.get("se_gc") or _cl.get("stderrlogor") or _cl.get("se") or _cl.get("stderr") or _cl.get("standard_error")
+        _p_col    = _cl.get("p-value_gc") or _cl.get("pvalue") or _cl.get("p_value") or _cl.get("p-value") or _cl.get("p")
+        _n_col    = _cl.get("n_samples") or _cl.get("neff") or _cl.get("n") or _cl.get("n_total")
+
+        _rename = {}
+        if _snp_col:  _rename[_snp_col]  = "snp"
+        if _a1_col:   _rename[_a1_col]   = "a1"
+        if _a2_col:   _rename[_a2_col]   = "a2"
+        if _beta_col: _rename[_beta_col] = "beta"
+        if _se_col:   _rename[_se_col]   = "se"
+        if _p_col:    _rename[_p_col]    = "p"
+        if _n_col:    _rename[_n_col]    = "n"
+        if _chr_col:  _rename[_chr_col]  = "chr"
+        if _pos_col:  _rename[_pos_col]  = "pos"
+        _df = _df.rename(columns=_rename)
+
+        if "chr" not in _df.columns or "pos" not in _df.columns:
+            print("  No chr/pos columns — looking up from bim files via rs IDs...")
+            _bim_map = pd.concat([
+                pd.read_csv(f, sep="\t", header=None, names=["chr","snp","cm","pos","a1b","a2b"])[["snp","chr","pos"]]
+                for f in sorted(glob.glob("data/reference/GRCh38/plink_files/1000G.EUR.hg38.*.bim"))
+            ]).drop_duplicates("snp").set_index("snp")
+            _df["chr"] = _df["snp"].map(_bim_map["chr"])
+            _df["pos"] = _df["snp"].map(_bim_map["pos"])
+            _df = _df.dropna(subset=["chr","pos"])
+            _df["chr"] = _df["chr"].astype(int).astype(str)
+            _df["pos"] = _df["pos"].astype(int).astype(str)
+            print(f"  Mapped {len(_df):,} variants with chr/pos")
+
+        if "chr" in _df.columns:
+            _df["chr"] = _df["chr"].astype(str).str.replace("chr","",regex=False)
+
+        _keep = [c for c in ["chr","pos","snp","a1","a2","beta","se","p","n"] if c in _df.columns]
+        _df[_keep].dropna(subset=["a1","a2","beta","p"]).to_csv(
+            REFORMATTED_GWAS, sep="\t", index=False, compression="gzip"
+        )
+        print(f"  Written {len(_df):,} variants to {REFORMATTED_GWAS}")
+
+    return (REFORMATTED_GWAS,)
+
+
+@app.cell
+def __(mo):
+    mo.md("## 4. Setup harmonization workflow")
     return
 
 
 @app.cell
 def __(os, Path):
-    HARMONIZER_CODE_REPO = os.getenv("HARMONIZER_CODE_REPO", "path/to/harmonizer/repo")
-    HARMONIZER_REF_DIR = os.getenv("HARMONIZER_REF_DIR", "path/to/harmonizer/reference")
+    HARMONIZER_CODE_REPO = "/mnt/hdd_1/abdu/finemapping"
+    HARMONIZER_REF_DIR   = "/mnt/hdd_1/abdu/finemapping/data/1000Genomes_phase3"
 
-    harmonizer_script = Path(HARMONIZER_CODE_REPO) / "harmonizer.sh"
+    harmonizer_script = Path(HARMONIZER_CODE_REPO) / "scripts" / "6_harmoniser.sh"
+
+    nextflow_env = {
+        **os.environ,
+        "PATH": "/mnt/hdd_1/rediet/hypothesis-generation-demo:/mnt/hdd_1/rediet/jdk-17/bin:" + os.environ.get("PATH", ""),
+        "JAVA_HOME": "/mnt/hdd_1/rediet/jdk-17",
+    }
 
     if not harmonizer_script.exists():
-        print(f"WARNING: harmonizer.sh not found at {harmonizer_script}")
-        print(f"Please set HARMONIZER_CODE_REPO environment variable")
+        print(f"WARNING: 6_harmoniser.sh not found at {harmonizer_script}")
         harmonizer_ready = False
     elif not os.path.isdir(HARMONIZER_REF_DIR):
-        print(f"WARNING: Harmonizer reference directory not found at {HARMONIZER_REF_DIR}")
-        print(f"Please run harmonizer_setup.sh first or set HARMONIZER_REF_DIR")
+        print(f"WARNING: Reference directory not found at {HARMONIZER_REF_DIR}")
         harmonizer_ready = False
     else:
         print(f"Harmonizer configuration found")
-        print(f"  Code repo: {HARMONIZER_CODE_REPO}")
+        print(f"  Script   : {harmonizer_script}")
         print(f"  Reference: {HARMONIZER_REF_DIR}")
         harmonizer_ready = True
 
-    return (HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR, harmonizer_ready)
+    return (HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR, harmonizer_ready, harmonizer_script, nextflow_env)
 
 
 @app.cell
 def __(mo):
-    mo.md("## 4. Harmonize GWAS summary statistics")
+    mo.md("## 5. Harmonize GWAS summary statistics")
     return
 
 
 @app.cell
-def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR, GWAS_FILE):
+def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR, REFORMATTED_GWAS, harmonizer_script, nextflow_env):
     os.makedirs("data/harmonized", exist_ok=True)
 
     harmonized_found = False
@@ -347,13 +434,13 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
         try:
             _result = subprocess.run([
                 "bash",
-                os.path.join(HARMONIZER_CODE_REPO, "harmonizer.sh"),
-                "--input", os.path.abspath(GWAS_FILE),
-                "--build", "GRCh38",
-                "--ref", HARMONIZER_REF_DIR,
+                str(harmonizer_script),
+                "--input",     os.path.abspath(REFORMATTED_GWAS),
+                "--build",     "GRCh38",
+                "--ref",       HARMONIZER_REF_DIR,
                 "--code-repo", HARMONIZER_CODE_REPO,
                 "--threshold", "0.99"
-            ], check=True, capture_output=True, text=True)
+            ], check=True, capture_output=True, text=True, env=nextflow_env)
 
             print(_result.stdout)
             if _result.stderr:
@@ -380,54 +467,69 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
 
 @app.cell
 def __(mo):
-    mo.md("## 5. Convert harmonized output to LDSC format")
+    mo.md("## 6. Convert harmonized output to LDSC format")
     return
 
 
 @app.cell
-def __(os, subprocess, python27_path, harmonized_output_dir, SUMSTATS_FILE, W_HM3_SNPLIST):
+def __(os, pd, harmonized_output_dir, SUMSTATS_FILE, W_HM3_SNPLIST):
     os.makedirs("data/ldsc_input", exist_ok=True)
 
     if harmonized_output_dir is None:
-        print("Skipping LDSC conversion - no harmonized data available")
+        print("Skipping - no harmonized data available")
     elif os.path.exists(SUMSTATS_FILE):
         print(f"LDSC sumstats already exists, skipping: {SUMSTATS_FILE}")
     else:
         _final_dir = os.path.join(harmonized_output_dir, "final")
+        _files = [f for f in os.listdir(_final_dir) if f.endswith(".tsv.gz")] if os.path.exists(_final_dir) else []
 
-        if not os.path.exists(_final_dir):
-            print(f"WARNING: Final directory not found: {_final_dir}")
+        if not _files:
+            print(f"WARNING: No harmonized file found in {_final_dir}")
         else:
-            _harmonized_files = [f for f in os.listdir(_final_dir) if f.endswith(".tsv.gz")]
+            _harmonized_file = os.path.join(_final_dir, _files[0])
+            print(f"Converting {_harmonized_file} to LDSC format...")
 
-            if not _harmonized_files:
-                print(f"WARNING: No .tsv.gz file found in {_final_dir}")
-            else:
-                _harmonized_file = os.path.join(_final_dir, _harmonized_files[0])
-                print(f"Found harmonized file: {_harmonized_file}")
+            _df = pd.read_csv(_harmonized_file, sep="\t", compression="gzip")
+            print(f"  Columns: {list(_df.columns)}")
 
-                _munge_prefix = SUMSTATS_FILE.replace(".sumstats.gz", "")
+            _df = _df.rename(columns={
+                "rsid":            "SNP",
+                "effect_allele":   "A1",
+                "other_allele":    "A2",
+                "beta":            "BETA",
+                "standard_error":  "SE",
+                "p_value":         "P",
+            })
 
-                subprocess.run([
-                    python27_path, "tools/ldsc/munge_sumstats.py",
-                    "--sumstats",        _harmonized_file,
-                    "--out",             _munge_prefix,
-                    "--a1",              "effect_allele",
-                    "--a2",              "other_allele",
-                    "--p",               "p_value",
-                    "--snp",             "rsid",
-                    "--signed-sumstats", "beta,0",
-                    "--merge-alleles",   W_HM3_SNPLIST,
-                ], check=True)
+            _df["BETA"] = pd.to_numeric(_df["BETA"], errors="coerce")
+            _df["SE"]   = pd.to_numeric(_df["SE"],   errors="coerce")
+            _df["A1"]   = _df["A1"].str.upper()
+            _df["A2"]   = _df["A2"].str.upper()
+            _df["Z"]    = _df["BETA"] / _df["SE"]
 
-                print(f"LDSC conversion complete: {SUMSTATS_FILE}")
+            _hm3 = pd.read_csv(W_HM3_SNPLIST, sep="\t")[["SNP", "A1", "A2"]]
+            _df  = _df.merge(_hm3, on="SNP", suffixes=("", "_hm3"))
+            _df  = _df[
+                (_df["A1"] == _df["A1_hm3"]) | (_df["A1"] == _df["A2_hm3"])
+            ].drop(columns=["A1_hm3", "A2_hm3"])
+
+            _strand_ambig = _df.apply(
+                lambda r: set([r["A1"], r["A2"]]) in [{"A","T"}, {"C","G"}], axis=1
+            )
+            _df = _df[~_strand_ambig]
+
+            _keep = [c for c in ["SNP","A1","A2","Z","N"] if c in _df.columns]
+            _out  = _df[_keep].dropna(subset=["SNP","A1","A2","Z"])
+            _out.to_csv(SUMSTATS_FILE, sep="\t", index=False, compression="gzip")
+            print(f"  Written {len(_out):,} SNPs to {SUMSTATS_FILE}")
+            print(f"  Mean |Z|: {_out['Z'].abs().mean():.3f}")
 
     return
 
 
 @app.cell
 def __(mo):
-    mo.md("## 6. Generate cell-type-specific binary annotations (BED -> .annot.gz)")
+    mo.md("## 7. Generate cell-type-specific binary annotations (BED -> .annot.gz)")
     return
 
 
@@ -473,7 +575,7 @@ def __(subprocess, os, all_cell_types, cell_type_beds, python27_path, ldsc27_pat
 
 @app.cell
 def __(mo):
-    mo.md("## 7. Calculate LD scores (HapMap3 SNPs only)")
+    mo.md("## 8. Calculate LD scores (HapMap3 SNPs only)")
     return
 
 
@@ -520,13 +622,13 @@ def __(subprocess, os, all_cell_types, python27_path, concurrent, multiprocessin
 
 @app.cell
 def __(mo):
-    mo.md("## 8. Create CTS reference file")
+    mo.md("## 9. Create CTS reference file")
     return
 
 
 @app.cell
 def __(os, all_cell_types, CTS_FILE):
-    os.makedirs("results", exist_ok=True)
+    os.makedirs("new_results", exist_ok=True)
 
     COMPLETED_CELL_TYPES = []
     for _ct in all_cell_types:
@@ -551,7 +653,7 @@ def __(os, all_cell_types, CTS_FILE):
 
 @app.cell
 def __(mo):
-    mo.md("## 9. Run LDSC cell-type-specific heritability analysis")
+    mo.md("## 10. Run LDSC cell-type-specific heritability analysis")
     return
 
 
@@ -562,7 +664,7 @@ def __(CTS_FILE, python27_path, SUMSTATS_FILE, RESULTS_PREFIX, os, subprocess):
     elif not os.path.exists(CTS_FILE):
         print(f"Skipping — CTS file not found: {CTS_FILE}")
     else:
-        os.makedirs("results", exist_ok=True)
+        os.makedirs("new_results", exist_ok=True)
         print("Running LDSC CTS analysis...")
         subprocess.run(
             [
@@ -584,7 +686,7 @@ def __(CTS_FILE, python27_path, SUMSTATS_FILE, RESULTS_PREFIX, os, subprocess):
 
 @app.cell
 def __(mo):
-    mo.md("## 10. Results")
+    mo.md("## 11. Results")
     return
 
 
