@@ -9,7 +9,7 @@ from loguru import logger
 from src.api.dependencies import _JWT_SECRET, _deps
 from src.services.status_tracker import status_tracker
 from src.socketio_instance import sio
-from src.utils import serialize_datetime_fields
+from src.utils import analysis_state_for_public_api, serialize_datetime_fields
 
 
 def _extract_token_from_environ(environ: dict) -> str | None:
@@ -168,7 +168,9 @@ async def handle_subscribe_analysis(sid: str, data: dict | str) -> dict:
         await sio.enter_room(sid, room)
         logger.info(f"[SIO] {sid} joined room '{room}'")
 
-        analysis_state = projects.load_analysis_state(user_id, project_id) or {}
+        analysis_state = analysis_state_for_public_api(
+            projects.load_analysis_state(user_id, project_id)
+        )
         response_data = {
             "project_id": project_id,
             "user_id": user_id,

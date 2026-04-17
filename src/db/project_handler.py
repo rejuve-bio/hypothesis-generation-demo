@@ -285,10 +285,10 @@ class ProjectHandler(BaseHandler):
                         return {**state, "status": "Failed",
                                 "message": f"Pipeline {prefect_state_type.lower()} (confirmed via Prefect)"}
                     if prefect_state_type in terminal_ok:
-                        return {**state, "status": "Completed",
+                        return {**state, "status": "Done",
                                 "message": "Pipeline completed (confirmed via Prefect)"}
                     if prefect_state_type in terminal_stopped:
-                        return {**state, "status": "Interrupted",
+                        return {**state, "status": "Failed",
                                 "message": "Pipeline was cancelled"}
                     return state
             except Exception as prefect_exc:
@@ -305,7 +305,7 @@ class ProjectHandler(BaseHandler):
                     hours = int(age.total_seconds() / 3600)
                     return {
                         **state,
-                        "status": "Interrupted",
+                        "status": "Failed",
                         "message": (
                             f"Pipeline status unconfirmed: no update for {hours}h "
                             f"(process may have been terminated)"

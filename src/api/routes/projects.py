@@ -16,7 +16,13 @@ from src.api.dependencies import _deps
 from src.api.auth import get_current_user_id
 from src.tasks.project import count_gwas_records, get_project_with_full_data
 from src.run_deployment import invoke_analysis_pipeline_deployment
-from src.utils import allowed_file, compute_file_md5, get_shared_temp_dir, serialize_datetime_fields
+from src.utils import (
+    allowed_file,
+    compute_file_md5,
+    get_shared_temp_dir,
+    normalize_project_analysis_status,
+    serialize_datetime_fields,
+)
 
 router = APIRouter()
 
@@ -64,14 +70,11 @@ async def get_projects(
 
         try:
             analysis_state = projects.load_analysis_state(current_user_id, project["id"])
-            enhanced["status"] = (
-                analysis_state.get("status", "Not_started")
-                if analysis_state
-                else "Not_started"
-            )
+            raw = analysis_state.get("status") if analysis_state else None
+            enhanced["status"] = normalize_project_analysis_status(raw)
         except Exception as state_e:
             logger.warning(f"Could not load analysis state for project {project['id']}: {state_e}")
-            enhanced["status"] = "Completed"
+            enhanced["status"] = normalize_project_analysis_status("Completed")
 
         enhanced["population"] = project.get("population")
         enhanced["ref_genome"] = project.get("ref_genome")

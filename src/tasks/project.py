@@ -4,7 +4,7 @@ from prefect import task
 from loguru import logger
 import gzip
 import re
-from src.utils import emit_analysis_update, get_deps
+from src.utils import analysis_state_for_public_api, emit_analysis_update, get_deps
 
 
 @task()
@@ -34,10 +34,10 @@ def prepare_gwas_file_task(
     gwas_library = deps.get("gwas_library")
 
     uploading_state = {
-        "status": "Uploading",
+        "status": "Running",
         "stage": "File_upload",
         "progress": 3,
-        "message": "Preparing GWAS file...",
+        "message": "Uploading or preparing GWAS file...",
     }
     projects_handler.save_analysis_state(user_id, project_id, uploading_state)
     emit_analysis_update(user_id, project_id, uploading_state)
@@ -236,9 +236,15 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
         if not analysis_state:
             # Infer status from whether results exist
             if credible_sets_data and len(credible_sets_data) > 0:
-                analysis_state = {"status": "Completed"}
+                analysis_state = {
+                    "status": "Done",
+                    "message": "Analysis completed successfully.",
+                }
             else:
-                analysis_state = {"status": "not_started"}
+                analysis_state = {
+                    "status": "Running",
+                    "message": "Waiting to start analysis.",
+                }
         
         # Get hypotheses for this project
         project_hypotheses = []
@@ -324,7 +330,7 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
             "total_variants_count": total_variants_count,
             
             # Analysis state and parameters  
-            "analysis_state": analysis_state,
+            "analysis_state": analysis_state_for_public_api(analysis_state),
             "analysis_parameters": analysis_parameters,
             
             # Credible sets data

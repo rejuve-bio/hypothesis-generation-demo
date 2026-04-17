@@ -10,6 +10,45 @@ import uuid
 from dask.distributed import get_worker
 
 
+def normalize_project_analysis_status(raw: str | None) -> str:
+    """Map any stored status to Running, Failed, or Done (for API / sockets only)."""
+    if raw is None or not str(raw).strip():
+        return "Running"
+    key = str(raw).strip().lower().replace(" ", "_")
+    if key in ("completed", "done"):
+        return "Done"
+    if key in ("failed", "interrupted"):
+        return "Failed"
+    return "Running"
+
+
+def analysis_state_for_public_api(state: dict | None) -> dict:
+    if not state:
+        return {"status": "Running", "message": "Waiting to start analysis."}
+
+    out = {**state}
+    raw = state.get("status")
+    raw_key = str(raw or "").strip().lower().replace(" ", "_")
+    out["status"] = normalize_project_analysis_status(raw)
+
+    msg = out.get("message")
+    if msg is None or not str(msg).strip():
+        if raw_key in ("uploading",):
+            out["message"] = "Uploading or preparing GWAS file."
+        elif raw_key in ("not_started", "notstarted"):
+            out["message"] = "Waiting to start analysis."
+        elif raw_key in ("completed", "done"):
+            out["message"] = "Analysis completed successfully."
+        elif raw_key in ("interrupted",):
+            out["message"] = "Pipeline interrupted or cancelled."
+        elif out["status"] == "Failed":
+            out["message"] = "Analysis failed."
+        else:
+            out["message"] = "Waiting to start analysis."
+
+    return out
+
+
 def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, next_task=None, error=None):
     """Emit a real-time progress update to WebSocket clients."""
     task_history = status_tracker.get_history(hypothesis_id)
@@ -88,13 +127,14 @@ def emit_analysis_update(user_id, project_id, state_data):
     url = f"http://{api_host}:{api_port}/internal/task-update"
 
     room = f"analysis_{project_id}"
+    public_state = analysis_state_for_public_api(state_data)
     payload = {
         "target_room": room,
         "event": "analysis_update",
         "project_id": project_id,
         "user_id": user_id,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds") + "Z",
-        **state_data,
+        **public_state,
     }
 
     try:
