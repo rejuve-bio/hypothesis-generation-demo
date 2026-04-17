@@ -12,9 +12,9 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from werkzeug.utils import secure_filename
 
-from api.dependencies import _deps
-from api.auth import get_current_user_id
-from tasks.project import count_gwas_records, get_project_with_full_data
+from src.api.dependencies import _deps
+from src.api.auth import get_current_user_id
+from src.tasks.project import count_gwas_records, get_project_with_full_data
 from src.run_deployment import invoke_analysis_pipeline_deployment
 from src.utils import allowed_file, compute_file_md5, get_shared_temp_dir, serialize_datetime_fields
 

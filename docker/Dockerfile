@@ -171,7 +171,7 @@ COPY pyproject.toml .
 ENV UV_PROJECT_ENVIRONMENT=/opt/flask-venv
 ENV PATH="/opt/flask-venv/bin:$PATH"
 
-RUN uv sync --no-cache --extra r-integration
+RUN uv sync --no-cache --extra r-integration --no-binary-package rpy2
 
 # Copy application
 COPY . .

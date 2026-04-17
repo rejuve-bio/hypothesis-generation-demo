@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 import jwt
 from loguru import logger
 
-from api.dependencies import _JWT_SECRET, _deps
-from services.status_tracker import status_tracker
+from src.api.dependencies import _JWT_SECRET, _deps
+from src.services.status_tracker import status_tracker
 from src.socketio_instance import sio
 from src.utils import serialize_datetime_fields
 

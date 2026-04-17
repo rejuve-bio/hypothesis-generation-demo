@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
-from api.dependencies import _deps
-from api.auth import get_current_user_id
+from src.api.dependencies import _deps
+from src.api.auth import get_current_user_id
 from src.utils import convert_variants_to_object_array, serialize_datetime_fields
 
 router = APIRouter()

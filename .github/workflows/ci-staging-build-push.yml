@@ -193,7 +193,7 @@ jobs:
             container_name: prolog-service-ci-staging
             build:
               context: .
-              dockerfile: Dockerfile.prolog
+              dockerfile: docker/Dockerfile.prolog
             ports:
               - "${PROLOG_PORT_HOST}:${PROLOG_PORT_INTERNAL}"
             volumes:
@@ -206,7 +206,7 @@ jobs:
             container_name: prefect-service-ci-staging
             build:
               context: .
-              dockerfile: Dockerfile.prefect
+              dockerfile: docker/Dockerfile.prefect
             ports:
               - "${PREFECT_PORT_HOST}:${PREFECT_PORT_INTERNAL}"
             volumes:
@@ -226,7 +226,7 @@ jobs:
             container_name: prefect-deployment-ci-staging
             build:
               context: .
-              dockerfile: Dockerfile.prefect
+              dockerfile: docker/Dockerfile.prefect
             volumes:
               - .:/app
             env_file:
@@ -235,13 +235,14 @@ jobs:
               sh -c "
               echo 'Waiting for Prefect API to be ready...' &&
               sleep 30 &&
-              uv run python deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl 
+              uv run python src/deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl 
               --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl 
               --go-map /app/data/go_map.pkl 
               --swipl-host prolog-service 
               --swipl-port ${PROLOG_PORT_INTERNAL}
               "
             environment:
+              - PYTHONPATH=/app
               - PREFECT_API_URL=http://prefect-service:${PREFECT_PORT_INTERNAL}/api
               - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
             depends_on:
@@ -252,12 +253,13 @@ jobs:
             container_name: flask-app-ci-staging
             build:
               context: .
-              dockerfile: Dockerfile
+              dockerfile: docker/Dockerfile
             ports:
               - "${FLASK_PORT_HOST}:${FLASK_PORT_INTERNAL}"
             environment:
               - FLASK_ENV=development
               - PREFECT_API_URL=http://prefect-service:${PREFECT_PORT_INTERNAL}/api
+              - PYTHONPATH=/app
             env_file:
               - .env
             volumes:
@@ -270,8 +272,15 @@ jobs:
               - prefect-service
             command: >
               sh -c "
-              uv run python main.py --ensembl-hgnc-map data/ensembl_to_hgnc.pkl --hgnc-ensembl-map data/hgnc_to_ensembl.pkl \
-              --go-map data/go_map.pkl --swipl-host prolog-service --swipl-port ${PROLOG_PORT_INTERNAL}
+              uv run gunicorn \"src.server:create_app_with_config\"
+              --workers 2
+              --worker-class uvicorn.workers.UvicornWorker
+              --bind 0.0.0.0:5000
+              --timeout 600
+              --graceful-timeout 30
+              --keep-alive 5
+              --access-logfile -
+              --error-logfile -
               "
             networks:
               - app_network_ci

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import os
 from loguru import logger
-from services.status_tracker import status_tracker, TaskState
+from src.services.status_tracker import status_tracker, TaskState
 import requests as _requests
 import pandas as pd
 import numpy as np

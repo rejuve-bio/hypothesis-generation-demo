@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends
 from loguru import logger
 
-from api.auth import verify_service_token
+from src.api.auth import verify_service_token
 from src.socketio_instance import sio
 
 router = APIRouter()

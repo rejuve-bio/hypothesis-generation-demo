@@ -15,7 +15,7 @@ def dask_setup(worker):
     
     try:
         from src.config import create_dependencies, Config
-        from services.status_tracker import status_tracker
+        from src.services.status_tracker import status_tracker
         
         config = Config.from_env()
         logger.info("[DASK PRELOAD] Config created, creating dependencies...")

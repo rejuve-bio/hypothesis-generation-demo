@@ -1,14 +1,14 @@
 from fastapi import APIRouter
 
-from api import socketio  # noqa: F401 — registers @sio.on handlers
-from api.routes.analysis import router as analysis_router
-from api.routes.enrichment import router as enrichment_router
-from api.routes.files import router as files_router
-from api.routes.gwas import router as gwas_router
-from api.routes.hypothesis import router as hypothesis_router
-from api.routes.internal import router as internal_router
-from api.routes.phenotypes import router as phenotypes_router
-from api.routes.projects import router as projects_router
+from src.api import socketio  # noqa: F401 — registers @sio.on handlers
+from src.api.routes.analysis import router as analysis_router
+from src.api.routes.enrichment import router as enrichment_router
+from src.api.routes.files import router as files_router
+from src.api.routes.gwas import router as gwas_router
+from src.api.routes.hypothesis import router as hypothesis_router
+from src.api.routes.internal import router as internal_router
+from src.api.routes.phenotypes import router as phenotypes_router
+from src.api.routes.projects import router as projects_router
 
 router = APIRouter()
 router.include_router(enrichment_router)

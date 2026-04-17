@@ -6,11 +6,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from api.dependencies import _deps
-from api.auth import get_current_user_id
-from flows import hypothesis_flow
-from services.status_tracker import TaskState, status_tracker
-from tasks import extract_probability, get_related_hypotheses
+from src.api.dependencies import _deps
+from src.api.auth import get_current_user_id
+from src.flows import hypothesis_flow
+from src.services.status_tracker import TaskState, status_tracker
+from src.tasks import extract_probability, get_related_hypotheses
 from src.utils import serialize_datetime_fields
 
 router = APIRouter()

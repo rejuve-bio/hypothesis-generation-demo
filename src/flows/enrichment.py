@@ -5,10 +5,10 @@ from uuid import uuid4
 from loguru import logger
 from prefect import flow
 from prefect_dask import DaskTaskRunner
-from services.status_tracker import TaskState
+from src.services.status_tracker import TaskState
 
 from src.config import Config, create_dependencies
-from tasks import (
+from src.tasks import (
     check_enrich,
     get_candidate_genes,
     get_relevant_gene_proof,
@@ -35,7 +35,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     deps = create_dependencies(config)
 
     # Initialize StatusTracker for Prefect context
-    from services.status_tracker import StatusTracker
+    from src.services.status_tracker import StatusTracker
     status_tracker = StatusTracker()
     status_tracker.initialize(deps['tasks'])
 
@@ -242,7 +242,7 @@ def child_enrichment_batch_flow(current_user_id, child_enrich_ids, parent_hypoth
     """
     Process child enrichments in background, each using its FIRST GO term.
     """
-    from flows.hypothesis import hypothesis_flow
+    from src.flows.hypothesis import hypothesis_flow
 
     logger.info(f"[CHILD_BATCH] Starting batch processing for {len(child_enrich_ids)} child enrichments")
 

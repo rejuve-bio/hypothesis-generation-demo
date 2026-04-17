@@ -33,11 +33,11 @@ import os
 import argparse
 from pathlib import Path
 
-# Add parent directory to path to import modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_root))
 
 from scripts.gwas_manifest_parser import GWASManifestParser
-from db import GWASLibraryHandler
+from src.db import GWASLibraryHandler
 from loguru import logger
 from dotenv import load_dotenv
 
