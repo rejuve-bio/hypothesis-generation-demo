@@ -4,7 +4,12 @@ from prefect import task
 from loguru import logger
 import gzip
 import re
-from src.utils import analysis_state_for_public_api, emit_analysis_update, get_deps
+from src.utils import (
+    analysis_state_for_public_api,
+    emit_analysis_update,
+    get_deps,
+    normalize_status_responses,
+)
 
 
 @task()
@@ -237,7 +242,7 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
             # Infer status from whether results exist
             if credible_sets_data and len(credible_sets_data) > 0:
                 analysis_state = {
-                    "status": "Done",
+                    "status": "Completed",
                     "message": "Analysis completed successfully.",
                 }
             else:
@@ -277,7 +282,9 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
                         hypothesis_data = {
                             "id": h["id"], 
                             "variant": h.get("variant") or h.get("variant_id"),
-                            "status": h.get("status", "pending"),
+                            "status": normalize_status_responses(
+                                h.get("status", "pending")
+                            ),
                             "causal_gene": h.get("causal_gene"),
                             "created_at": h.get("created_at"),
                             "probability": probability  # Add confidence/probability score

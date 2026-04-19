@@ -11,7 +11,7 @@ from src.api.auth import get_current_user_id
 from src.flows import hypothesis_flow
 from src.services.status_tracker import TaskState, status_tracker
 from src.tasks import extract_probability, get_related_hypotheses
-from src.utils import serialize_datetime_fields
+from src.utils import normalize_status_responses, serialize_datetime_fields
 
 router = APIRouter()
 
@@ -58,7 +58,7 @@ async def get_hypothesis(
                 "variant": hypothesis.get("variant") or hypothesis.get("variant_id"),
                 "enrich_id": enrich_id,
                 "phenotype": hypothesis["phenotype"],
-                "status": "completed",
+                "status": "Completed",
                 "created_at": hypothesis.get("created_at"),
                 "probability": confidence,
                 "hypotheses": related_hypotheses,
@@ -102,7 +102,7 @@ async def get_hypothesis(
             "id": id,
             "variant": hypothesis.get("variant") or hypothesis.get("variant_id"),
             "phenotype": hypothesis["phenotype"],
-            "status": "pending",
+            "status": "Running",
             "created_at": hypothesis.get("created_at"),
             "task_history": last_pending_task,
             "probability": confidence,
@@ -125,7 +125,7 @@ async def get_hypothesis(
             status_data["result"] = enrich_data
 
         if latest_state and latest_state.get("state") == "failed":
-            status_data["status"] = "failed"
+            status_data["status"] = "Failed"
             status_data["error"] = latest_state.get("error")
 
         selected_tissue = None
@@ -165,7 +165,7 @@ async def get_hypothesis(
             "phenotype": hypothesis.get("phenotype"),
             "variant": hypothesis.get("variant") or hypothesis.get("variant_id"),
             "created_at": hypothesis.get("created_at"),
-            "status": hypothesis.get("status"),
+            "status": normalize_status_responses(hypothesis.get("status")),
             "task_history": last_pending_task,
         }
         for field in ("enrich_id", "biological_context", "causal_gene"):

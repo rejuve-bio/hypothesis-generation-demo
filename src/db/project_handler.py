@@ -285,7 +285,7 @@ class ProjectHandler(BaseHandler):
                         return {**state, "status": "Failed",
                                 "message": f"Pipeline {prefect_state_type.lower()} (confirmed via Prefect)"}
                     if prefect_state_type in terminal_ok:
-                        return {**state, "status": "Done",
+                        return {**state, "status": "Completed",
                                 "message": "Pipeline completed (confirmed via Prefect)"}
                     if prefect_state_type in terminal_stopped:
                         return {**state, "status": "Failed",

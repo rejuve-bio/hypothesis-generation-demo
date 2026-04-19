@@ -289,7 +289,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
 
             # Save completed analysis state
             completed_state = {
-                "status": "Done",
+                "status": "Completed",
                 "progress": 100,
                 "message": "Analysis completed successfully",
                 "ldsc_status": ldsc_status

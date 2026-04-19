@@ -20,7 +20,7 @@ from src.utils import (
     allowed_file,
     compute_file_md5,
     get_shared_temp_dir,
-    normalize_project_analysis_status,
+    normalize_status_responses,
     serialize_datetime_fields,
 )
 
@@ -71,10 +71,10 @@ async def get_projects(
         try:
             analysis_state = projects.load_analysis_state(current_user_id, project["id"])
             raw = analysis_state.get("status") if analysis_state else None
-            enhanced["status"] = normalize_project_analysis_status(raw)
+            enhanced["status"] = normalize_status_responses(raw)
         except Exception as state_e:
             logger.warning(f"Could not load analysis state for project {project['id']}: {state_e}")
-            enhanced["status"] = normalize_project_analysis_status("Completed")
+            enhanced["status"] = normalize_status_responses("Completed")
 
         enhanced["population"] = project.get("population")
         enhanced["ref_genome"] = project.get("ref_genome")

@@ -10,13 +10,13 @@ import uuid
 from dask.distributed import get_worker
 
 
-def normalize_project_analysis_status(raw: str | None) -> str:
-    """Map any stored status to Running, Failed, or Done (for API / sockets only)."""
+def normalize_status_responses(raw: str | None) -> str:
+    """Map stored status strings to Running, Failed, or Completed (API / sockets)."""
     if raw is None or not str(raw).strip():
         return "Running"
     key = str(raw).strip().lower().replace(" ", "_")
     if key in ("completed", "done"):
-        return "Done"
+        return "Completed"
     if key in ("failed", "interrupted"):
         return "Failed"
     return "Running"
@@ -29,7 +29,7 @@ def analysis_state_for_public_api(state: dict | None) -> dict:
     out = {**state}
     raw = state.get("status")
     raw_key = str(raw or "").strip().lower().replace(" ", "_")
-    out["status"] = normalize_project_analysis_status(raw)
+    out["status"] = normalize_status_responses(raw)
 
     msg = out.get("message")
     if msg is None or not str(msg).strip():
@@ -76,22 +76,30 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         update["next_task"] = next_task
     if error:
         update["error"] = error
-        update["status"] = "failed"
+        update["status"] = "Failed"
 
     if state == TaskState.COMPLETED:
         if task_name == "Creating enrich data" or (
             task_name == "Verifying existence of enrichment data" and progress == 80
         ):
-            update["status"] = "Enrichment_completed"
+            update["status"] = "Running"
             update["progress"] = 80
         elif task_name == "Generating hypothesis" or (
             task_name == "Verifying existence of hypothesis data" and progress == 100
         ):
-            update["status"] = "Hypothesis_completed"
+            update["status"] = "Completed"
             update["progress"] = 100
     elif state == TaskState.FAILED:
-        update["status"] = "failed"
+        update["status"] = "Failed"
         update["error"] = error
+
+    if "status" not in update:
+        if state == TaskState.FAILED:
+            update["status"] = "Failed"
+        elif state == TaskState.COMPLETED:
+            update["status"] = "Completed"
+        else:
+            update["status"] = "Running"
 
     service_token = os.getenv("PREFECT_SERVICE_TOKEN")
     if not service_token:
