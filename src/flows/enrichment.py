@@ -41,11 +41,8 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
 
     enrichr = deps['enrichr']
     llm = deps['llm']
-    prolog_query = deps['prolog_query']
     hypotheses = deps['hypotheses']
     gene_expression = deps['gene_expression']
-    projects = deps['projects']
-    enrichment = deps['enrichment']
 
     try:
         logger.info(f"Running project-based enrichment for project {project_id}, variant {variant}")

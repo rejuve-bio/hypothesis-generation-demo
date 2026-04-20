@@ -1,4 +1,3 @@
-from collections import namedtuple
 from typing import List, Optional
 import pickle
 import gseapy as gp

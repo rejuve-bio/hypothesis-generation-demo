@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 from contextlib import asynccontextmanager
 
 import socketio as python_socketio

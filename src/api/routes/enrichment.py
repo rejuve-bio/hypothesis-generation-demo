@@ -66,7 +66,6 @@ async def post_enrich(
         raise HTTPException(status_code=400, detail="variant is required")
 
     projects = _deps["projects"]
-    enrichment = _deps["enrichment"]
     hypotheses = _deps["hypotheses"]
     gene_expression = _deps.get("gene_expression")
 

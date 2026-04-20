@@ -15,13 +15,6 @@ class TaskHandler(BaseHandler):
         for update in task_history:
             update["_id"] = str(update["_id"])
         return task_history
-    
-    def get_latest_task_state(self, hypothesis_id):
-        """Get latest task state for hypothesis"""
-        task_history = list(self.task_updates_collection.find({"hypothesis_id": hypothesis_id}).sort("timestamp", -1).limit(1))
-        if task_history:
-            return task_history[0]
-        return None
 
     def save_task_history(self, hypothesis_id, task_history):
         """Save complete task history to DB"""

@@ -50,17 +50,3 @@ async def verify_service_token(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid service token",
         )
-
-
-def decode_ws_token(token: str) -> str | None:
-    """Parse and validate a raw JWT string (used for WebSocket query-param auth).
-
-    Returns the user_id string, or *None* if the token is missing / invalid.
-    """
-    if not token:
-        return None
-    try:
-        data = _decode(token)
-        return str(data["user_id"])
-    except Exception:
-        return None

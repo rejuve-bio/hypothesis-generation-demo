@@ -623,7 +623,6 @@ def run_combined_ldsc_tissue_analysis( munged_file, output_dir, project_id, user
         gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology = load_ontology_mappings(work_dir)
         
         # Map tissues to CellxGene format
-        tissue_names = [t.get('Name', '') for t in ldsc_results_data]
         ontology_mapping_results = map_tissues_to_cellxgene(
             top_tissues, gtex_uberon_mapping, cellxgene_uberon_map, uberon_ontology
         )

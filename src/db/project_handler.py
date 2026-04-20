@@ -58,15 +58,6 @@ class ProjectHandler(BaseHandler):
             del project['_id']
         return projects
 
-    def update_project(self, project_id, data):
-        """Update project data"""
-        data['updated_at'] = datetime.now(timezone.utc)
-        result = self.projects_collection.update_one(
-            {'_id': ObjectId(project_id)},
-            {'$set': data}
-        )
-        return result.matched_count > 0
-
     def delete_project(self, user_id, project_id):
         """Delete a single project and all associated data"""
         try:

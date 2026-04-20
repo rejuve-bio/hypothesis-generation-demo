@@ -1,5 +1,4 @@
 import os
-import argparse
 from src.services.llm import LLM
 from src.services.prolog import PrologQuery
 from src.db import (
@@ -73,9 +72,6 @@ class Config:
         config.harmonizer_script_dir = os.getenv("HARMONIZER_SCRIPT_DIR", "./scripts/1000Genomes_phase3")  # Shell scripts
         return config
 
-    def get_plink_dir(self, ref_genome=None):
-        return self.plink_dir_38
-
     def get_harmonizer_ref_dir(self, ref_genome):
         """Get the harmonizer reference directory for the specified genome build"""
         if ref_genome == "GRCh38":
@@ -85,7 +81,7 @@ class Config:
         else:
             raise ValueError(f"Unsupported reference genome: {ref_genome}. Must be 'GRCh37' or 'GRCh38'")
 
-    def get_plink_file_pattern(self, ref_genome=None, population=None, chrom=None):
+    def get_plink_file_pattern(self, population=None, chrom=None):
         return f"{population}.chr{chrom}.1KG.GRCh38"
 
 

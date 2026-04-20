@@ -263,30 +263,6 @@ class GWASLibraryHandler(BaseHandler):
             logger.error(f"Error incrementing download count for {file_id}: {e}")
             return False
     
-    def get_most_popular(self, limit: int = 10) -> List[Dict]:
-        """
-        Get most popular (most downloaded) GWAS entries
-        
-        Args:
-            limit (int): Number of entries to return
-            
-        Returns:
-            list: List of popular GWAS entries
-        """
-        try:
-            cursor = self.collection.find().sort('download_count', -1).limit(limit)
-            
-            entries = []
-            for entry in cursor:
-                entry.pop('_id', None)
-                entries.append(entry)
-            
-            return entries
-            
-        except Exception as e:
-            logger.error(f"Error getting most popular entries: {e}")
-            return []
-    
     def bulk_create_gwas_entries(self, entries: List[Dict]) -> Dict:
         """
         Bulk insert GWAS entries into the collection
@@ -339,23 +315,4 @@ class GWASLibraryHandler(BaseHandler):
             
         except Exception as e:
             logger.error(f"Error during bulk insert: {e}")
-            raise
-    
-    def clear_collection(self) -> int:
-        """
-        Clear all entries from the GWAS library collection
-        
-        WARNING: This is a destructive operation!
-        
-        Returns:
-            int: Number of deleted entries
-        """
-        try:
-            result = self.collection.delete_many({})
-            deleted_count = result.deleted_count
-            logger.warning(f"Cleared GWAS library collection: {deleted_count} entries deleted")
-            return deleted_count
-            
-        except Exception as e:
-            logger.error(f"Error clearing collection: {e}")
             raise

@@ -203,14 +203,6 @@ def get_shared_temp_dir(user_id=None, prefix=""):
     os.makedirs(path, exist_ok=True)
     return path
 
-def get_user_file_path(files_handler, file_id, user_id):
-    """Get file path from file ID using database metadata"""
-    file_metadata = files_handler.get_file_metadata(user_id, file_id)
-    if not file_metadata:
-        raise FileNotFoundError(f"File with ID {file_id} not found for user {user_id}")
-    
-    return file_metadata['file_path']
-
 def serialize_datetime_fields(data):
     """Convert datetime objects to ISO format strings for JSON serialization"""
     if isinstance(data, dict):
@@ -315,7 +307,6 @@ def convert_variants_to_object_array(variants_data):
 def get_deps():    
     try:
         worker = get_worker()
-        worker_id = getattr(worker, 'id', 'unknown')
     except ValueError as e:
         raise RuntimeError(f"Task not running on Dask worker: {e}")
     except Exception as e:

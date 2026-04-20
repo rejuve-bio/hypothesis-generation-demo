@@ -26,7 +26,6 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
     config = Config.from_env()
     deps = create_dependencies(config)
     hypotheses = deps['hypotheses']
-    enrichment = deps['enrichment']
 
     hypothesis = check_hypothesis.submit(current_user_id, enrich_id, go_id, hypothesis_id).result()
     if hypothesis:

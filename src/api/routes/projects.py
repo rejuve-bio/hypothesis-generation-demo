@@ -5,9 +5,9 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 from werkzeug.utils import secure_filename
@@ -197,8 +197,6 @@ async def post_analysis_pipeline(
 
         projects = _deps["projects"]
         files = _deps["files"]
-        analysis = _deps["analysis"]
-        gene_expression = _deps.get("gene_expression")
         config = _deps["config"]
         storage = _deps.get("storage")
         gwas_library = _deps.get("gwas_library")

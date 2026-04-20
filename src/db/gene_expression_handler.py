@@ -1,8 +1,6 @@
-from bson.objectid import ObjectId
 from datetime import datetime, timezone
 from uuid import uuid4
 from loguru import logger
-import pandas as pd
 import re
 
 from .base_handler import BaseHandler
@@ -29,7 +27,7 @@ class GeneExpressionHandler(BaseHandler):
             'created_at': datetime.now(timezone.utc),
             'updated_at': datetime.now(timezone.utc)
         }
-        result = self.gene_expression_runs_collection.insert_one(run_data)
+        self.gene_expression_runs_collection.insert_one(run_data)
         logger.info(f"Created gene expression run {run_data['id']} for gene {gene_of_interest}")
         return run_data['id']
 
@@ -175,7 +173,7 @@ class GeneExpressionHandler(BaseHandler):
             }
             
             # Use upsert to replace any existing selection for this variant
-            result = self.db['tissue_selections'].replace_one(
+            self.db['tissue_selections'].replace_one(
                 {
                     'user_id': user_id,
                     'project_id': project_id,

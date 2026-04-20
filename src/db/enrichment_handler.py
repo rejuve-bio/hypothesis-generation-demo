@@ -24,7 +24,7 @@ class EnrichmentHandler(BaseHandler):
             'causal_graph': causal_graph,
             'created_at': datetime.now(timezone.utc)
         }
-        result = self.enrich_collection.insert_one(enrich_data)
+        self.enrich_collection.insert_one(enrich_data)
         return enrich_data['id']
 
     def check_enrich(self, user_id=None, phenotype=None, variant_id=None):
