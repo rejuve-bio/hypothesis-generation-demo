@@ -99,65 +99,6 @@ class GeneExpressionHandler(BaseHandler):
             logger.error(f"Error saving tissue mappings: {str(e)}")
             raise
 
-    def get_gene_expression_results(self, project_id=None, user_id=None, gene_of_interest=None):
-        """Get gene expression analysis results"""
-        query = {}
-        if project_id:
-            query['project_id'] = project_id
-        if user_id:
-            query['user_id'] = user_id
-        if gene_of_interest:
-            query['gene_of_interest'] = gene_of_interest
-        
-        runs = list(self.gene_expression_runs_collection.find(query).sort('created_at', -1))
-        
-        results = []
-        for run in runs:
-            run['_id'] = str(run['_id'])
-            analysis_run_id = run['id']
-            
-            # Get LDSC results
-            ldsc_results = list(self.ldsc_results_collection.find(
-                {'analysis_run_id': analysis_run_id}
-            ).sort('rank_order', 1))
-            
-            # Clean up _id fields
-            for result in ldsc_results:
-                result['_id'] = str(result['_id'])
-            
-            results.append({
-                'run_info': run,
-                'ldsc_results': ldsc_results
-            })
-        
-        return results
-
-
-    def check_gene_expression_status(self, project_id, user_id):
-        """Check gene expression analysis status for a project"""
-        latest_run = self.gene_expression_runs_collection.find_one(
-            {'project_id': project_id, 'user_id': user_id},
-            sort=[('created_at', -1)]
-        )
-        
-        if not latest_run:
-            return {
-                'status': 'not_started',
-                'has_data': False,
-                'analysis_count': 0
-            }
-        
-        # Count results
-        analysis_run_id = latest_run['id']
-        ldsc_count = self.ldsc_results_collection.count_documents({'analysis_run_id': analysis_run_id})
-        
-        return {
-            'status': latest_run['status'],
-            'has_data': latest_run['status'] == 'completed',
-            'gene_of_interest': latest_run['gene_of_interest'],
-            'created_at': latest_run['created_at'],
-            'ldsc_count': ldsc_count
-        }
 
     # ==================== TISSUE SELECTION METHODS ====================
     
