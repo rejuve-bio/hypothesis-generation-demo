@@ -463,10 +463,6 @@ def _(SSF_FILE, SUMSTATS_FILE, np, os, pd):
         _ldsc = _ldsc[np.isfinite(_ldsc['Z'])]
         _ldsc = _ldsc.drop_duplicates(subset=['SNP'])
         _ldsc.to_csv(SUMSTATS_FILE, sep='\t', index=False, compression='gzip')
-        print("\n--- Verification for Mentor ---")
-        print(f"Is 'n' column added to raw _df? {'n' in _df.columns}")
-        print(f"Unique N values in original dataset rows: {_df['n'].unique()}")
-        print(f"LDSC conversion complete using calibrated study size: {detected_n}")
     return
 
 
