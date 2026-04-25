@@ -39,7 +39,7 @@ def __(mo):
 @app.cell
 def __(mo, os):
     GWAS_INPUT_FILE = mo.ui.text(
-        value="data/gwas/PGC_UKB_depression_genome-wide.txt",
+        value="data/gwas/PASS_AtrialFibrillation_Nielsen2018.sumstats.gz",
         label="GWAS input file path",
         full_width=True,
     )
@@ -47,9 +47,7 @@ def __(mo, os):
     HM3_NO_MHC_LIST = "data/reference/hm3_no_MHC.list.txt"
     CATLAS_DIR       = "humanenhancer_atac_data"
     CATLAS_URL       = "http://catlas.org/humanenhancer/data/cCREs/"
-    BROAD_CELL_TYPES = ["Ast", "Ex", "In", "Microglia", "OPC", "Oligo", "PerEndo"]
-    BROAD_BASE_URL   = "https://personal.broadinstitute.org/bjames/AD_snATAC/major_celltype_matrices/"
-
+  
     mo.vstack([
         mo.md("### Configuration"),
         GWAS_INPUT_FILE,
@@ -60,9 +58,7 @@ def __(mo, os):
         W_HM3_SNPLIST,
         HM3_NO_MHC_LIST,
         CATLAS_DIR,
-        CATLAS_URL,
-        BROAD_CELL_TYPES,
-        BROAD_BASE_URL,
+        CATLAS_URL
     )
 
 
@@ -79,7 +75,7 @@ def __(GWAS_INPUT_FILE, os, re):
     GWAS_FILE      = _path
     SUMSTATS_FILE  = f"data/ldsc_input/{GWAS_STEM}.sumstats.gz"
     CTS_FILE       = f"data/{GWAS_STEM}_cell_types.cts"
-    RESULTS_PREFIX = f"new_results/{GWAS_STEM}_CellTypeSpecific"
+    RESULTS_PREFIX = f"new_results/{GWAS_STEM}_CellTypeSpecific_baseline_v1_weights"
 
     print(f"GWAS stem      : {GWAS_STEM}")
     print(f"GWAS file      : {GWAS_FILE}")
@@ -166,7 +162,7 @@ def __(mo):
 @app.cell
 def __(
     os, urllib, pd, subprocess, re,
-    CATLAS_DIR, CATLAS_URL, BROAD_CELL_TYPES, BROAD_BASE_URL,
+    CATLAS_DIR, CATLAS_URL,
     GWAS_FILE,
 ):
     for _d in ["data/peaks", "data/reference", "data/gwas", "data/beds"]:
@@ -203,8 +199,7 @@ def __(
         bed_out  = f"data/beds/{ct}.bed"
         if os.path.exists(bed_out):
             return bed_out
-        if not os.path.exists(peak_txt):
-            urllib.request.urlretrieve(f"{BROAD_BASE_URL}{ct}.peak.annotation.txt", peak_txt)
+        
         _peaks = pd.read_csv(peak_txt, sep="\t")
         _peaks[["seqnames", "start", "end"]].rename(
             columns={"seqnames": "chr"}
@@ -219,7 +214,7 @@ def __(
             for _f in os.listdir(_sd):
                 if _f.endswith(".bed") and not _f.startswith("."):
                     raw_names.add(os.path.splitext(_f)[0])
-    raw_names.update(BROAD_CELL_TYPES)
+  
 
     cell_type_beds = {}
     _seen = {}
@@ -285,16 +280,15 @@ def __(subprocess, os):
     print("Reference files ready" if os.path.exists(_critical) else f"ERROR: missing {_critical}")
     return
 
-
 @app.cell
 def __(mo):
     mo.md("## 3. Reformat GWAS to harmonizer-compatible format")
     return
 
-
 @app.cell
-def __(GWAS_FILE, pd, os, glob):
+def __(GWAS_FILE, pd, os, glob, SUMSTATS_FILE):
     import gzip as _gzip
+    import shutil as _shutil
 
     _lower   = GWAS_FILE.lower()
     _is_gz   = _lower.endswith(".gz") or _lower.endswith(".bgz")
@@ -313,58 +307,69 @@ def __(GWAS_FILE, pd, os, glob):
     os.makedirs("data/gwas_reformatted", exist_ok=True)
     REFORMATTED_GWAS = f"data/gwas_reformatted/{os.path.basename(GWAS_FILE)}.gz"
 
-    if os.path.exists(REFORMATTED_GWAS):
+    if os.path.exists(SUMSTATS_FILE):
+        print(f"Sumstats already exists, skipping reformat: {SUMSTATS_FILE}")
+    elif os.path.exists(REFORMATTED_GWAS):
         print(f"Reformatted file already exists: {REFORMATTED_GWAS}")
     else:
-        _df = pd.read_csv(GWAS_FILE, sep=_sep, compression=_comp, skiprows=_skip)
+        _df = pd.read_csv(GWAS_FILE, sep=_sep, compression=_comp, skiprows=_skip, low_memory=False)
         _df.columns = [c.lstrip("#").strip() for c in _df.columns]
         print(f"  Columns: {list(_df.columns)}")
 
-        _cl = {c.lower(): c for c in _df.columns}
+        _cl_check = {c.lower() for c in _df.columns}
+        if "z" in _cl_check and "snp" in _cl_check and "beta" not in _cl_check and "logor" not in _cl_check:
+            print("  File is already in LDSC format — copying directly to sumstats")
+            os.makedirs("data/ldsc_input", exist_ok=True)
+            _shutil.copy(GWAS_FILE, SUMSTATS_FILE)
+            print(f"  Copied to {SUMSTATS_FILE}")
+            REFORMATTED_GWAS = GWAS_FILE
+        else:
+            _cl = {c.lower(): c for c in _df.columns}
 
-        _snp_col  = _cl.get("markername") or _cl.get("snptestid") or _cl.get("id") or _cl.get("snp") or _cl.get("rsid") or _cl.get("variant_id")
-        _chr_col  = _cl.get("chr") or _cl.get("chrom") or _cl.get("chromosome") or _cl.get("#chrom") or _cl.get("hm_chrom")
-        _pos_col  = _cl.get("pos") or _cl.get("bp") or _cl.get("position") or _cl.get("bp_hg19") or _cl.get("base_pair_location")
-        _a1_col   = _cl.get("a1") or _cl.get("effect_allele") or _cl.get("alt") or _cl.get("hm_effect_allele")
-        _a2_col   = _cl.get("a2") or _cl.get("noneffect_allele") or _cl.get("other_allele") or _cl.get("ref") or _cl.get("hm_other_allele")
-        _beta_col = _cl.get("logor") or _cl.get("log_or") or _cl.get("beta") or _cl.get("b") or _cl.get("hm_beta")
-        _se_col   = _cl.get("se_gc") or _cl.get("stderrlogor") or _cl.get("se") or _cl.get("stderr") or _cl.get("standard_error")
-        _p_col    = _cl.get("p-value_gc") or _cl.get("pvalue") or _cl.get("p_value") or _cl.get("p-value") or _cl.get("p")
-        _n_col    = _cl.get("n_samples") or _cl.get("neff") or _cl.get("n") or _cl.get("n_total")
+            _snp_col  = _cl.get("markername") or _cl.get("snptestid") or _cl.get("id") or _cl.get("snp") or _cl.get("rsid") or _cl.get("variant_id")
+            _chr_col  = _cl.get("chr") or _cl.get("chrom") or _cl.get("chromosome") or _cl.get("#chrom") or _cl.get("hm_chrom")
+            _pos_col  = _cl.get("pos") or _cl.get("bp") or _cl.get("position") or _cl.get("bp_hg19") or _cl.get("base_pair_location")
+            _a1_col   = _cl.get("a1") or _cl.get("effect_allele") or _cl.get("alt") or _cl.get("hm_effect_allele")
+            _a2_col   = _cl.get("a2") or _cl.get("noneffect_allele") or _cl.get("other_allele") or _cl.get("ref") or _cl.get("hm_other_allele")
+            _beta_col = _cl.get("logor") or _cl.get("log_or") or _cl.get("beta") or _cl.get("b") or _cl.get("hm_beta")
+            _se_col   = _cl.get("se_gc") or _cl.get("stderrlogor") or _cl.get("se") or _cl.get("stderr") or _cl.get("standard_error")
+            _p_col    = _cl.get("p-value_gc") or _cl.get("pvalue") or _cl.get("p_value") or _cl.get("p-value") or _cl.get("p")
+            _n_col    = _cl.get("n_samples") or _cl.get("neff") or _cl.get("n") or _cl.get("n_total")
 
-        _rename = {}
-        if _snp_col:  _rename[_snp_col]  = "snp"
-        if _a1_col:   _rename[_a1_col]   = "a1"
-        if _a2_col:   _rename[_a2_col]   = "a2"
-        if _beta_col: _rename[_beta_col] = "beta"
-        if _se_col:   _rename[_se_col]   = "se"
-        if _p_col:    _rename[_p_col]    = "p"
-        if _n_col:    _rename[_n_col]    = "n"
-        if _chr_col:  _rename[_chr_col]  = "chr"
-        if _pos_col:  _rename[_pos_col]  = "pos"
-        _df = _df.rename(columns=_rename)
+            _rename = {}
+            if _snp_col:  _rename[_snp_col]  = "snp"
+            if _a1_col:   _rename[_a1_col]   = "a1"
+            if _a2_col:   _rename[_a2_col]   = "a2"
+            if _beta_col: _rename[_beta_col] = "beta"
+            if _se_col:   _rename[_se_col]   = "se"
+            if _p_col:    _rename[_p_col]    = "p"
+            if _n_col:    _rename[_n_col]    = "n"
+            if _chr_col:  _rename[_chr_col]  = "chr"
+            if _pos_col:  _rename[_pos_col]  = "pos"
+            _df = _df.rename(columns=_rename)
 
-        if "chr" not in _df.columns or "pos" not in _df.columns:
-            print("  No chr/pos columns — looking up from bim files via rs IDs...")
-            _bim_map = pd.concat([
-                pd.read_csv(f, sep="\t", header=None, names=["chr","snp","cm","pos","a1b","a2b"])[["snp","chr","pos"]]
-                for f in sorted(glob.glob("data/reference/GRCh38/plink_files/1000G.EUR.hg38.*.bim"))
-            ]).drop_duplicates("snp").set_index("snp")
-            _df["chr"] = _df["snp"].map(_bim_map["chr"])
-            _df["pos"] = _df["snp"].map(_bim_map["pos"])
-            _df = _df.dropna(subset=["chr","pos"])
-            _df["chr"] = _df["chr"].astype(int).astype(str)
-            _df["pos"] = _df["pos"].astype(int).astype(str)
-            print(f"  Mapped {len(_df):,} variants with chr/pos")
+            if "chr" not in _df.columns or "pos" not in _df.columns:
+                print("  No chr/pos columns — looking up from bim files via rs IDs...")
+                _bim_map = pd.concat([
+                    pd.read_csv(f, sep="\t", header=None, names=["chr","snp","cm","pos","a1b","a2b"])[["snp","chr","pos"]]
+                    for f in sorted(glob.glob("data/reference/GRCh38/plink_files/1000G.EUR.hg38.*.bim"))
+                ]).drop_duplicates("snp").set_index("snp")
+                _df["chr"] = _df["snp"].map(_bim_map["chr"])
+                _df["pos"] = _df["snp"].map(_bim_map["pos"])
+                _df = _df.dropna(subset=["chr","pos"])
+                _df["chr"] = _df["chr"].astype(int).astype(str)
+                _df["pos"] = _df["pos"].astype(int).astype(str)
+                print(f"  Mapped {len(_df):,} variants with chr/pos")
 
-        if "chr" in _df.columns:
-            _df["chr"] = _df["chr"].astype(str).str.replace("chr","",regex=False)
+            if "chr" in _df.columns:
+                _df["chr"] = _df["chr"].astype(str).str.replace("chr","",regex=False)
 
-        _keep = [c for c in ["chr","pos","snp","a1","a2","beta","se","p","n"] if c in _df.columns]
-        _df[_keep].dropna(subset=["a1","a2","beta","p"]).to_csv(
-            REFORMATTED_GWAS, sep="\t", index=False, compression="gzip"
-        )
-        print(f"  Written {len(_df):,} variants to {REFORMATTED_GWAS}")
+            _keep = [c for c in ["chr","pos","snp","a1","a2","beta","se","p","n"] if c in _df.columns]
+            _dropna_cols = [c for c in ["a1","a2","beta","p"] if c in _df.columns]
+            _df[_keep].dropna(subset=_dropna_cols).to_csv(
+                REFORMATTED_GWAS, sep="\t", index=False, compression="gzip"
+            )
+            print(f"  Written {len(_df):,} variants to {REFORMATTED_GWAS}")
 
     return (REFORMATTED_GWAS,)
 
@@ -377,10 +382,12 @@ def __(mo):
 
 @app.cell
 def __(os, Path):
-    HARMONIZER_CODE_REPO = "/mnt/hdd_1/abdu/finemapping"
-    HARMONIZER_REF_DIR   = "/mnt/hdd_1/abdu/finemapping/data/1000Genomes_phase3"
+    
+    HARMONIZER_CODE_REPO = "/mnt/hdd_1/abdu/gwas-sumstats-harmoniser"
+    HARMONIZER_REF_DIR   = "/mnt/hdd_1/abdu/gwas-sumstats-harmoniser/data/gwas_harm_ref"
+    harmonizer_script    = Path(HARMONIZER_CODE_REPO) / "harmonizer.sh"
 
-    harmonizer_script = Path(HARMONIZER_CODE_REPO) / "scripts" / "6_harmoniser.sh"
+
 
     nextflow_env = {
         **os.environ,
@@ -414,6 +421,8 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
     os.makedirs("data/harmonized", exist_ok=True)
 
     harmonized_found = False
+    harmonized_output_dir = None
+
     if os.path.exists("data/harmonized"):
         for item in os.listdir("data/harmonized"):
             if os.path.isdir(os.path.join("data/harmonized", item)):
@@ -423,35 +432,48 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
                     harmonized_output_dir = os.path.join("data/harmonized", item)
                     break
 
+    _ssf = os.path.join(
+        os.path.dirname(REFORMATTED_GWAS),
+        os.path.basename(REFORMATTED_GWAS).replace(".gz", ".tsv.gz")
+    )
+    if not harmonized_found and os.path.exists(_ssf):
+        print(f"SSF file exists, skipping harmonization: {_ssf}")
+        harmonized_found = True
+        harmonized_output_dir = "data/harmonized"
+
     if harmonized_found:
         print(f"Harmonized GWAS file already exists: {harmonized_output_dir}")
     elif not harmonizer_ready:
         print("Skipping harmonization - harmonizer not configured")
         harmonized_output_dir = None
     else:
+        os.makedirs("data/harmonized", exist_ok=True)
+        log_file = os.path.abspath(f"data/harmonized/harmonizer_{os.path.basename(REFORMATTED_GWAS)}.log")
+        input_abs = os.path.abspath(REFORMATTED_GWAS)
+
         os.chdir("data/harmonized")
 
         try:
-            _result = subprocess.run([
-                "bash",
-                str(harmonizer_script),
-                "--input",     os.path.abspath(REFORMATTED_GWAS),
-                "--build",     "GRCh38",
-                "--ref",       HARMONIZER_REF_DIR,
-                "--code-repo", HARMONIZER_CODE_REPO,
-                "--threshold", "0.99"
-            ], check=True, capture_output=True, text=True, env=nextflow_env)
+            with open(log_file, "w") as _log:
+                _result = subprocess.run([
+                    "bash",
+                    str(harmonizer_script),
+                    "--input",     input_abs,
+                    "--build",     "GRCh38",
+                    "--ref",       HARMONIZER_REF_DIR,
+                    "--code-repo", HARMONIZER_CODE_REPO,
+                    "--threshold", "0.99"
+                ], check=False, text=True, env=nextflow_env,
+                   stdout=_log, stderr=_log)
 
-            print(_result.stdout)
-            if _result.stderr:
-                print("STDERR:", _result.stderr)
+            print(f"Return code: {_result.returncode}")
+            print(f"Log: {log_file}")
 
             harmonized_dirs = [d for d in os.listdir(".") if os.path.isdir(d)]
             if harmonized_dirs:
                 harmonized_output_dir = os.path.abspath(max(harmonized_dirs))
                 print(f"Harmonization complete: {harmonized_output_dir}")
             else:
-                print("WARNING: No output directory found after harmonization")
                 harmonized_output_dir = None
 
         except subprocess.CalledProcessError as e:
@@ -472,7 +494,7 @@ def __(mo):
 
 
 @app.cell
-def __(os, pd, harmonized_output_dir, SUMSTATS_FILE, W_HM3_SNPLIST):
+def __(os, pd, harmonized_output_dir, SUMSTATS_FILE, W_HM3_SNPLIST, REFORMATTED_GWAS):
     os.makedirs("data/ldsc_input", exist_ok=True)
 
     if harmonized_output_dir is None:
@@ -484,7 +506,19 @@ def __(os, pd, harmonized_output_dir, SUMSTATS_FILE, W_HM3_SNPLIST):
         _files = [f for f in os.listdir(_final_dir) if f.endswith(".tsv.gz")] if os.path.exists(_final_dir) else []
 
         if not _files:
-            print(f"WARNING: No harmonized file found in {_final_dir}")
+            print("No final dir — using SSF file directly...")
+            _ssf = os.path.join(
+                os.path.dirname(REFORMATTED_GWAS),
+                os.path.basename(REFORMATTED_GWAS).replace(".gz", ".tsv.gz")
+            )
+            if os.path.exists(_ssf):
+                _files = [os.path.basename(_ssf)]
+                _final_dir = os.path.dirname(_ssf)
+            else:
+                print(f"WARNING: SSF file not found: {_ssf}")
+
+        if not _files:
+            print("WARNING: No harmonized or SSF file found")
         else:
             _harmonized_file = os.path.join(_final_dir, _files[0])
             print(f"Converting {_harmonized_file} to LDSC format...")
@@ -506,6 +540,9 @@ def __(os, pd, harmonized_output_dir, SUMSTATS_FILE, W_HM3_SNPLIST):
             _df["A1"]   = _df["A1"].str.upper()
             _df["A2"]   = _df["A2"].str.upper()
             _df["Z"]    = _df["BETA"] / _df["SE"]
+            if "N" not in _df.columns:
+                print("  No N column found — using study sample size N=807553")
+                _df["N"] = 807553
 
             _hm3 = pd.read_csv(W_HM3_SNPLIST, sep="\t")[["SNP", "A1", "A2"]]
             _df  = _df.merge(_hm3, on="SNP", suffixes=("", "_hm3"))
@@ -645,6 +682,8 @@ def __(os, all_cell_types, CTS_FILE):
 
     with open(CTS_FILE, "w") as _f:
         for _ct in COMPLETED_CELL_TYPES:
+            if _ct == "all_merged_cCREs":
+                continue
             _f.write(f"{_ct}\tdata/ldscores/{_ct}/{_ct}.\n")
 
     print(f"\nCTS file written: {CTS_FILE}  ({len(COMPLETED_CELL_TYPES)} cell types)")
@@ -671,16 +710,16 @@ def __(CTS_FILE, python27_path, SUMSTATS_FILE, RESULTS_PREFIX, os, subprocess):
                 python27_path, "tools/ldsc/ldsc.py",
                 "--h2-cts",         SUMSTATS_FILE,
                 "--ref-ld-chr",     (
-                    "data/reference/GRCh38/baselineLD_v2.2/baselineLD.,"
+                    "data/OSF/baseline_v1.2/baseline.,"
                     "data/ldscores/all_merged_cCREs/all_merged_cCREs."
                 ),
                 "--ref-ld-chr-cts", CTS_FILE,
-                "--w-ld-chr",       "data/reference/GRCh38/weights/weights.hm3_noMHC.",
+                "--w-ld-chr",       "data/OSF/weights/weights.hm3_noMHC.",
                 "--out",            RESULTS_PREFIX,
             ],
-            check=True,
+            check=False,
         )
-        print("LDSC CTS analysis complete")
+        print("LDSC CTS analysis complete") 
     return
 
 
