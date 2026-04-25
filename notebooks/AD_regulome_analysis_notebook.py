@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
+
 import marimo
 
-__generated_with = "0.9.14"
+__generated_with = "0.23.1"
 app = marimo.App(width="medium")
 
 
 @app.cell
-def __():
+def _():
     import marimo as mo
     import urllib.request
     import os
@@ -19,11 +20,25 @@ def __():
     import glob
     import concurrent.futures
     import multiprocessing
-    return mo, urllib, os, re, subprocess, pd, np, Path, json, glob, concurrent, multiprocessing
+
+    return (
+        Path,
+        concurrent,
+        glob,
+        json,
+        mo,
+        multiprocessing,
+        np,
+        os,
+        pd,
+        re,
+        subprocess,
+        urllib,
+    )
 
 
 @app.cell
-def __(mo):
+def _(mo):
     mo.md("""
     This notebook reproduces the LDSC cell-type-specific heritability analysis
     from *A single-cell atlas of chromatin accessibility in the human genome* (Zhang et al. 2021).
@@ -37,7 +52,7 @@ def __(mo):
 
 
 @app.cell
-def __(mo, os):
+def _(mo):
     GWAS_INPUT_FILE = mo.ui.text(
         value="data/gwas/PASS_AtrialFibrillation_Nielsen2018.sumstats.gz",
         label="GWAS input file path",
@@ -47,23 +62,23 @@ def __(mo, os):
     HM3_NO_MHC_LIST = "data/reference/hm3_no_MHC.list.txt"
     CATLAS_DIR       = "humanenhancer_atac_data"
     CATLAS_URL       = "http://catlas.org/humanenhancer/data/cCREs/"
-  
+
     mo.vstack([
         mo.md("### Configuration"),
         GWAS_INPUT_FILE,
         mo.md(f"w_hm3.snplist: `{W_HM3_SNPLIST}`"),
     ])
     return (
-        GWAS_INPUT_FILE,
-        W_HM3_SNPLIST,
-        HM3_NO_MHC_LIST,
         CATLAS_DIR,
-        CATLAS_URL
+        CATLAS_URL,
+        GWAS_INPUT_FILE,
+        HM3_NO_MHC_LIST,
+        W_HM3_SNPLIST,
     )
 
 
 @app.cell
-def __(GWAS_INPUT_FILE, os, re):
+def _(GWAS_INPUT_FILE, os, re):
     _path = GWAS_INPUT_FILE.value
     _basename = os.path.basename(_path)
     _no_ext = _basename
@@ -81,23 +96,19 @@ def __(GWAS_INPUT_FILE, os, re):
     print(f"GWAS file      : {GWAS_FILE}")
     print(f"Sumstats file  : {SUMSTATS_FILE}")
     print(f"Results prefix : {RESULTS_PREFIX}")
-    return (
-        GWAS_STEM,
-        GWAS_FILE,
-        SUMSTATS_FILE,
-        CTS_FILE,
-        RESULTS_PREFIX,
-    )
+    return CTS_FILE, GWAS_FILE, RESULTS_PREFIX, SUMSTATS_FILE
 
 
 @app.cell
-def __(mo):
-    mo.md("## 0. Setup: download and configure LDSC")
+def _(mo):
+    mo.md("""
+    ## 0. Setup: download and configure LDSC
+    """)
     return
 
 
 @app.cell
-def __(Path, subprocess, os, json):
+def _(Path, json, os, subprocess):
     TOOLS_DIR = Path("tools")
     LDSC_DIR  = TOOLS_DIR / "ldsc"
     TOOLS_DIR.mkdir(exist_ok=True)
@@ -150,21 +161,19 @@ def __(Path, subprocess, os, json):
     print(f"LDSC environment ready")
     print(f"Python 2.7 : {python27_path}")
     print(f"LDSC dir   : {LDSC_DIR}")
-    return (TOOLS_DIR, LDSC_DIR, ldsc27_path, python27_path)
+    return ldsc27_path, python27_path
 
 
 @app.cell
-def __(mo):
-    mo.md("## 1. Discover cell types and resolve BED sources")
+def _(mo):
+    mo.md("""
+    ## 1. Discover cell types and resolve BED sources
+    """)
     return
 
 
 @app.cell
-def __(
-    os, urllib, pd, subprocess, re,
-    CATLAS_DIR, CATLAS_URL,
-    GWAS_FILE,
-):
+def _(CATLAS_DIR, CATLAS_URL, os, pd, re, subprocess, urllib):
     for _d in ["data/peaks", "data/reference", "data/gwas", "data/beds"]:
         os.makedirs(_d, exist_ok=True)
 
@@ -199,7 +208,7 @@ def __(
         bed_out  = f"data/beds/{ct}.bed"
         if os.path.exists(bed_out):
             return bed_out
-        
+
         _peaks = pd.read_csv(peak_txt, sep="\t")
         _peaks[["seqnames", "start", "end"]].rename(
             columns={"seqnames": "chr"}
@@ -214,7 +223,7 @@ def __(
             for _f in os.listdir(_sd):
                 if _f.endswith(".bed") and not _f.startswith("."):
                     raw_names.add(os.path.splitext(_f)[0])
-  
+
 
     cell_type_beds = {}
     _seen = {}
@@ -244,17 +253,19 @@ def __(
             urllib.request.urlretrieve(_url, _dst)
 
     print("All sources resolved")
-    return (all_cell_types, cell_type_beds, BED_SEARCH_DIRS)
+    return all_cell_types, cell_type_beds
 
 
 @app.cell
-def __(mo):
-    mo.md("## 2. Extract reference LD panels")
+def _(mo):
+    mo.md("""
+    ## 2. Extract reference LD panels
+    """)
     return
 
 
 @app.cell
-def __(subprocess, os):
+def _(os, subprocess):
     if not os.path.exists("data/reference/GRCh38"):
         subprocess.run(
             ["tar", "-xzf", "data/reference/GRCh38.tgz", "-C", "data/reference"],
@@ -280,13 +291,17 @@ def __(subprocess, os):
     print("Reference files ready" if os.path.exists(_critical) else f"ERROR: missing {_critical}")
     return
 
-@app.cell
-def __(mo):
-    mo.md("## 3. Reformat GWAS to harmonizer-compatible format")
-    return
 
 @app.cell
-def __(GWAS_FILE, pd, os, glob, SUMSTATS_FILE):
+def _(mo):
+    mo.md("""
+    ## 3. Reformat GWAS to harmonizer-compatible format
+    """)
+    return
+
+
+@app.cell
+def _(GWAS_FILE, SUMSTATS_FILE, glob, os, pd):
     import gzip as _gzip
     import shutil as _shutil
 
@@ -370,54 +385,106 @@ def __(GWAS_FILE, pd, os, glob, SUMSTATS_FILE):
                 REFORMATTED_GWAS, sep="\t", index=False, compression="gzip"
             )
             print(f"  Written {len(_df):,} variants to {REFORMATTED_GWAS}")
-
     return (REFORMATTED_GWAS,)
 
 
 @app.cell
-def __(mo):
-    mo.md("## 4. Setup harmonization workflow")
+def _(mo):
+    mo.md("""
+    ## 4. Setup harmonization workflow
+    """)
     return
 
 
 @app.cell
-def __(os, Path):
-    
-    HARMONIZER_CODE_REPO = "/mnt/hdd_1/abdu/gwas-sumstats-harmoniser"
-    HARMONIZER_REF_DIR   = "/mnt/hdd_1/abdu/gwas-sumstats-harmoniser/data/gwas_harm_ref"
-    harmonizer_script    = Path(HARMONIZER_CODE_REPO) / "harmonizer.sh"
+def _(SSF_FILE, SUMSTATS_FILE, np, os, pd):
+    import yaml
+    os.makedirs("data/ldsc_input", exist_ok=True)
 
+    def find_n_deep(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                low_key = str(k).lower()
+                if (('sample' in low_key and 'size' in low_key) or low_key == 'n') and isinstance(v, (int, float)):
+                    return int(v)
+            for v in obj.values():
+                result = find_n_deep(v)
+                if result: return result
+        elif isinstance(obj, list):
+            for item in obj:
+                result = find_n_deep(item)
+                if result: return result
+        return None
 
-
-    nextflow_env = {
-        **os.environ,
-        "PATH": "/mnt/hdd_1/rediet/hypothesis-generation-demo:/mnt/hdd_1/rediet/jdk-17/bin:" + os.environ.get("PATH", ""),
-        "JAVA_HOME": "/mnt/hdd_1/rediet/jdk-17",
-    }
-
-    if not harmonizer_script.exists():
-        print(f"WARNING: 6_harmoniser.sh not found at {harmonizer_script}")
-        harmonizer_ready = False
-    elif not os.path.isdir(HARMONIZER_REF_DIR):
-        print(f"WARNING: Reference directory not found at {HARMONIZER_REF_DIR}")
-        harmonizer_ready = False
+    if os.path.exists(SUMSTATS_FILE):
+        _df_sample = pd.read_csv(SSF_FILE, sep='\t', compression='gzip', nrows=5)
+        print(f"LDSC sumstats file already exists: {SUMSTATS_FILE}")
+        print("Note: Skipping full conversion as file is present.")
     else:
-        print(f"Harmonizer configuration found")
-        print(f"  Script   : {harmonizer_script}")
-        print(f"  Reference: {HARMONIZER_REF_DIR}")
-        harmonizer_ready = True
+        print(f"Converting {SSF_FILE} -> {SUMSTATS_FILE}")
+        _df = pd.read_csv(SSF_FILE, sep='\t', compression='gzip')
 
-    return (HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR, harmonizer_ready, harmonizer_script, nextflow_env)
+        detected_n = None
+        for col in _df.columns:
+            low_col = col.lower()
+            if low_col == 'n' or ('sample' in low_col and 'size' in low_col):
+                detected_n = int(_df[col].max())
+                print(f"N DETECTION: Found N={detected_n} inside the TSV data columns.")
+                break
+        if detected_n is None:
+            file_id = os.path.basename(SSF_FILE).split('-')[0]
+            gwas_dir = os.path.join("data", "gwas")
+            if os.path.exists(gwas_dir):
+                for file in os.listdir(gwas_dir):
+                    if file_id in file and file.endswith(".yaml"):
+                        yaml_path = os.path.join(gwas_dir, file)
+                        with open(yaml_path, 'r') as f:
+                            meta = yaml.safe_load(f)
+                            detected_n = find_n_deep(meta)
+                            if detected_n:
+                                print(f"N DETECTION: Found N={detected_n} via YAML Deep Search ({file}).")
+                                break
+        if detected_n is None:
+            raise ValueError("UNIVERSAL ERROR: Sample size (N) not found in data or metadata.")
+        _df['n'] = detected_n
+        _ldsc = pd.DataFrame()
+        if 'rsid' in _df.columns and (_df['rsid'] != 'NA').any():
+            _ldsc['SNP'] = _df['rsid']
+        else:
+            _ldsc['SNP'] = _df['chromosome'].astype(str) + ':' + _df['base_pair_location'].astype(str)
 
+        _ldsc['A1'] = _df['effect_allele'].str.upper()
+        _ldsc['A2'] = _df['other_allele'].str.upper()
+        _ldsc['Z'] = _df['beta'] / _df['standard_error']
+        _ldsc['N'] = _df['n']
 
-@app.cell
-def __(mo):
-    mo.md("## 5. Harmonize GWAS summary statistics")
+        if 'p_value' in _df.columns:
+            _ldsc['P'] = _df['p_value']
+        _ldsc = _ldsc[np.isfinite(_ldsc['Z'])]
+        _ldsc = _ldsc.drop_duplicates(subset=['SNP'])
+        _ldsc.to_csv(SUMSTATS_FILE, sep='\t', index=False, compression='gzip')
     return
 
 
 @app.cell
-def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DIR, REFORMATTED_GWAS, harmonizer_script, nextflow_env):
+def _(mo):
+    mo.md("""
+    ## 5. Harmonize GWAS summary statistics
+    """)
+    return
+
+
+@app.cell
+def _(
+    HARMONIZER_CODE_REPO,
+    HARMONIZER_REF_DIR,
+    REFORMATTED_GWAS,
+    harmonizer_ready,
+    harmonizer_script,
+    nextflow_env,
+    os,
+    subprocess,
+):
     os.makedirs("data/harmonized", exist_ok=True)
 
     harmonized_found = False
@@ -483,18 +550,26 @@ def __(subprocess, os, harmonizer_ready, HARMONIZER_CODE_REPO, HARMONIZER_REF_DI
             harmonized_output_dir = None
         finally:
             os.chdir("../..")
-
     return (harmonized_output_dir,)
 
 
 @app.cell
-def __(mo):
-    mo.md("## 6. Convert harmonized output to LDSC format")
+def _(mo):
+    mo.md("""
+    ## 6. Convert harmonized output to LDSC format
+    """)
     return
 
 
 @app.cell
-def __(os, pd, harmonized_output_dir, SUMSTATS_FILE, W_HM3_SNPLIST, REFORMATTED_GWAS):
+def _(
+    REFORMATTED_GWAS,
+    SUMSTATS_FILE,
+    W_HM3_SNPLIST,
+    harmonized_output_dir,
+    os,
+    pd,
+):
     os.makedirs("data/ldsc_input", exist_ok=True)
 
     if harmonized_output_dir is None:
@@ -560,18 +635,26 @@ def __(os, pd, harmonized_output_dir, SUMSTATS_FILE, W_HM3_SNPLIST, REFORMATTED_
             _out.to_csv(SUMSTATS_FILE, sep="\t", index=False, compression="gzip")
             print(f"  Written {len(_out):,} SNPs to {SUMSTATS_FILE}")
             print(f"  Mean |Z|: {_out['Z'].abs().mean():.3f}")
-
     return
 
 
 @app.cell
-def __(mo):
-    mo.md("## 7. Generate cell-type-specific binary annotations (BED -> .annot.gz)")
+def _(mo):
+    mo.md("""
+    ## 7. Generate cell-type-specific binary annotations (BED -> .annot.gz)
+    """)
     return
 
 
 @app.cell
-def __(subprocess, os, all_cell_types, cell_type_beds, python27_path, ldsc27_path):
+def _(
+    all_cell_types,
+    cell_type_beds,
+    ldsc27_path,
+    os,
+    python27_path,
+    subprocess,
+):
     os.makedirs("data/annotations", exist_ok=True)
     _env = os.environ.copy()
     _env["PATH"] = f"{ldsc27_path}/bin:" + _env.get("PATH", "")
@@ -611,13 +694,23 @@ def __(subprocess, os, all_cell_types, cell_type_beds, python27_path, ldsc27_pat
 
 
 @app.cell
-def __(mo):
-    mo.md("## 8. Calculate LD scores (HapMap3 SNPs only)")
+def _(mo):
+    mo.md("""
+    ## 8. Calculate LD scores (HapMap3 SNPs only)
+    """)
     return
 
 
 @app.cell
-def __(subprocess, os, all_cell_types, python27_path, concurrent, multiprocessing, HM3_NO_MHC_LIST):
+def _(
+    HM3_NO_MHC_LIST,
+    all_cell_types,
+    concurrent,
+    multiprocessing,
+    os,
+    python27_path,
+    subprocess,
+):
     os.makedirs("data/ldscores", exist_ok=True)
 
     def _calc_ld(args):
@@ -658,13 +751,15 @@ def __(subprocess, os, all_cell_types, python27_path, concurrent, multiprocessin
 
 
 @app.cell
-def __(mo):
-    mo.md("## 9. Create CTS reference file")
+def _(mo):
+    mo.md("""
+    ## 9. Create CTS reference file
+    """)
     return
 
 
 @app.cell
-def __(os, all_cell_types, CTS_FILE):
+def _(CTS_FILE, all_cell_types, os):
     os.makedirs("new_results", exist_ok=True)
 
     COMPLETED_CELL_TYPES = []
@@ -687,17 +782,19 @@ def __(os, all_cell_types, CTS_FILE):
             _f.write(f"{_ct}\tdata/ldscores/{_ct}/{_ct}.\n")
 
     print(f"\nCTS file written: {CTS_FILE}  ({len(COMPLETED_CELL_TYPES)} cell types)")
-    return (COMPLETED_CELL_TYPES,)
-
-
-@app.cell
-def __(mo):
-    mo.md("## 10. Run LDSC cell-type-specific heritability analysis")
     return
 
 
 @app.cell
-def __(CTS_FILE, python27_path, SUMSTATS_FILE, RESULTS_PREFIX, os, subprocess):
+def _(mo):
+    mo.md("""
+    ## 10. Run LDSC cell-type-specific heritability analysis
+    """)
+    return
+
+
+@app.cell
+def _(CTS_FILE, RESULTS_PREFIX, SUMSTATS_FILE, os, python27_path, subprocess):
     if not os.path.exists(SUMSTATS_FILE):
         print(f"Skipping — sumstats not found: {SUMSTATS_FILE}")
     elif not os.path.exists(CTS_FILE):
@@ -724,13 +821,15 @@ def __(CTS_FILE, python27_path, SUMSTATS_FILE, RESULTS_PREFIX, os, subprocess):
 
 
 @app.cell
-def __(mo):
-    mo.md("## 11. Results")
+def _(mo):
+    mo.md("""
+    ## 11. Results
+    """)
     return
 
 
 @app.cell
-def __(RESULTS_PREFIX, pd, os):
+def _(RESULTS_PREFIX, os, pd):
     from statsmodels.stats.multitest import fdrcorrection as _fdr
 
     _results_file = f"{RESULTS_PREFIX}.cell_type_results.txt"
@@ -754,8 +853,7 @@ def __(RESULTS_PREFIX, pd, os):
         )
         print(f"\nFDR < 0.05: {(ranked['FDR'] < 0.05).sum()} cell types")
         print(f"Saved to  : {RESULTS_PREFIX}_ranked.csv")
-
-    return (ranked,)
+    return
 
 
 if __name__ == "__main__":
