@@ -5,6 +5,7 @@ Manages the GWAS library collection in MongoDB, storing metadata for GWAS files
 that can be downloaded on-demand and cached in MinIO.
 """
 
+import re
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from loguru import logger
@@ -58,6 +59,20 @@ class GWASLibraryHandler(BaseHandler):
         except Exception as e:
             logger.warning(f"Could not create indexes (may already exist): {e}")
     
+    @staticmethod
+    def _search_substring_query(search_term: str) -> dict:
+        """Substring match on key string fields (case-insensitive)."""
+        escaped = re.escape(search_term.strip())
+        return {
+            "$or": [
+                {"file_id": {"$regex": escaped, "$options": "i"}},
+                {"filename": {"$regex": escaped, "$options": "i"}},
+                {"display_name": {"$regex": escaped, "$options": "i"}},
+                {"description": {"$regex": escaped, "$options": "i"}},
+                {"phenotype_code": {"$regex": escaped, "$options": "i"}},
+            ]
+        }
+
     def get_gwas_entry(self, file_id: str) -> Optional[Dict]:
         """
         Get a GWAS entry by file_id (filename)
@@ -92,7 +107,7 @@ class GWASLibraryHandler(BaseHandler):
         Get all GWAS entries with optional filtering and pagination
         
         Args:
-            search_term (str, optional): Search term for display_name or description
+            search_term (str, optional): Substring search on file_id, filename, display_name, description, phenotype_code
             sex_filter (str, optional): Filter by sex ('both_sexes', 'male', 'female')
             limit (int): Maximum number of entries to return
             skip (int): Number of entries to skip (for pagination)
@@ -103,14 +118,13 @@ class GWASLibraryHandler(BaseHandler):
         try:
             # Build query
             query = {}
-            
-            if search_term:
-                # Use text search
-                query['$text'] = {'$search': search_term}
-            
+
+            if search_term and search_term.strip():
+                query.update(self._search_substring_query(search_term))
+
             if sex_filter:
                 query['sex'] = sex_filter
-            
+
             # Execute query with pagination
             cursor = self.collection.find(query).skip(skip).limit(limit)
             
@@ -149,13 +163,13 @@ class GWASLibraryHandler(BaseHandler):
         """
         try:
             query = {}
-            
-            if search_term:
-                query['$text'] = {'$search': search_term}
-            
+
+            if search_term and search_term.strip():
+                query.update(self._search_substring_query(search_term))
+
             if sex_filter:
                 query['sex'] = sex_filter
-            
+
             return self.collection.count_documents(query)
             
         except Exception as e:
