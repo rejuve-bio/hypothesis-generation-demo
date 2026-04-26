@@ -10,7 +10,11 @@ from loguru import logger
 from src.api.dependencies import _JWT_SECRET, _deps
 from src.services.status_tracker import status_tracker
 from src.socketio_instance import sio
-from src.utils import analysis_state_for_public_api, serialize_datetime_fields
+from src.utils import (
+    analysis_state_for_public_api,
+    public_task_history_entries,
+    serialize_datetime_fields,
+)
 
 
 def _normalize_handshake_token(raw: str | None) -> str | None:
@@ -115,7 +119,7 @@ async def handle_subscribe(sid: str, data: dict | str) -> dict:
         response_data: dict = {
             "hypothesis_id": hypothesis_id,
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds") + "Z",
-            "task_history": task_history,
+            "task_history": public_task_history_entries(task_history),
         }
 
         if is_complete:

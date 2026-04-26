@@ -49,6 +49,17 @@ def analysis_state_for_public_api(state: dict | None) -> dict:
     return out
 
 
+def public_task_history_entries(entries: list | None) -> list:
+    if not entries:
+        return []
+    out: list = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        out.append({k: v for k, v in e.items() if k != "state"})
+    return out
+
+
 def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, next_task=None, error=None):
     """Emit a real-time progress update to WebSocket clients."""
     task_history = status_tracker.get_history(hypothesis_id)
@@ -79,11 +90,12 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         update["status"] = "Failed"
 
     if state == TaskState.COMPLETED:
-        if task_name == "Creating enrich data" or (
-            task_name == "Verifying existence of enrichment data" and progress == 80
-        ):
-            update["status"] = "Running"
-            update["progress"] = 80
+        if task_name == "Creating enrich data":
+            update["status"] = "Completed"
+            update["progress"] = 100
+        elif task_name == "Verifying existence of enrichment data" and progress == 80:
+            update["status"] = "Completed"
+            update["progress"] = 100
         elif task_name == "Generating hypothesis" or (
             task_name == "Verifying existence of hypothesis data" and progress == 100
         ):
@@ -97,9 +109,23 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
         if state == TaskState.FAILED:
             update["status"] = "Failed"
         elif state == TaskState.COMPLETED:
-            update["status"] = "Completed"
+            update["status"] = "Running"
         else:
             update["status"] = "Running"
+
+    public_update = {
+        "hypothesis_id": hypothesis_id,
+        "timestamp": update["timestamp"],
+        "task": update["task"],
+        "status": update["status"],
+        "progress": update["progress"],
+        "task_history": public_task_history_entries(update["task_history"]),
+        "target_room": room,
+    }
+    if update.get("next_task"):
+        public_update["next_task"] = update["next_task"]
+    if update.get("error") is not None:
+        public_update["error"] = update["error"]
 
     service_token = os.getenv("PREFECT_SERVICE_TOKEN")
     if not service_token:
@@ -113,7 +139,7 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
     try:
         resp = _requests.post(
             url,
-            json=update,
+            json=public_update,
             headers={"Authorization": f"Bearer {service_token}"},
             timeout=5,
         )
