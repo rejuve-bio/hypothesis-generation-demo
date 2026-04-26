@@ -81,7 +81,7 @@ class Config:
         else:
             raise ValueError(f"Unsupported reference genome: {ref_genome}. Must be 'GRCh37' or 'GRCh38'")
 
-    def get_plink_file_pattern(self, population=None, chrom=None):
+    def get_plink_file_pattern(self, *, population, chrom):
         return f"{population}.chr{chrom}.1KG.GRCh38"
 
 

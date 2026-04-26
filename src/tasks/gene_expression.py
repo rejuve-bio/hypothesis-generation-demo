@@ -437,8 +437,13 @@ def get_coexpression_matrix_for_tissue(gene, tissue_uberon_id, cell_type=None, k
         if gene not in genes_filtered:
             logger.info(f"Gene of interest not in filtered set, adding it")
             genes_filtered.append(gene)
-            # Add gene info to var_df_filtered
-            gene_info = var_df[var_df.index == gene]
+            # var_df uses a SOMA row index, not feature_id — select by column
+            gene_info = var_df[var_df["feature_id"] == gene]
+            if gene_info.empty:
+                logger.warning(
+                    f"Gene '{gene}' was in feature list but row metadata missing; skipping coexpression"
+                )
+                return [], [], all_genes_list
             var_df_filtered = pd.concat([var_df_filtered, gene_info.set_index("feature_id")])
         
         logger.info(f"Found gene '{gene}' in dataset")
