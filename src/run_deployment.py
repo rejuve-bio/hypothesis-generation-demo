@@ -68,15 +68,21 @@ def invoke_child_batch_deployment(current_user_id, child_enrich_ids, parent_hypo
         timeout=0  
     )
 
-def invoke_hypothesis_deployment(current_user_id, hypothesis_id, enrich_id, go_id):
-
-    run_deployment(
+def invoke_hypothesis_deployment(
+    current_user_id,
+    hypothesis_id,
+    enrich_id,
+    go_id,
+    *,
+    wait_timeout: float = 0,
+):
+    return run_deployment(
         name="hypothesis-flow/hypothesis-generation-deployment",
         parameters={
             "current_user_id": current_user_id,
             "hypothesis_id": hypothesis_id,
             "enrich_id": enrich_id,
-            "go_id": go_id
+            "go_id": go_id,
         },
-        timeout=0  # Fire-and-forget
+        timeout=wait_timeout,
     )
