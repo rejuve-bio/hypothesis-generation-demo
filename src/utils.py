@@ -127,13 +127,15 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
     if update.get("error") is not None:
         public_update["error"] = update["error"]
 
+    emit_data = {k: v for k, v in public_update.items() if k != "target_room"}
+
     redis_url = os.getenv("REDIS_URL")
     if not redis_url:
         logger.error("REDIS_URL not set – task update will not be relayed to clients.")
         return
 
     try:
-        publish_socketio_relay(redis_url, "task_update", room, public_update)
+        publish_socketio_relay(redis_url, "task_update", room, emit_data)
         logger.info(f"Published task update to Redis relay: {task_name} – {state}")
     except Exception as exc:
         logger.error(f"Failed to publish task update to Redis: {exc}")
