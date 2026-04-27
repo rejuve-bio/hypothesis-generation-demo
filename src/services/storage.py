@@ -105,16 +105,6 @@ class MinIOStorage:
             logger.error(f"[MinIO] Delete failed for {object_key}: {e}")
             return False
     
-    def get_object_size(self, object_key: str, bucket: Optional[str] = None) -> Optional[int]:
-
-        target_bucket = bucket or self.bucket
-        
-        try:
-            response = self.client.head_object(Bucket=target_bucket, Key=object_key)
-            return response['ContentLength']
-        except ClientError:
-            return None
-    
     def generate_presigned_url(self, object_key: str, expiration: int = 3600, 
                                bucket: Optional[str] = None) -> Optional[str]:
         target_bucket = bucket or self.bucket

@@ -26,7 +26,6 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
     config = Config.from_env()
     deps = create_dependencies(config)
     hypotheses = deps['hypotheses']
-    enrichment = deps['enrichment']
 
     hypothesis = check_hypothesis.submit(current_user_id, enrich_id, go_id, hypothesis_id).result()
     if hypothesis:
@@ -109,6 +108,9 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
 
     phenotype_result = execute_phenotype_query.submit(phenotype, hypothesis_id).result()
     phenotype_id = phenotype_result[0] if isinstance(phenotype_result, list) and phenotype_result else phenotype_result
+
+    if not any(n.get("id") == go_id for n in nodes):
+        nodes.append({"id": go_id, "type": "go", "name": go_name})
 
     nodes.append({"id": phenotype_id, "type": "phenotype", "name": phenotype})
     edges.append({"source": go_id, "target": phenotype_id, "label": "involved_in"})

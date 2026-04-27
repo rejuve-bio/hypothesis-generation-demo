@@ -29,38 +29,3 @@ async def get_current_user_id(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Token is invalid!",
         )
-
-
-async def verify_service_token(
-    creds: HTTPAuthorizationCredentials = Depends(_bearer),
-) -> None:
-    """FastAPI dependency for internal endpoints: only Prefect service tokens pass."""
-    try:
-        data = _decode(creds.credentials)
-        if data.get("service") != "prefect":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Service token required",
-            )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logging.error(f"Service token error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid service token",
-        )
-
-
-def decode_ws_token(token: str) -> str | None:
-    """Parse and validate a raw JWT string (used for WebSocket query-param auth).
-
-    Returns the user_id string, or *None* if the token is missing / invalid.
-    """
-    if not token:
-        return None
-    try:
-        data = _decode(token)
-        return str(data["user_id"])
-    except Exception:
-        return None

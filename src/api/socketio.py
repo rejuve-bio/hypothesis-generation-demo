@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from urllib.parse import unquote
 
 import jwt
 from loguru import logger
@@ -9,7 +10,21 @@ from loguru import logger
 from src.api.dependencies import _JWT_SECRET, _deps
 from src.services.status_tracker import status_tracker
 from src.socketio_instance import sio
-from src.utils import serialize_datetime_fields
+from src.utils import (
+    analysis_state_for_public_api,
+    public_task_history_entries,
+    serialize_datetime_fields,
+)
+
+
+def _normalize_handshake_token(raw: str | None) -> str | None:
+    """Decode query-style encoding and strip optional Bearer prefix for jwt.decode."""
+    if not raw or not str(raw).strip():
+        return None
+    token = unquote(str(raw).strip())
+    if token.startswith("Bearer "):
+        token = token[7:].strip()
+    return token or None
 
 
 def _extract_token_from_environ(environ: dict) -> str | None:
@@ -21,7 +36,7 @@ def _extract_token_from_environ(environ: dict) -> str | None:
     query_string = environ.get("QUERY_STRING", "")
     for param in query_string.split("&"):
         if param.startswith("token="):
-            return param[6:]
+            return unquote(param[6:])
 
     return None
 
@@ -32,10 +47,10 @@ async def handle_connect(sid: str, environ: dict, auth: dict | None = None) -> b
     token: str | None = None
 
     if auth and isinstance(auth, dict):
-        token = auth.get("token")
+        token = _normalize_handshake_token(auth.get("token"))
 
     if not token:
-        token = _extract_token_from_environ(environ)
+        token = _normalize_handshake_token(_extract_token_from_environ(environ))
 
     if not token:
         logger.warning(f"[SIO] Rejected connection {sid}: no token")
@@ -104,17 +119,17 @@ async def handle_subscribe(sid: str, data: dict | str) -> dict:
         response_data: dict = {
             "hypothesis_id": hypothesis_id,
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds") + "Z",
-            "task_history": task_history,
+            "task_history": public_task_history_entries(task_history),
         }
 
         if is_complete:
             response_data.update(
-                {"status": "completed", "result": hypothesis, "progress": 100}
+                {"status": "Completed", "result": hypothesis, "progress": 100}
             )
         else:
             latest_state = status_tracker.get_latest_state(hypothesis_id)
             progress = status_tracker.calculate_progress(task_history)
-            response_data.update({"status": "pending", "progress": progress})
+            response_data.update({"status": "Running", "progress": progress})
 
             if "tissue_rankings" in hypothesis:
                 response_data["tissue_rankings"] = hypothesis["tissue_rankings"]
@@ -123,7 +138,7 @@ async def handle_subscribe(sid: str, data: dict | str) -> dict:
                 response_data["enrichment_stage"] = hypothesis.get("enrichment_stage")
 
             if latest_state and latest_state.get("state") == "failed":
-                response_data["status"] = "failed"
+                response_data["status"] = "Failed"
                 response_data["error"] = latest_state.get("error")
 
         response_data = serialize_datetime_fields(response_data)
@@ -168,7 +183,9 @@ async def handle_subscribe_analysis(sid: str, data: dict | str) -> dict:
         await sio.enter_room(sid, room)
         logger.info(f"[SIO] {sid} joined room '{room}'")
 
-        analysis_state = projects.load_analysis_state(user_id, project_id) or {}
+        analysis_state = analysis_state_for_public_api(
+            projects.load_analysis_state(user_id, project_id)
+        )
         response_data = {
             "project_id": project_id,
             "user_id": user_id,

@@ -5,9 +5,9 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 from werkzeug.utils import secure_filename
@@ -16,7 +16,13 @@ from src.api.dependencies import _deps
 from src.api.auth import get_current_user_id
 from src.tasks.project import count_gwas_records, get_project_with_full_data
 from src.run_deployment import invoke_analysis_pipeline_deployment
-from src.utils import allowed_file, compute_file_md5, get_shared_temp_dir, serialize_datetime_fields
+from src.utils import (
+    allowed_file,
+    compute_file_md5,
+    get_shared_temp_dir,
+    normalize_status_responses,
+    serialize_datetime_fields,
+)
 
 router = APIRouter()
 
@@ -64,14 +70,11 @@ async def get_projects(
 
         try:
             analysis_state = projects.load_analysis_state(current_user_id, project["id"])
-            enhanced["status"] = (
-                analysis_state.get("status", "Not_started")
-                if analysis_state
-                else "Not_started"
-            )
+            raw = analysis_state.get("status") if analysis_state else None
+            enhanced["status"] = normalize_status_responses(raw)
         except Exception as state_e:
             logger.warning(f"Could not load analysis state for project {project['id']}: {state_e}")
-            enhanced["status"] = "Completed"
+            enhanced["status"] = normalize_status_responses("Completed")
 
         enhanced["population"] = project.get("population")
         enhanced["ref_genome"] = project.get("ref_genome")
@@ -194,8 +197,6 @@ async def post_analysis_pipeline(
 
         projects = _deps["projects"]
         files = _deps["files"]
-        analysis = _deps["analysis"]
-        gene_expression = _deps.get("gene_expression")
         config = _deps["config"]
         storage = _deps.get("storage")
         gwas_library = _deps.get("gwas_library")

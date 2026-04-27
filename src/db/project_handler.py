@@ -58,15 +58,6 @@ class ProjectHandler(BaseHandler):
             del project['_id']
         return projects
 
-    def update_project(self, project_id, data):
-        """Update project data"""
-        data['updated_at'] = datetime.now(timezone.utc)
-        result = self.projects_collection.update_one(
-            {'_id': ObjectId(project_id)},
-            {'$set': data}
-        )
-        return result.matched_count > 0
-
     def delete_project(self, user_id, project_id):
         """Delete a single project and all associated data"""
         try:
@@ -288,7 +279,7 @@ class ProjectHandler(BaseHandler):
                         return {**state, "status": "Completed",
                                 "message": "Pipeline completed (confirmed via Prefect)"}
                     if prefect_state_type in terminal_stopped:
-                        return {**state, "status": "Interrupted",
+                        return {**state, "status": "Failed",
                                 "message": "Pipeline was cancelled"}
                     return state
             except Exception as prefect_exc:
@@ -305,7 +296,7 @@ class ProjectHandler(BaseHandler):
                     hours = int(age.total_seconds() / 3600)
                     return {
                         **state,
-                        "status": "Interrupted",
+                        "status": "Failed",
                         "message": (
                             f"Pipeline status unconfirmed: no update for {hours}h "
                             f"(process may have been terminated)"

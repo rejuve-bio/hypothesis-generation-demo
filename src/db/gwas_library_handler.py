@@ -5,6 +5,7 @@ Manages the GWAS library collection in MongoDB, storing metadata for GWAS files
 that can be downloaded on-demand and cached in MinIO.
 """
 
+import re
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from loguru import logger
@@ -58,6 +59,20 @@ class GWASLibraryHandler(BaseHandler):
         except Exception as e:
             logger.warning(f"Could not create indexes (may already exist): {e}")
     
+    @staticmethod
+    def _search_substring_query(search_term: str) -> dict:
+        """Substring match on key string fields (case-insensitive)."""
+        escaped = re.escape(search_term.strip())
+        return {
+            "$or": [
+                {"file_id": {"$regex": escaped, "$options": "i"}},
+                {"filename": {"$regex": escaped, "$options": "i"}},
+                {"display_name": {"$regex": escaped, "$options": "i"}},
+                {"description": {"$regex": escaped, "$options": "i"}},
+                {"phenotype_code": {"$regex": escaped, "$options": "i"}},
+            ]
+        }
+
     def get_gwas_entry(self, file_id: str) -> Optional[Dict]:
         """
         Get a GWAS entry by file_id (filename)
@@ -92,7 +107,7 @@ class GWASLibraryHandler(BaseHandler):
         Get all GWAS entries with optional filtering and pagination
         
         Args:
-            search_term (str, optional): Search term for display_name or description
+            search_term (str, optional): Substring search on file_id, filename, display_name, description, phenotype_code
             sex_filter (str, optional): Filter by sex ('both_sexes', 'male', 'female')
             limit (int): Maximum number of entries to return
             skip (int): Number of entries to skip (for pagination)
@@ -103,14 +118,13 @@ class GWASLibraryHandler(BaseHandler):
         try:
             # Build query
             query = {}
-            
-            if search_term:
-                # Use text search
-                query['$text'] = {'$search': search_term}
-            
+
+            if search_term and search_term.strip():
+                query.update(self._search_substring_query(search_term))
+
             if sex_filter:
                 query['sex'] = sex_filter
-            
+
             # Execute query with pagination
             cursor = self.collection.find(query).skip(skip).limit(limit)
             
@@ -149,13 +163,13 @@ class GWASLibraryHandler(BaseHandler):
         """
         try:
             query = {}
-            
-            if search_term:
-                query['$text'] = {'$search': search_term}
-            
+
+            if search_term and search_term.strip():
+                query.update(self._search_substring_query(search_term))
+
             if sex_filter:
                 query['sex'] = sex_filter
-            
+
             return self.collection.count_documents(query)
             
         except Exception as e:
@@ -263,30 +277,6 @@ class GWASLibraryHandler(BaseHandler):
             logger.error(f"Error incrementing download count for {file_id}: {e}")
             return False
     
-    def get_most_popular(self, limit: int = 10) -> List[Dict]:
-        """
-        Get most popular (most downloaded) GWAS entries
-        
-        Args:
-            limit (int): Number of entries to return
-            
-        Returns:
-            list: List of popular GWAS entries
-        """
-        try:
-            cursor = self.collection.find().sort('download_count', -1).limit(limit)
-            
-            entries = []
-            for entry in cursor:
-                entry.pop('_id', None)
-                entries.append(entry)
-            
-            return entries
-            
-        except Exception as e:
-            logger.error(f"Error getting most popular entries: {e}")
-            return []
-    
     def bulk_create_gwas_entries(self, entries: List[Dict]) -> Dict:
         """
         Bulk insert GWAS entries into the collection
@@ -339,23 +329,4 @@ class GWASLibraryHandler(BaseHandler):
             
         except Exception as e:
             logger.error(f"Error during bulk insert: {e}")
-            raise
-    
-    def clear_collection(self) -> int:
-        """
-        Clear all entries from the GWAS library collection
-        
-        WARNING: This is a destructive operation!
-        
-        Returns:
-            int: Number of deleted entries
-        """
-        try:
-            result = self.collection.delete_many({})
-            deleted_count = result.deleted_count
-            logger.warning(f"Cleared GWAS library collection: {deleted_count} entries deleted")
-            return deleted_count
-            
-        except Exception as e:
-            logger.error(f"Error clearing collection: {e}")
             raise

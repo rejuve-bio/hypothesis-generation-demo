@@ -1,7 +1,7 @@
 from loguru import logger
 from prefect import task
 from src.services.status_tracker import TaskState, status_tracker
-from src.utils import emit_task_update, get_deps
+from src.utils import emit_task_update, get_deps, normalize_status_responses
 
 
 def extract_probability(hypothesis, enrichment, user_id):
@@ -42,7 +42,7 @@ def get_related_hypotheses(current_hypothesis, hypotheses, enrichment, user_id):
             'id': current_hypothesis['id'],
             'causal_gene': current_hypothesis.get('causal_gene'),
             'probability': current_probability,
-            'status': current_hypothesis.get('status', 'pending'),
+            'status': normalize_status_responses(current_hypothesis.get('status')),
             'go_id': current_hypothesis.get('go_id')
         }]
 
@@ -60,7 +60,7 @@ def get_related_hypotheses(current_hypothesis, hypotheses, enrichment, user_id):
                         'id': h['id'],
                         'causal_gene': h.get('causal_gene'),
                         'probability': probability,
-                        'status': h.get('status', 'pending'),
+                        'status': normalize_status_responses(h.get('status')),
                         'go_id': h.get('go_id')
                     })
 
@@ -74,7 +74,7 @@ def get_related_hypotheses(current_hypothesis, hypotheses, enrichment, user_id):
             'id': current_hypothesis['id'],
             'causal_gene': current_hypothesis.get('causal_gene'),
             'probability': current_probability,
-            'status': current_hypothesis.get('status', 'pending'),
+            'status': normalize_status_responses(current_hypothesis.get('status')),
             'go_id': current_hypothesis.get('go_id')
         }]
 
@@ -346,7 +346,7 @@ def create_hypothesis(enrich_id, go_id, variant_id, phenotype, causal_gene, caus
                 "graph": causal_graph,
                 "summary": summary,
                 "biological_context": "",
-                "status": "completed",
+                "status": "Completed",
                 "task_history": limited_history,
             }
         deps = get_deps()
@@ -358,7 +358,7 @@ def create_hypothesis(enrich_id, go_id, variant_id, phenotype, causal_gene, caus
             task_name="Generating hypothesis",
             state=TaskState.COMPLETED,
             details={
-                "status": "completed",
+                "status": "Completed",
                 "result": hypothesis_data
             }
         )

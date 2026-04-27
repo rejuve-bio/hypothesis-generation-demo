@@ -3,7 +3,12 @@
 import os
 import argparse
 import logging
-from src.flows import enrichment_flow, analysis_pipeline_flow, child_enrichment_batch_flow
+from src.flows import (
+    enrichment_flow,
+    analysis_pipeline_flow,
+    child_enrichment_batch_flow,
+    hypothesis_flow,
+)
 from src.config import Config
 from dotenv import load_dotenv
 
@@ -65,7 +70,17 @@ def setup_deployments(config):
         job_variables=job_vars
     )
 
-    return [enrich_deploy, analysis_deploy, child_batch_deploy]
+    # 4. Hypothesis generation
+    hypothesis_deploy = hypothesis_flow.to_deployment(
+        name="hypothesis-generation-deployment",
+        work_pool_name="interactive-pool",
+        tags=["hypothesis", "production"],
+        description="Build hypothesis summary and graph from enrichment + GO term",
+        version="1.0.0",
+        job_variables=job_vars,
+    )
+
+    return [enrich_deploy, analysis_deploy, child_batch_deploy, hypothesis_deploy]
 
 def main():
     """Main deployment service entry point"""

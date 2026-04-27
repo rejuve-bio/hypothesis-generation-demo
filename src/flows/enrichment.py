@@ -37,15 +37,12 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     # Initialize StatusTracker for Prefect context
     from src.services.status_tracker import StatusTracker
     status_tracker = StatusTracker()
-    status_tracker.initialize(deps['tasks'])
+    status_tracker.initialize(deps["tasks"], redis_url=deps["redis_url"])
 
     enrichr = deps['enrichr']
     llm = deps['llm']
-    prolog_query = deps['prolog_query']
     hypotheses = deps['hypotheses']
     gene_expression = deps['gene_expression']
-    projects = deps['projects']
-    enrichment = deps['enrichment']
 
     try:
         logger.info(f"Running project-based enrichment for project {project_id}, variant {variant}")

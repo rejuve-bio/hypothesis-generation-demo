@@ -43,14 +43,6 @@ class FileHandler(BaseHandler):
         for file_meta in files:
             file_meta['_id'] = str(file_meta['_id'])
         return files
-
-    def delete_file_metadata(self, user_id, file_id):
-        """Delete file metadata"""
-        result = self.file_metadata_collection.delete_one({
-            '_id': ObjectId(file_id),
-            'user_id': user_id
-        })
-        return result.deleted_count > 0
     
     def update_file_metadata(self, file_id: str, updates: dict) -> bool:
         """Patch specific fields on an existing file metadata record."""

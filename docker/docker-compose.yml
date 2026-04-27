@@ -4,8 +4,6 @@ services:
 
   mongo:
     image: mongo:latest
-    # ports:
-    #   - "27099:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
@@ -18,6 +16,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   prolog-service:
     build:
@@ -31,6 +30,7 @@ services:
       - /mnt/hdd_1/biocypher-kg/output/human/prolog_out_v3:/mnt/prolog_out_v3
     networks:
       - app_network
+    restart: unless-stopped
 
   dask-scheduler:
     build:
@@ -56,6 +56,7 @@ services:
       start_period: 10s
     networks:
       - app_network
+    restart: unless-stopped
 
   dask-worker:
     build:
@@ -71,8 +72,7 @@ services:
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
       - SKIP_SEED=true
-      - API_HOST=api-service
-      - API_PORT=5000
+      - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
     env_file:
       - ../.env
@@ -87,6 +87,8 @@ services:
         condition: service_healthy
       prolog-service:
         condition: service_started
+      redis:
+        condition: service_healthy
     command: >
       uv run dask worker tcp://dask-scheduler:8786 
       --nworkers 4
@@ -102,6 +104,7 @@ services:
           memory: 180G    
     networks:
       - app_network
+    restart: unless-stopped
 
   api-service:
     build:
@@ -147,6 +150,7 @@ services:
       --error-logfile -
     networks:
       - app_network
+    restart: unless-stopped
 
   prefect-postgres:
     image: postgres:15-alpine
@@ -165,6 +169,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   prefect-service:
     build:
@@ -196,6 +201,7 @@ services:
       timeout: 15s
       retries: 20
       start_period: 300s
+    restart: unless-stopped
   
   prefect-deployment:
     build:
@@ -238,8 +244,7 @@ services:
       - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
-      - API_HOST=api-service
-      - API_PORT=5000
+      - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
     depends_on:
       prefect-service:
@@ -247,6 +252,8 @@ services:
       dask-scheduler:
         condition: service_started
       mongo:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - app_network
@@ -262,6 +269,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
 volumes:
   mongo-data:

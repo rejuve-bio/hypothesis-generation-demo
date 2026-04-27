@@ -38,16 +38,6 @@ class HypothesisHandler(BaseHandler):
 
         return hypotheses if hypotheses else []
 
-    def get_hypotheses_by_project(self, user_id, project_id):
-        """Get all hypotheses for a project"""
-        hypotheses = list(self.hypothesis_collection.find({
-            'user_id': user_id,
-            'project_id': project_id
-        }))
-        for hypothesis in hypotheses:
-            hypothesis['_id'] = str(hypothesis['_id'])
-        return hypotheses
-
     def check_hypothesis(self, user_id=None, enrich_id=None, go_id=None):
         """Check if hypothesis exists"""
         query = {}

@@ -212,7 +212,6 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
 
         all_results = []
         successful_batches = 0
-        failed_batches = 0
 
         try:
             futures = finemap_region_batch_worker.map(batch_data_list)
@@ -225,7 +224,6 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                     successful_batches += 1
                     logger.info(f"[PIPELINE] Batch {i} completed with {len(batch_results)} regions")
                 else:
-                    failed_batches += 1
                     logger.warning(f"[PIPELINE] Batch {i} failed or returned no results")
 
         except Exception as e:

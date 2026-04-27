@@ -1,7 +1,6 @@
 import glob
 import os
 from pathlib import Path
-from typing import Dict
 import logging
 from prefect import task
 from datetime import datetime
@@ -12,16 +11,10 @@ import gzip
 import subprocess
 import tempfile
 import shutil
-from cyvcf2 import VCF, Writer
-from prefect import flow
-import multiprocessing as mp
-from functools import partial
-import psutil
 import gc
 import optuna
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.config import Config
-import re
 from src.utils import transform_credible_sets_to_locuszoom, get_deps, get_shared_temp_dir
 
 
@@ -478,7 +471,7 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
                 logger.info(f"[COJO] Processing chromosome {chrom}")
                 
                 # Get file pattern for this build
-                file_pattern = config.get_plink_file_pattern(ref_genome, population, chrom)
+                file_pattern = config.get_plink_file_pattern(population=population, chrom=chrom)
                 
                 # Define paths for this chromosome
                 plink_prefix = os.path.join(plink_dir, population, file_pattern)
@@ -637,7 +630,7 @@ def calculate_ld_matrix(chr_num, filtered_ids, sumstats, plink_dir, population, 
             tmp_file_ld_path = tmp_file_ld.name
             
         # Get file pattern for this build
-        file_pattern = config.get_plink_file_pattern(ref_genome, population, chr_num)
+        file_pattern = config.get_plink_file_pattern(population=population, chrom=chr_num)
         
         plink_cmd = [
             "plink",
@@ -716,7 +709,7 @@ def calculate_ld_matrix(chr_num, filtered_ids, sumstats, plink_dir, population, 
             'BP': sub_region_sumstats_ld[bp_col]
         })
         
-        file_pattern = config.get_plink_file_pattern(ref_genome, population, chr_num)
+        file_pattern = config.get_plink_file_pattern(population=population, chrom=chr_num)
         bim_file_path = f"{plink_dir}/{population}/{file_pattern}.bim"
         
         if os.path.exists(bim_file_path):

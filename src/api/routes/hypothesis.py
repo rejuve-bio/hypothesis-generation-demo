@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -8,12 +9,26 @@ from loguru import logger
 
 from src.api.dependencies import _deps
 from src.api.auth import get_current_user_id
-from src.flows import hypothesis_flow
+from src.run_deployment import invoke_hypothesis_deployment
 from src.services.status_tracker import TaskState, status_tracker
 from src.tasks import extract_probability, get_related_hypotheses
-from src.utils import serialize_datetime_fields
+from src.utils import (
+    normalize_status_responses,
+    public_task_history_entries,
+    serialize_datetime_fields,
+)
 
 router = APIRouter()
+
+_HYPOTHESIS_FLOW_WAIT_TIMEOUT = float(os.getenv("HYPOTHESIS_FLOW_WAIT_TIMEOUT", "120"))
+
+
+def _response_from_hypothesis_document(hypothesis_id: str, doc: dict | None) -> dict:
+    return {
+        "id": hypothesis_id,
+        "summary": doc.get("summary") if doc else None,
+        "graph": doc.get("graph") if doc else None,
+    }
 
 
 @router.get("/hypothesis")
@@ -58,7 +73,7 @@ async def get_hypothesis(
                 "variant": hypothesis.get("variant") or hypothesis.get("variant_id"),
                 "enrich_id": enrich_id,
                 "phenotype": hypothesis["phenotype"],
-                "status": "completed",
+                "status": "Completed",
                 "created_at": hypothesis.get("created_at"),
                 "probability": confidence,
                 "hypotheses": related_hypotheses,
@@ -102,9 +117,9 @@ async def get_hypothesis(
             "id": id,
             "variant": hypothesis.get("variant") or hypothesis.get("variant_id"),
             "phenotype": hypothesis["phenotype"],
-            "status": "pending",
+            "status": "Running",
             "created_at": hypothesis.get("created_at"),
-            "task_history": last_pending_task,
+            "task_history": public_task_history_entries(last_pending_task),
             "probability": confidence,
             "hypotheses": related_hypotheses,
         }
@@ -124,8 +139,13 @@ async def get_hypothesis(
                 enrich_data.pop("causal_graph", None)
             status_data["result"] = enrich_data
 
-        if latest_state and latest_state.get("state") == "failed":
-            status_data["status"] = "failed"
+        persisted = normalize_status_responses(hypothesis.get("status"))
+        if persisted == "Failed":
+            status_data["status"] = "Failed"
+            if hypothesis.get("error") is not None:
+                status_data["error"] = hypothesis.get("error")
+        elif latest_state and latest_state.get("state") == "failed":
+            status_data["status"] = "Failed"
             status_data["error"] = latest_state.get("error")
 
         selected_tissue = None
@@ -165,8 +185,8 @@ async def get_hypothesis(
             "phenotype": hypothesis.get("phenotype"),
             "variant": hypothesis.get("variant") or hypothesis.get("variant_id"),
             "created_at": hypothesis.get("created_at"),
-            "status": hypothesis.get("status"),
-            "task_history": last_pending_task,
+            "status": normalize_status_responses(hypothesis.get("status")),
+            "task_history": public_task_history_entries(last_pending_task),
         }
         for field in ("enrich_id", "biological_context", "causal_gene"):
             if field in hypothesis and hypothesis.get(field) is not None:
@@ -199,18 +219,87 @@ async def post_hypothesis(
 
     hypothesis_id = hypothesis["id"]
 
-    def run_hypothesis_flow():
-        result = hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id)
-        return result
+    def run_hypothesis_deployment_blocking():
+        return invoke_hypothesis_deployment(
+            current_user_id,
+            hypothesis_id,
+            enrich_id,
+            go_id,
+            wait_timeout=_HYPOTHESIS_FLOW_WAIT_TIMEOUT,
+        )
 
     loop = asyncio.get_running_loop()
-    result, status_code = await loop.run_in_executor(None, run_hypothesis_flow)
+    try:
+        flow_run = await loop.run_in_executor(None, run_hypothesis_deployment_blocking)
+    except Exception as e:
+        logger.exception("Hypothesis Prefect run_deployment failed")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not run the hypothesis flow on Prefect. If the API logs show "
+                "404 for deployments/name/hypothesis-flow/hypothesis-generation-deployment, "
+                "the deployment is not registered—restart prefect-deployment so "
+                "src/deployments.py runs. "
+                f"Details: {e!s}"
+            ),
+        ) from e
 
-    if status_code == 404:
-        raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-    if status_code == 200:
-        return {"id": hypothesis_id, "summary": result.get("summary"), "graph": result.get("graph")}
-    return {"id": hypothesis_id, "summary": result.get("summary"), "graph": result.get("graph")}
+    state = flow_run.state
+    if state is None:
+        raise HTTPException(
+            status_code=502, detail="Hypothesis flow run has no state; check Prefect."
+        )
+
+    if not state.is_final():
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Hypothesis generation did not finish in time; the run may still be "
+                "active in Prefect. Try again shortly."
+            ),
+        )
+
+    if state.is_failed() or state.is_crashed() or state.is_cancelled():
+        raise HTTPException(
+            status_code=500,
+            detail=state.message or "Hypothesis flow failed or was cancelled.",
+        )
+
+    if not state.is_completed():
+        raise HTTPException(
+            status_code=500,
+            detail=state.message or "Hypothesis flow did not complete successfully.",
+        )
+
+    try:
+        flow_return = state.result(raise_on_failure=True)
+    except Exception as e:
+        logger.exception("Could not load hypothesis flow result from Prefect state")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Hypothesis flow finished but result could not be read: {e}",
+        ) from e
+
+    if (
+        isinstance(flow_return, tuple)
+        and len(flow_return) == 2
+        and isinstance(flow_return[1], int)
+    ):
+        body, status_code = flow_return[0], flow_return[1]
+        if status_code == 404:
+            raise HTTPException(
+                status_code=404, detail=body.get("message", "Not found")
+            )
+        if status_code in (200, 201):
+            refreshed = hypotheses.get_hypotheses(current_user_id, hypothesis_id)
+            return _response_from_hypothesis_document(hypothesis_id, refreshed)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected hypothesis flow status code: {status_code}",
+        )
+
+    refreshed = hypotheses.get_hypotheses(current_user_id, hypothesis_id)
+    return _response_from_hypothesis_document(hypothesis_id, refreshed)
 
 
 @router.delete("/hypothesis")
