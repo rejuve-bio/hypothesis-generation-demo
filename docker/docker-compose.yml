@@ -72,8 +72,7 @@ services:
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
       - SKIP_SEED=true
-      - API_HOST=api-service
-      - API_PORT=5000
+      - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
     env_file:
       - ../.env
@@ -88,6 +87,8 @@ services:
         condition: service_healthy
       prolog-service:
         condition: service_started
+      redis:
+        condition: service_healthy
     command: >
       uv run dask worker tcp://dask-scheduler:8786 
       --nworkers 4
@@ -243,8 +244,7 @@ services:
       - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
-      - API_HOST=api-service
-      - API_PORT=5000
+      - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
     depends_on:
       prefect-service:
@@ -252,6 +252,8 @@ services:
       dask-scheduler:
         condition: service_started
       mongo:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - app_network

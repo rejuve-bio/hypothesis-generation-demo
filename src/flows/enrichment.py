@@ -37,7 +37,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     # Initialize StatusTracker for Prefect context
     from src.services.status_tracker import StatusTracker
     status_tracker = StatusTracker()
-    status_tracker.initialize(deps['tasks'])
+    status_tracker.initialize(deps["tasks"], redis_url=deps["redis_url"])
 
     enrichr = deps['enrichr']
     llm = deps['llm']
