@@ -155,7 +155,7 @@ def __(Path, subprocess, os, json):
 
 @app.cell
 def __(mo):
-    mo.md("## 1. Discover cell types and resolve BED sources")
+    mo.md("## 1. Download cell-type peak annotations and reference files")
     return
 
 
@@ -383,7 +383,12 @@ def __(mo):
 
 @app.cell
 def __(os, Path):
-    HARMONIZER_CODE_REPO = "/mnt/hdd_1/abdu/gwas-sumstats-harmoniser"
+    HARMONIZER_CODE_REPO = "/mnt/hdd_1/
+    
+    
+    
+    
+    /gwas-sumstats-harmoniser"
     HARMONIZER_REF_DIR   = "/mnt/hdd_1/abdu/gwas-sumstats-harmoniser/data/gwas_harm_ref"
     harmonizer_script    = Path(HARMONIZER_CODE_REPO) / "harmonizer.sh"
 
@@ -689,7 +694,7 @@ def __(subprocess, os, all_cell_types, python27_path, concurrent, multiprocessin
         for _res in _ex.map(_calc_ld, _tasks):
             print(_res)
 
-    print("\nAll LD scores calculated")
+    print("\nAll LD scores calculated using HapMap3 SNPs")
     return
 
 
