@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import os
 from loguru import logger
 from src.services.status_tracker import status_tracker, TaskState
-import requests as _requests
+from src.services.socketio_relay import publish_socketio_relay
 import pandas as pd
 import numpy as np
 import hashlib
@@ -62,15 +62,15 @@ def public_task_history_entries(entries: list | None) -> list:
 
 def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, next_task=None, error=None):
     """Emit a real-time progress update to WebSocket clients."""
-    task_history = status_tracker.get_history(hypothesis_id)
-
-    filtered_history = [entry for entry in task_history if entry["state"] == "completed"]
-    latest_5_started_tasks = filtered_history[-5:]
-
     if progress == 0:
-        progress = status_tracker.calculate_progress(task_history)
+        existing_history = status_tracker.get_history(hypothesis_id)
+        progress = status_tracker.calculate_progress(existing_history)
 
     status_tracker.add_update(hypothesis_id, progress, task_name, state, details, error)
+
+    task_history = status_tracker.get_history(hypothesis_id)
+    filtered_history = [entry for entry in task_history if entry["state"] == "completed"]
+    latest_5_started_tasks = filtered_history[-5:]
 
     room = f"hypothesis_{hypothesis_id}"
     update = {
@@ -127,38 +127,25 @@ def emit_task_update(hypothesis_id, task_name, state, progress=0, details=None, 
     if update.get("error") is not None:
         public_update["error"] = update["error"]
 
-    service_token = os.getenv("PREFECT_SERVICE_TOKEN")
-    if not service_token:
-        logger.error("PREFECT_SERVICE_TOKEN not set – task update will not be emitted.")
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        logger.error("REDIS_URL not set – task update will not be relayed to clients.")
         return
 
-    api_host = os.getenv("API_HOST") or os.getenv("FLASK_HOST", "localhost")
-    api_port = os.getenv("API_PORT") or os.getenv("FLASK_PORT", "5000")
-    url = f"http://{api_host}:{api_port}/internal/task-update"
-
     try:
-        resp = _requests.post(
-            url,
-            json=public_update,
-            headers={"Authorization": f"Bearer {service_token}"},
-            timeout=5,
-        )
-        logger.info(f"Emitted task update [{resp.status_code}]: {task_name} – {state}")
+        publish_socketio_relay(redis_url, "task_update", room, public_update)
+        logger.info(f"Published task update to Redis relay: {task_name} – {state}")
     except Exception as exc:
-        logger.error(f"Failed to POST task update to {url}: {exc}")
-        logger.info(f"Status saved locally (no delivery): {task_name} – {state}")
+        logger.error(f"Failed to publish task update to Redis: {exc}")
+        logger.info(f"Status saved locally (no relay delivery): {task_name} – {state}")
 
 
 def emit_analysis_update(user_id, project_id, state_data):
     """Push analysis pipeline progress to Socket.IO clients in room analysis_{project_id}."""
-    service_token = os.getenv("PREFECT_SERVICE_TOKEN")
-    if not service_token:
-        logger.error("PREFECT_SERVICE_TOKEN not set – analysis update will not be emitted.")
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        logger.error("REDIS_URL not set – analysis update will not be relayed to clients.")
         return
-
-    api_host = os.getenv("API_HOST") or os.getenv("FLASK_HOST", "localhost")
-    api_port = os.getenv("API_PORT") or os.getenv("FLASK_PORT", "5000")
-    url = f"http://{api_host}:{api_port}/internal/task-update"
 
     room = f"analysis_{project_id}"
     public_state = analysis_state_for_public_api(state_data)
@@ -171,19 +158,16 @@ def emit_analysis_update(user_id, project_id, state_data):
         **public_state,
     }
 
+    emit_data = {k: v for k, v in payload.items() if k not in ("target_room", "event")}
     try:
-        resp = _requests.post(
-            url,
-            json=payload,
-            headers={"Authorization": f"Bearer {service_token}"},
-            timeout=5,
-        )
+        publish_socketio_relay(redis_url, "analysis_update", room, emit_data)
+
         logger.info(
-            f"Emitted analysis update [{resp.status_code}]: project={project_id} "
+            f"Published analysis update to Redis relay: project={project_id} "
             f"stage={state_data.get('stage')} status={state_data.get('status')}"
         )
     except Exception as exc:
-        logger.error(f"Failed to POST analysis update to {url}: {exc}")
+        logger.error(f"Failed to publish analysis update to Redis: {exc}")
 
 
 def save_analysis_state(user_id, state):

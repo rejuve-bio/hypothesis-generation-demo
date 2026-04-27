@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from contextlib import asynccontextmanager
 
 import socketio as python_socketio
@@ -13,6 +14,7 @@ from loguru import logger
 from src.config import Config, create_dependencies
 from src.logging_config import setup_logging
 from src.socketio_instance import sio
+from src.services.socketio_relay import relay_subscribe_forever
 from src.services.status_tracker import StatusTracker
 from src.api import router
 from src.api.dependencies import init_deps
@@ -52,10 +54,28 @@ def create_app(config: Config) -> python_socketio.ASGIApp:
     async def lifespan(app: FastAPI):
         deps = create_dependencies(config)
         status_tracker = StatusTracker()
-        status_tracker.initialize(deps["tasks"])
+        status_tracker.initialize(deps["tasks"], redis_url=deps["redis_url"])
         init_deps(deps)
+
+
+        relay_task: asyncio.Task[None] | None = None
+        redis_url = deps.get("redis_url")
+        if redis_url:
+            relay_task = asyncio.create_task(relay_subscribe_forever(redis_url, sio))
+            logger.info("Socket.IO Redis relay subscriber started")
+        else:
+            logger.warning("REDIS_URL not set - live Socket.IO relay from workers is disabled")
+
         logger.info("Application dependencies initialized")
-        yield
+        try:
+            yield
+        finally:
+            if relay_task is not None:
+                relay_task.cancel()
+                try:
+                    await relay_task
+                except asyncio.CancelledError:
+                    pass
         logger.info("Application shutting down")
 
     fastapi_app = FastAPI(
