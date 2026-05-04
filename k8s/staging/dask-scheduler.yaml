@@ -17,7 +17,8 @@ spec:
         - name: dockerhub-creds
       containers:
         - name: dask-scheduler
-          image: abdum1964/hypothesis-generation-dask-scheduler:staging-latest
+          image: rejuvebio/hypothesis-generation-dask-scheduler:staging
+          imagePullPolicy: Always
           ports:
             - containerPort: 8786
             - containerPort: 8787
@@ -37,6 +38,7 @@ metadata:
   name: dask-scheduler
   namespace: hypothesis-staging
 spec:
+  type: NodePort
   selector:
     app: dask-scheduler
   ports:
@@ -46,3 +48,4 @@ spec:
     - name: dashboard
       port: 8787
       targetPort: 8787
+      nodePort: 30504

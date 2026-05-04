@@ -17,7 +17,7 @@ spec:
         - name: dockerhub-creds
       containers:
         - name: prolog
-          image: abdum1964/hypothesis-generation-prolog-service:staging-latest
+          image: rejuvebio/hypothesis-generation-prolog-service:staging-latest
           ports:
             - containerPort: 4242
           volumeMounts:

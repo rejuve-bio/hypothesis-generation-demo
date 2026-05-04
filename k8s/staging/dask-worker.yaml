@@ -21,7 +21,7 @@ spec:
           command: ["sh", "-c", "until redis-cli -h redis ping; do echo waiting for redis; sleep 2; done"]
       containers:
         - name: dask-worker
-          image: abdum1964/hypothesis-generation-dask-worker:staging
+          image: rejuvebio/hypothesis-generation-dask-worker:staging
           imagePullPolicy: Always
           env:
             - name: DASK_ADDRESS

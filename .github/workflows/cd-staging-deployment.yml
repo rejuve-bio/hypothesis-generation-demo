@@ -38,27 +38,27 @@ jobs:
           echo "Using image tag: $TAG"
 
           kubectl set image deployment/hypothesis-api \
-            api=abdum1964/hypothesis-generation-api-service:${TAG} \
+            api=rejuvebio/hypothesis-generation-api-service:${TAG} \
             -n "$NAMESPACE"
 
           kubectl set image deployment/prolog-service \
-            prolog=abdum1964/hypothesis-generation-prolog-service:${TAG} \
+            prolog=rejuvebio/hypothesis-generation-prolog-service:${TAG} \
             -n "$NAMESPACE"
 
           kubectl set image deployment/prefect-service \
-            prefect-service=abdum1964/hypothesis-generation-prefect-service:${TAG} \
+            prefect-service=rejuvebio/hypothesis-generation-prefect-service:${TAG} \
             -n "$NAMESPACE"
 
           kubectl set image deployment/prefect-deployment \
-            prefect-deployment=abdum1964/hypothesis-generation-prefect-deployment:${TAG} \
+            prefect-deployment=rejuvebio/hypothesis-generation-prefect-deployment:${TAG} \
             -n "$NAMESPACE"
 
           kubectl set image deployment/dask-scheduler \
-            dask-scheduler=abdum1964/hypothesis-generation-dask-scheduler:${TAG} \
+            dask-scheduler=rejuvebio/hypothesis-generation-dask-scheduler:${TAG} \
             -n "$NAMESPACE"
 
           kubectl set image deployment/dask-worker \
-            dask-worker=abdum1964/hypothesis-generation-dask-worker:${TAG} \
+            dask-worker=rejuvebio/hypothesis-generation-dask-worker:${TAG} \
             -n "$NAMESPACE"
 
       - name: Wait for rollout

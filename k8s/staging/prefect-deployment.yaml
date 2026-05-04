@@ -21,7 +21,7 @@ spec:
           command: ["sh", "-c", "until redis-cli -h redis ping; do echo waiting for redis; sleep 2; done"]
       containers:
         - name: prefect-deployment
-          image: abdum1964/hypothesis-generation-prefect-deployment:staging
+          image: rejuvebio/hypothesis-generation-prefect-deployment:staging
           imagePullPolicy: Always
           env:
             - name: PREFECT_API_URL

@@ -17,7 +17,7 @@ spec:
         - name: dockerhub-creds
       containers:
         - name: api
-          image: abdum1964/hypothesis-generation-api-service:staging
+          image: rejuvebio/hypothesis-generation-api-service:staging
           imagePullPolicy: Always
           ports:
             - containerPort: 5000
