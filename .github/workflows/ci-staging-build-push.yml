@@ -51,6 +51,7 @@ jobs:
         pylint . --output-format=json > pylint-report.json || true
 
     - name: SonarQube Scan
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
       uses: sonarsource/sonarqube-scan-action@master
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -65,6 +66,7 @@ jobs:
           -Dsonar.exclusions=**/venv/**,**/__pycache__/**,**/data/**,**/pl/**,**/prolog_out_ci/**,**/external_data_ci/**,.github/**
 
     - name: SonarQube Quality Gate Check
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
       uses: sonarsource/sonarqube-quality-gate-action@master
       timeout-minutes: 5
       env:
@@ -829,7 +831,7 @@ jobs:
   notify-failure:
     runs-on: self-hosted
     needs: [build-and-test-all]
-    if: failure()
+    if: failure() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
     steps:
     - name: Send failure email
       uses: dawidd6/action-send-mail@v3
