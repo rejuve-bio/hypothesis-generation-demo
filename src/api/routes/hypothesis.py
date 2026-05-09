@@ -7,7 +7,12 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from src.api.dependencies import _deps
+from src.api.dependencies import (
+    get_enrichment_handler,
+    get_gene_expression_handler,
+    get_hypothesis_handler,
+    get_llm,
+)
 from src.api.auth import get_current_user_id
 from src.run_deployment import invoke_hypothesis_deployment
 from src.services.status_tracker import TaskState, status_tracker
@@ -36,9 +41,9 @@ async def get_hypothesis(
     id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    hypotheses = _deps["hypotheses"]
-    enrichment = _deps["enrichment"]
-    gene_expression = _deps.get("gene_expression")
+    hypotheses = get_hypothesis_handler()
+    enrichment = get_enrichment_handler()
+    gene_expression = get_gene_expression_handler()
 
     if id:
         hypothesis = hypotheses.get_hypotheses(current_user_id, id)
@@ -204,7 +209,7 @@ async def post_hypothesis(
     current_user_id: str = Depends(get_current_user_id),
 ):
     """Generate hypothesis synchronously and return graph + summary immediately."""
-    hypotheses = _deps["hypotheses"]
+    hypotheses = get_hypothesis_handler()
     enrich_id = id
     go_id = go
 
@@ -307,7 +312,7 @@ async def delete_hypothesis(
     hypothesis_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    hypotheses = _deps["hypotheses"]
+    hypotheses = get_hypothesis_handler()
     if hypothesis_id:
         return hypotheses.delete_hypothesis(current_user_id, hypothesis_id)
     raise HTTPException(status_code=400, detail="Hypothesis ID is required")
@@ -318,7 +323,7 @@ async def bulk_delete_hypotheses(
     data: dict = Body(...),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    hypotheses = _deps["hypotheses"]
+    hypotheses = get_hypothesis_handler()
     hypothesis_ids = data.get("hypothesis_ids")
 
     if not hypothesis_ids:
@@ -345,8 +350,8 @@ async def chat(
     query = form.get("query")
     hypothesis_id = form.get("hypothesis_id")
 
-    hypotheses = _deps["hypotheses"]
-    llm = _deps["llm"]
+    hypotheses = get_hypothesis_handler()
+    llm = get_llm()
 
     hypothesis = hypotheses.get_hypotheses(current_user_id, hypothesis_id)
     if not hypothesis:

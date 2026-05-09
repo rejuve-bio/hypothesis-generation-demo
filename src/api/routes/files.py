@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from src.api.dependencies import _deps
+from src.api.dependencies import get_file_handler
 from src.api.auth import get_current_user_id
 from src.utils import serialize_datetime_fields
 
@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("/user-files")
 async def get_user_files(current_user_id: str = Depends(get_current_user_id)):
-    files = _deps["files"]
+    files = get_file_handler()
     try:
         all_files = files.get_file_metadata(current_user_id)
         if not all_files:

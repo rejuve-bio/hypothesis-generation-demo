@@ -12,7 +12,17 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from werkzeug.utils import secure_filename
 
-from src.api.dependencies import _deps
+from src.api.dependencies import (
+    get_analysis_handler,
+    get_config,
+    get_enrichment_handler,
+    get_file_handler,
+    get_gene_expression_handler,
+    get_gwas_library_handler,
+    get_hypothesis_handler,
+    get_project_handler,
+    get_storage,
+)
 from src.api.auth import get_current_user_id
 from src.tasks.project import count_gwas_records, get_project_with_full_data
 from src.run_deployment import invoke_analysis_pipeline_deployment
@@ -32,11 +42,11 @@ async def get_projects(
     id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    projects = _deps["projects"]
-    analysis = _deps["analysis"]
-    hypotheses = _deps["hypotheses"]
-    enrichment = _deps["enrichment"]
-    gene_expression = _deps.get("gene_expression")
+    projects = get_project_handler()
+    analysis = get_analysis_handler()
+    hypotheses = get_hypothesis_handler()
+    enrichment = get_enrichment_handler()
+    gene_expression = get_gene_expression_handler()
 
     if id:
         response_data, status_code = get_project_with_full_data(
@@ -53,7 +63,7 @@ async def get_projects(
         return JSONResponse(content=response_data, status_code=status_code)
 
     raw_projects = projects.get_projects(current_user_id)
-    files = _deps["files"]
+    files = get_file_handler()
     enhanced_projects: list[dict] = []
 
     for project in raw_projects:
@@ -121,7 +131,7 @@ async def delete_project(
 ):
     if not id:
         raise HTTPException(status_code=400, detail="Project ID is required")
-    projects = _deps["projects"]
+    projects = get_project_handler()
     success = projects.delete_project(current_user_id, id)
     if success:
         return {"message": "Project deleted successfully"}
@@ -133,7 +143,7 @@ async def bulk_delete_projects(
     data: dict = Body(...),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    projects = _deps["projects"]
+    projects = get_project_handler()
     project_ids = data.get("project_ids")
 
     if not project_ids:
@@ -195,11 +205,11 @@ async def post_analysis_pipeline(
         batch_size: int = int(form.get("batch_size", 5))
         sample_size: int = int(form.get("sample_size", 10000))
 
-        projects = _deps["projects"]
-        files = _deps["files"]
-        config = _deps["config"]
-        storage = _deps.get("storage")
-        gwas_library = _deps.get("gwas_library")
+        projects = get_project_handler()
+        files = get_file_handler()
+        config = get_config()
+        storage = get_storage()
+        gwas_library = get_gwas_library_handler()
 
         gwas_entry = None
         file_id_param: str | None = form.get("gwas_file") if not is_uploaded else None
