@@ -241,3 +241,7 @@ work #nextflow work dir
 .nextflow.log*
 runlog
 work/
+
+
+
+CLAUDE.md
