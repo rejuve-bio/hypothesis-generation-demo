@@ -5,6 +5,7 @@ from loguru import logger
 
 from src.api.dependencies import get_analysis_handler
 from src.api.auth import get_current_user_id
+from src.db import AnalysisHandler
 from src.utils import convert_variants_to_object_array, serialize_datetime_fields
 
 router = APIRouter()
@@ -15,8 +16,8 @@ async def get_credible_sets(
     project_id: str | None = Query(None),
     credible_set_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
+    analysis: AnalysisHandler = Depends(get_analysis_handler),
 ):
-    analysis = get_analysis_handler()
 
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")

@@ -14,6 +14,7 @@ from src.api.dependencies import (
     get_project_handler,
 )
 from src.api.auth import get_current_user_id
+from src.db import EnrichmentHandler, GeneExpressionHandler, HypothesisHandler, ProjectHandler
 from src.run_deployment import invoke_enrichment_deployment
 from src.utils import serialize_datetime_fields
 
@@ -25,8 +26,8 @@ async def get_enrich(
     id: str | None = Query(None),
     project_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
+    enrichment: EnrichmentHandler = Depends(get_enrichment_handler),
 ):
-    enrichment = get_enrichment_handler()
 
     if id:
         enrich = enrichment.get_enrich(current_user_id, id)
@@ -54,6 +55,9 @@ async def get_enrich(
 async def post_enrich(
     request: Request,
     current_user_id: str = Depends(get_current_user_id),
+    projects: ProjectHandler = Depends(get_project_handler),
+    hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
+    gene_expression: GeneExpressionHandler = Depends(get_gene_expression_handler),
 ):
     body: dict = {}
     try:
@@ -69,10 +73,6 @@ async def post_enrich(
         raise HTTPException(status_code=400, detail="project_id is required")
     if not variant:
         raise HTTPException(status_code=400, detail="variant is required")
-
-    projects = get_project_handler()
-    hypotheses = get_hypothesis_handler()
-    gene_expression = get_gene_expression_handler()
 
     project = projects.get_projects(current_user_id, project_id)
     if not project:
@@ -155,8 +155,8 @@ async def post_enrich(
 async def delete_enrich(
     id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
+    enrichment: EnrichmentHandler = Depends(get_enrichment_handler),
 ):
-    enrichment = get_enrichment_handler()
     if id:
         result = enrichment.delete_enrich(current_user_id, id)
         return result
