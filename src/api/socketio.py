@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from urllib.parse import unquote
 
 import jwt
+from dependency_injector.wiring import Provide, inject
 from loguru import logger
 
-from src.api.dependencies import _JWT_SECRET, _deps
+from src.container import Container
+from src.db import HypothesisHandler, ProjectHandler
 from src.services.status_tracker import status_tracker
 from src.socketio_instance import sio
 from src.utils import (
@@ -44,6 +47,7 @@ def _extract_token_from_environ(environ: dict) -> str | None:
 @sio.on("connect")
 async def handle_connect(sid: str, environ: dict, auth: dict | None = None) -> bool:
     """Authenticate every connecting client; reject if token is missing/invalid."""
+    jwt_secret = os.getenv("JWT_SECRET")
     token: str | None = None
 
     if auth and isinstance(auth, dict):
@@ -57,7 +61,7 @@ async def handle_connect(sid: str, environ: dict, auth: dict | None = None) -> b
         return False
 
     try:
-        data = jwt.decode(token, _JWT_SECRET, algorithms=["HS256"])
+        data = jwt.decode(token, jwt_secret, algorithms=["HS256"])
 
         if data.get("service") == "prefect":
             await sio.save_session(sid, {"user_id": None, "is_service": True})
@@ -80,7 +84,12 @@ async def handle_disconnect(sid: str) -> None:
 
 
 @sio.on("subscribe_hypothesis")
-async def handle_subscribe(sid: str, data: dict | str) -> dict:
+@inject
+async def handle_subscribe(
+    sid: str,
+    data: dict | str,
+    hypotheses_handler: HypothesisHandler = Provide[Container.hypothesis_handler],
+) -> dict:
     """Join a hypothesis room and immediately push the current state."""
     try:
         session = await sio.get_session(sid)
@@ -99,7 +108,6 @@ async def handle_subscribe(sid: str, data: dict | str) -> dict:
         if not hypothesis_id:
             return {"error": "hypothesis_id is required"}
 
-        hypotheses_handler = _deps.get("hypotheses")
         hypothesis = (
             hypotheses_handler.get_hypotheses(user_id, hypothesis_id)
             if user_id
@@ -143,7 +151,6 @@ async def handle_subscribe(sid: str, data: dict | str) -> dict:
 
         response_data = serialize_datetime_fields(response_data)
 
-        # Emit current state back to just this client (same event the old code used)
         await sio.emit("task_update", response_data, to=sid)
         return {"status": "subscribed", "room": room}
 
@@ -153,7 +160,12 @@ async def handle_subscribe(sid: str, data: dict | str) -> dict:
 
 
 @sio.on("subscribe_analysis")
-async def handle_subscribe_analysis(sid: str, data: dict | str) -> dict:
+@inject
+async def handle_subscribe_analysis(
+    sid: str,
+    data: dict | str,
+    projects: ProjectHandler = Provide[Container.project_handler],
+) -> dict:
     """Join an analysis pipeline room and push the current saved analysis state."""
     try:
         session = await sio.get_session(sid)
@@ -174,7 +186,6 @@ async def handle_subscribe_analysis(sid: str, data: dict | str) -> dict:
         if not project_id:
             return {"error": "project_id is required"}
 
-        projects = _deps["projects"]
         project = projects.get_projects(user_id, project_id)
         if not project:
             raise ValueError("Project not found or access denied")

@@ -7,11 +7,12 @@ import tempfile
 import traceback
 
 import requests as _http
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from loguru import logger
 
-from src.api.dependencies import _deps
+from src.api.dependencies import get_gwas_library_handler, get_storage
+from src.db import GWASLibraryHandler
 
 router = APIRouter()
 
@@ -31,8 +32,8 @@ async def get_gwas_files(
     sex: str | None = Query(None),
     limit: int | None = Query(None),
     skip: int = Query(0),
+    gwas_library: GWASLibraryHandler = Depends(get_gwas_library_handler),
 ):
-    gwas_library = _deps.get("gwas_library")
     try:
         if limit is None:
             limit = 100
@@ -84,9 +85,11 @@ async def get_gwas_files(
 
 
 @router.get("/gwas-files/download/{file_id}")
-async def download_gwas_file(file_id: str):
-    gwas_library = _deps.get("gwas_library")
-    storage = _deps.get("storage")
+async def download_gwas_file(
+    file_id: str,
+    gwas_library: GWASLibraryHandler = Depends(get_gwas_library_handler),
+    storage=Depends(get_storage),
+):
 
     try:
         entry = gwas_library.get_gwas_entry(file_id=file_id)

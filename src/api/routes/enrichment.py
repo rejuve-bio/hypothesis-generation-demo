@@ -7,8 +7,14 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from src.api.dependencies import _deps
+from src.api.dependencies import (
+    get_enrichment_handler,
+    get_gene_expression_handler,
+    get_hypothesis_handler,
+    get_project_handler,
+)
 from src.api.auth import get_current_user_id
+from src.db import EnrichmentHandler, GeneExpressionHandler, HypothesisHandler, ProjectHandler
 from src.run_deployment import invoke_enrichment_deployment
 from src.utils import serialize_datetime_fields
 
@@ -20,8 +26,8 @@ async def get_enrich(
     id: str | None = Query(None),
     project_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
+    enrichment: EnrichmentHandler = Depends(get_enrichment_handler),
 ):
-    enrichment = _deps["enrichment"]
 
     if id:
         enrich = enrichment.get_enrich(current_user_id, id)
@@ -49,6 +55,9 @@ async def get_enrich(
 async def post_enrich(
     request: Request,
     current_user_id: str = Depends(get_current_user_id),
+    projects: ProjectHandler = Depends(get_project_handler),
+    hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
+    gene_expression: GeneExpressionHandler = Depends(get_gene_expression_handler),
 ):
     body: dict = {}
     try:
@@ -64,10 +73,6 @@ async def post_enrich(
         raise HTTPException(status_code=400, detail="project_id is required")
     if not variant:
         raise HTTPException(status_code=400, detail="variant is required")
-
-    projects = _deps["projects"]
-    hypotheses = _deps["hypotheses"]
-    gene_expression = _deps.get("gene_expression")
 
     project = projects.get_projects(current_user_id, project_id)
     if not project:
@@ -150,8 +155,8 @@ async def post_enrich(
 async def delete_enrich(
     id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
+    enrichment: EnrichmentHandler = Depends(get_enrichment_handler),
 ):
-    enrichment = _deps["enrichment"]
     if id:
         result = enrichment.delete_enrich(current_user_id, id)
         return result

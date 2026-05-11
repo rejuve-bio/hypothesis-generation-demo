@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from loguru import logger
 
-from src.api.dependencies import _deps
+from src.api.dependencies import get_phenotype_handler
+from src.db import PhenotypeHandler
 from src.utils import serialize_datetime_fields
 
 router = APIRouter()
@@ -15,8 +16,8 @@ async def get_phenotypes(
     search: str | None = Query(None),
     limit: int | None = Query(None),
     skip: int = Query(0),
+    phenotypes: PhenotypeHandler = Depends(get_phenotype_handler),
 ):
-    phenotypes = _deps["phenotypes"]
     try:
         if id:
             phenotype = phenotypes.get_phenotypes(phenotype_id=id)
@@ -59,8 +60,10 @@ async def get_phenotypes(
 
 
 @router.post("/phenotypes", status_code=201)
-async def post_phenotypes(data: list = Body(...)):
-    phenotypes = _deps["phenotypes"]
+async def post_phenotypes(
+    data: list = Body(...),
+    phenotypes: PhenotypeHandler = Depends(get_phenotype_handler),
+):
     try:
         if not isinstance(data, list):
             raise HTTPException(
