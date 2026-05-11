@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from src.config import Config
+from src.api.dependencies import init_container
 from src.container import Container
 from src.logging_config import setup_logging
 from src.socketio_instance import sio
@@ -53,10 +54,8 @@ def create_app(config: Config) -> python_socketio.ASGIApp:
     async def lifespan(app: FastAPI):
         container = Container()
         container.config.override(config)
-        container.wire(modules=[
-            "src.api.dependencies",
-            "src.api.socketio",
-        ])
+        init_container(container)
+        container.wire(modules=["src.api.socketio"])
 
         status_tracker = StatusTracker()
         status_tracker.initialize(container.task_handler(), redis_url=config.redis_url)

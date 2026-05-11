@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dependency_injector.wiring import Provide, inject
-
 from src.config import Config
 from src.container import Container
 from src.db import (
@@ -20,82 +18,74 @@ from src.db import (
 from src.services.llm import LLM
 from src.services.prolog import PrologQuery
 
-
-@inject
-def get_config(config: Config = Provide[Container.config]) -> Config:
-    return config
+_container: Container | None = None
 
 
-@inject
-def get_llm(llm: LLM = Provide[Container.llm]) -> LLM:
-    return llm
+def init_container(container: Container) -> None:
+    """Called once at application startup to register the DI container."""
+    global _container
+    _container = container
 
 
-@inject
-def get_prolog_query(pq: PrologQuery = Provide[Container.prolog_query]) -> PrologQuery:
-    return pq
+def get_config() -> Config:
+    return _container.config()
 
 
-@inject
-def get_enrichr(enrichr=Provide[Container.enrichr]):
-    return enrichr
+def get_llm() -> LLM:
+    return _container.llm()
 
 
-@inject
-def get_storage(storage=Provide[Container.storage]):
-    return storage
+def get_prolog_query() -> PrologQuery:
+    return _container.prolog_query()
 
 
-@inject
-def get_user_handler(handler: UserHandler = Provide[Container.user_handler]) -> UserHandler:
-    return handler
+def get_enrichr():
+    return _container.enrichr()
 
 
-@inject
-def get_project_handler(handler: ProjectHandler = Provide[Container.project_handler]) -> ProjectHandler:
-    return handler
+def get_storage():
+    return _container.storage()
 
 
-@inject
-def get_file_handler(handler: FileHandler = Provide[Container.file_handler]) -> FileHandler:
-    return handler
+def get_user_handler() -> UserHandler:
+    return _container.user_handler()
 
 
-@inject
-def get_analysis_handler(handler: AnalysisHandler = Provide[Container.analysis_handler]) -> AnalysisHandler:
-    return handler
+def get_project_handler() -> ProjectHandler:
+    return _container.project_handler()
 
 
-@inject
-def get_enrichment_handler(handler: EnrichmentHandler = Provide[Container.enrichment_handler]) -> EnrichmentHandler:
-    return handler
+def get_file_handler() -> FileHandler:
+    return _container.file_handler()
 
 
-@inject
-def get_hypothesis_handler(handler: HypothesisHandler = Provide[Container.hypothesis_handler]) -> HypothesisHandler:
-    return handler
+def get_analysis_handler() -> AnalysisHandler:
+    return _container.analysis_handler()
 
 
-@inject
-def get_summary_handler(handler: SummaryHandler = Provide[Container.summary_handler]) -> SummaryHandler:
-    return handler
+def get_enrichment_handler() -> EnrichmentHandler:
+    return _container.enrichment_handler()
 
 
-@inject
-def get_task_handler(handler: TaskHandler = Provide[Container.task_handler]) -> TaskHandler:
-    return handler
+def get_hypothesis_handler() -> HypothesisHandler:
+    return _container.hypothesis_handler()
 
 
-@inject
-def get_gene_expression_handler(handler: GeneExpressionHandler = Provide[Container.gene_expression_handler]) -> GeneExpressionHandler:
-    return handler
+def get_summary_handler() -> SummaryHandler:
+    return _container.summary_handler()
 
 
-@inject
-def get_phenotype_handler(handler: PhenotypeHandler = Provide[Container.phenotype_handler]) -> PhenotypeHandler:
-    return handler
+def get_task_handler() -> TaskHandler:
+    return _container.task_handler()
 
 
-@inject
-def get_gwas_library_handler(handler: GWASLibraryHandler = Provide[Container.gwas_library_handler]) -> GWASLibraryHandler:
-    return handler
+def get_gene_expression_handler() -> GeneExpressionHandler:
+    return _container.gene_expression_handler()
+
+
+def get_phenotype_handler() -> PhenotypeHandler:
+    return _container.phenotype_handler()
+
+
+def get_gwas_library_handler() -> GWASLibraryHandler:
+    return _container.gwas_library_handler()

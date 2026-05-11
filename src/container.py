@@ -28,10 +28,7 @@ def _create_enrich(ensembl_hgnc_map, hgnc_ensembl_map, go_map):
 
 class Container(containers.DeclarativeContainer):
     wiring_config = containers.WiringConfiguration(
-        modules=[
-            "src.api.dependencies",
-            "src.api.socketio",
-        ]
+        modules=["src.api.socketio"]
     )
 
     config = providers.Dependency(instance_of=Config)
