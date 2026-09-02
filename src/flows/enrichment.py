@@ -9,6 +9,7 @@ from src.services.status_tracker import TaskState
 
 from src.config import Config, create_dependencies
 from src.catlas_census_mapping import CatlasMappingError
+from src.services.enrich import EnrichrAPIUnavailableError
 from src.tasks import (
     check_enrich,
     get_candidate_genes,
@@ -79,24 +80,55 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         graphs_with_prob.sort(key=lambda x: x[2], reverse=True)
         logger.info(f"Graph probabilities: {[(i, prob) for i, _, prob in graphs_with_prob]}")
 
-        # Extract causal genes from ALL graphs
-        graph_genes = []
+        # Extract causal genes from all usable graphs. Persist unusable graphs so
+        # the degraded result remains visible without scheduling hypotheses for it.
+        processable_graphs = []
+        skipped_enrich_ids = []
         for idx, (original_i, graph, prob) in enumerate(graphs_with_prob):
             # Extract variant nodes from the graph
             variant_nodes = [n for n in graph.get("nodes", []) if n.get("type") == "snp"]
 
             gene_id, gene_name = extract_causal_gene_from_graph(graph, variant_nodes)
             if not (gene_id or gene_name):
-                error_msg = f"No causal gene found in graph {idx+1}/{len(graphs_with_prob)} (prob={prob:.3f}). Graph may contain no genes or no direct SNP-gene connections."
-                logger.error(error_msg)
-                raise ValueError(error_msg)
+                skip_reason = "No direct SNP-gene edge found in causal graph."
+                logger.warning(
+                    f"Skipping graph {idx+1}/{len(graphs_with_prob)} "
+                    f"(prob={prob:.3f}): {skip_reason}"
+                )
+                skipped_id = create_enrich_data.submit(
+                    current_user_id,
+                    project_id,
+                    variant,
+                    phenotype,
+                    None,
+                    [],
+                    {
+                        "graph": enrichr.annotate_graph_gene_names(graph),
+                        "graph_index": original_i,
+                        "total_graphs": len(graphs_list),
+                    },
+                    hypothesis_id,
+                    "skipped",
+                    skip_reason,
+                ).result()
+                skipped_enrich_ids.append(skipped_id)
+                continue
 
             this_causal_gene = enrichr.to_symbol(gene_name or gene_id)
             logger.info(f"Graph {idx+1}: Extracted causal gene '{this_causal_gene}' (prob={prob:.3f})")
-            graph_genes.append((idx, this_causal_gene))
+            processable_graphs.append((original_i, graph, prob, this_causal_gene))
+
+        if not processable_graphs:
+            hypotheses.update_hypothesis(
+                hypothesis_id, {"skipped_enrich_ids": skipped_enrich_ids}
+            )
+            raise ValueError(
+                f"No causal genes found in any graph for variant {variant}. "
+                "All causal graphs were skipped."
+            )
 
         # Check if all graphs have the same causal gene
-        unique_genes = set(gene for _, gene in graph_genes)
+        unique_genes = {entry[3] for entry in processable_graphs}
         use_shared_enrichment = len(unique_genes) == 1
 
         # Get tissue selection for enrichment
@@ -120,8 +152,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         shared_enrichment_cache: dict[str, tuple] = {}
         primary_enrichment_meta: dict | None = None
 
-        for idx, (original_i, graph, prob) in enumerate(graphs_with_prob):
-            this_causal_gene = graph_genes[idx][1]
+        for idx, (original_i, graph, prob, this_causal_gene) in enumerate(processable_graphs):
 
             enrichment_run_meta = {
                 "attempted_ldsc_cell_type": selected_tissue,
@@ -141,28 +172,56 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                     task_name=f"Enrichment Analysis ({idx+1}/{len(graphs_with_prob)})",
                     state=TaskState.STARTED,
                     details={"causal_gene": this_causal_gene, "tissue": selected_tissue or "standard"},
-                    progress=45 + (idx * 15 // len(graphs_with_prob))
+                    progress=45 + (idx * 15 // len(processable_graphs))
                 )
 
-                if selected_tissue:
-                    ensembl_gene = enrichr.to_ensembl_id(this_causal_gene) or this_causal_gene
-                    coexpression_data = get_coexpression_matrix_for_tissue.submit(
-                        ensembl_gene, selected_tissue, k=500
-                    ).result()
-                    enrich_tbl = enrichr.run(
-                        this_causal_gene, tissue_name=selected_tissue,
-                        coexpression_data=coexpression_data
-                    )
-                    if enrich_tbl is None or len(enrich_tbl) == 0:
-                        logger.warning(
-                            f"Tissue '{selected_tissue}' produced no enrichment for {this_causal_gene}; "
-                            f"retrying with non–tissue-specific enrichment (fallback reference network)."
+                try:
+                    if selected_tissue:
+                        ensembl_gene = enrichr.to_ensembl_id(this_causal_gene) or this_causal_gene
+                        coexpression_data = get_coexpression_matrix_for_tissue.submit(
+                            ensembl_gene, selected_tissue, k=500
+                        ).result()
+                        enrich_tbl = enrichr.run(
+                            this_causal_gene, tissue_name=selected_tissue,
+                            coexpression_data=coexpression_data
                         )
+                        if enrich_tbl is None or len(enrich_tbl) == 0:
+                            logger.warning(
+                                f"Tissue '{selected_tissue}' produced no enrichment for {this_causal_gene}; "
+                                f"retrying with non–tissue-specific enrichment (fallback reference network)."
+                            )
+                            enrich_tbl = enrichr.run(this_causal_gene)
+                            enrichment_run_meta["non_tissue_specific_fallback"] = True
+                            enrichment_run_meta["effective_enrichment_mode"] = "non_tissue_fallback_from_tissue"
+                    else:
                         enrich_tbl = enrichr.run(this_causal_gene)
-                        enrichment_run_meta["non_tissue_specific_fallback"] = True
-                        enrichment_run_meta["effective_enrichment_mode"] = "non_tissue_fallback_from_tissue"
-                else:
-                    enrich_tbl = enrichr.run(this_causal_gene)
+                except EnrichrAPIUnavailableError as exc:
+                    skip_reason = (
+                        f"Enrichr API unavailable after retries for causal gene "
+                        f"{this_causal_gene}: {exc}"
+                    )
+                    logger.warning(
+                        f"Skipping graph {idx+1}/{len(processable_graphs)}: {skip_reason}"
+                    )
+                    skipped_id = create_enrich_data.submit(
+                        current_user_id,
+                        project_id,
+                        variant,
+                        phenotype,
+                        this_causal_gene,
+                        [],
+                        {
+                            "graph": enrichr.annotate_graph_gene_names(graph),
+                            "graph_index": original_i,
+                            "total_graphs": len(graphs_list),
+                            **enrichment_run_meta,
+                        },
+                        hypothesis_id,
+                        "skipped",
+                        skip_reason,
+                    ).result()
+                    skipped_enrich_ids.append(skipped_id)
+                    continue
 
                 # Check if enrichment table is empty
                 if enrich_tbl is None or len(enrich_tbl) == 0:
@@ -175,8 +234,6 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                 if use_shared_enrichment:
                     shared_enrichment_cache[this_causal_gene] = (relevant_gos, dict(enrichment_run_meta))
 
-            if idx == 0:
-                primary_enrichment_meta = dict(enrichment_run_meta)
             emit_task_update(
                 hypothesis_id=hypothesis_id,
                 task_name=f"Enrichment Analysis ({idx+1}/{len(graphs_with_prob)})",
@@ -187,11 +244,12 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                     **enrichment_run_meta,
                     "go_term_count": len(relevant_gos) if isinstance(relevant_gos, list) else 0,
                 },
-                progress=55 + (idx * 15 // max(len(graphs_with_prob), 1)),
+                progress=55 + (idx * 15 // max(len(processable_graphs), 1)),
             )
 
             # Store metadata for the highest probability graph in the main hypothesis
-            if idx == 0:
+            is_primary_enrichment = main_enrichment_id is None
+            if is_primary_enrichment:
                 best_causal_gene = this_causal_gene
 
                 # Update hypothesis with best graph metadata
@@ -220,8 +278,18 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                 "causal_gene": this_causal_gene
             })
 
-            if idx == 0:
+            if is_primary_enrichment:
+                primary_enrichment_meta = dict(enrichment_run_meta)
                 main_enrichment_id = enrich_id
+
+        if main_enrichment_id is None:
+            hypotheses.update_hypothesis(
+                hypothesis_id, {"skipped_enrich_ids": skipped_enrich_ids}
+            )
+            raise EnrichrAPIUnavailableError(
+                f"No enrichment could be completed for variant {variant}. "
+                "All eligible graphs were skipped after Enrichr failures."
+            )
 
         all_enrich_ids = [e['enrich_id'] for e in enrichment_data]
 
@@ -229,6 +297,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         hypo_patch: dict = {
             "enrich_id": main_enrichment_id,
             "child_enrich_ids": all_enrich_ids[1:],
+            "skipped_enrich_ids": skipped_enrich_ids,
             "status": "pending",
         }
         if primary_enrichment_meta:

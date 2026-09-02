@@ -14,6 +14,10 @@ from src.tasks.gene_expression import get_coexpression_matrix_for_tissue
 _ENSG_RE = re.compile(r"^ENSG\d+$", re.IGNORECASE)
 
 
+class EnrichrAPIUnavailableError(RuntimeError):
+    """Raised when all attempts to call the Enrichr API fail."""
+
+
 class Enrich:
 
     def __init__(self, ensembl_hgnc_map_path, hgnc_ensembl_map_path,
@@ -153,6 +157,46 @@ class Enrich:
         res = res[["ID", "Term", "Desc", "Adjusted P-value", "Genes"]].copy()        
         return res
 
+    def _run_enrichr_with_retry(
+        self,
+        *,
+        gene_list,
+        gene_sets,
+        background,
+        organism,
+        outdir=None,
+    ) -> pd.DataFrame:
+        """Call Enrichr with progressively smaller backgrounds."""
+        background_sizes = []
+        for limit in (5000, 2500, 1000):
+            size = min(len(background), limit)
+            if size not in background_sizes:
+                background_sizes.append(size)
+
+        last_error = None
+        for background_size in background_sizes:
+            try:
+                logger.info(
+                    f"Calling Enrichr with background size {background_size}"
+                )
+                return gp.enrichr(
+                    gene_list=gene_list,
+                    gene_sets=gene_sets,
+                    background=background[:background_size],
+                    organism=organism,
+                    outdir=outdir,
+                ).results
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    f"Enrichr call failed with background size {background_size}: {exc}"
+                )
+
+        raise EnrichrAPIUnavailableError(
+            "Enrichr API remained unavailable after retrying with background sizes "
+            f"{background_sizes}"
+        ) from last_error
+
     def run(self, relevant_gene, tissue_name=None, coexpression_data=None):
         """
         Given a gene, return the enriched GO terms based on its co-expression network.
@@ -208,10 +252,12 @@ class Enrich:
             logger.warning("No coexpressed genes found, returning empty results")
             return pd.DataFrame(columns=["ID", "Term", "Desc", "Adjusted P-value", "Genes"])
         
-        res = gp.enrichr(gene_list=gene_list,
-                         gene_sets=library,
-                         background=background_genes,
-                         organism=organism,
-                         outdir=None).results
+        res = self._run_enrichr_with_retry(
+            gene_list=gene_list,
+            gene_sets=library,
+            background=background_genes,
+            organism=organism,
+            outdir=None,
+        )
         
         return self._process_enrichment_results(res)
