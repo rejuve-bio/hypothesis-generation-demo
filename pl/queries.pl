@@ -100,6 +100,10 @@ variant_locus(RsId, Chr, Pos, Ref, Alt) :-
           LIMIT 1', [QRsId]),
         db_query(SQL, row(Chr, Pos, Ref, Alt)).
 
+variant_id(snp(RsId), Id) :-
+    variant_locus(RsId, Chr, Pos, Ref, Alt),
+    format(atom(Id), 'chr~w_~w_~w_~w', [Chr, Pos, Ref, Alt]).
+
 % Closest gene to a variant (by distance to gene body)
 closest_gene(snp(RsId), gene(GeneId)) :-
     open_db,

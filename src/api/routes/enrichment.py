@@ -93,7 +93,8 @@ async def post_enrich(
 
     variant = request.query_params.get("variant") or body.get("variant")
     project_id = request.query_params.get("project_id") or body.get("project_id")
-    seed = int(body.get("seed", 42))
+    seed = int(body.get("seed", request.query_params.get("seed", 42)))
+    samples = int(body.get("samples", request.query_params.get("samples", 10)))
 
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
@@ -165,6 +166,7 @@ async def post_enrich(
                 hypothesis_id=existing_hypothesis["id"],
                 project_id=project_id,
                 seed=seed,
+                samples=samples,
             ),
         )
         return {
@@ -197,6 +199,7 @@ async def post_enrich(
             hypothesis_id=hypothesis_id,
             project_id=project_id,
             seed=seed,
+            samples=samples,
         ),
     )
     return {"hypothesis_id": hypothesis_id, "project_id": project_id, "forked": forked}

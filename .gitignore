@@ -275,3 +275,8 @@ src/static/*
 
 # Docs
 docs/
+
+# ODBC DSN config - contains the bioatomspace credentials.
+# Copy config/odbc.ini.example to config/odbc.ini and fill in locally.
+config/odbc.ini
+config/.odbc.ini

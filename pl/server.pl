@@ -8,7 +8,7 @@ server_start(Port) :- http_server(http_dispatch, [port(Port)]).
 server_stop(Port) :- http_stop_server(Port, []).
 
 
-:- http_handler('/api/hypgen', handle_hypgen, []).
+:- http_handler('/api/hypgen', handle_hypgen, [time_limit(900)]).
 :- http_handler('/api/hypgen/candidate_genes', handle_candidate_genes, []).
 :- http_handler('/api/query', handle_query, []).
 
@@ -62,24 +62,21 @@ extract_term_id(Term, Term).
 handle_query(Request) :-
     http_parameters(Request, 
             [query(QueryString, [optional(false)])]),
-    
     catch(
         (
             term_string(Query, QueryString),
-            % Handle different query patterns
             (   Query = gene_id(Name, X) ->
-                findall(X, gene_id(Name, X), Results)
+                findall(X, gene_id(Name, X), RawResults)
             ;   Query = gene_name(Gene, X) ->
-                findall(X, gene_name(Gene, X), Results)
+                findall(X, gene_name(Gene, X), RawResults)
             ;   Query = variant_id(Variant, X) ->
-                findall(X, variant_id(Variant, X), Results)
+                findall(X, variant_id(Variant, X), RawResults)
             ;   Query = term_name(Term, Name) ->
-                findall(Term, term_name(Term, Name), RawResults),
-                % Extract IDs from compound terms like efo(ID)
-                maplist(extract_term_id, RawResults, Results)
+                findall(Term, term_name(Term, Name), RawResults)
             ;   % Unknown query pattern - reject to prevent arbitrary code execution
-                Results = []
+                RawResults = []
             ),
+            maplist(extract_term_id, RawResults, Results),
             reply_json(Results)
         ),
         Error,

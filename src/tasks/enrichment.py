@@ -178,7 +178,7 @@ def predict_causal_gene(phenotype, candidate_genes, hypothesis_id):
 
 
 @task(retries=2)
-def get_relevant_gene_proof(variant, hypothesis_id, seed):
+def get_relevant_gene_proof(variant, hypothesis_id, seed, samples=10):
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -187,10 +187,10 @@ def get_relevant_gene_proof(variant, hypothesis_id, seed):
             next_task="Creating enrich data"
         )
 
-        logger.info("Executing: get relevant gene proof")
+        logger.info(f"Executing: get relevant gene proof (samples={samples})")
         deps = get_deps()
         prolog_query = deps["prolog_query"]
-        raw_response = prolog_query.get_relevant_gene_proof(variant, seed, samples=10)
+        raw_response = prolog_query.get_relevant_gene_proof(variant, seed, samples=samples)
         graphs_list = parse_prolog_graphs(raw_response)
 
         emit_task_update(
@@ -244,7 +244,7 @@ def retry_predict_causal_gene(phenotype, candidate_genes, proof, causal_gene, hy
 
 
 @task(retries=2)
-def retry_get_relevant_gene_proof(variant, hypothesis_id, seed):
+def retry_get_relevant_gene_proof(variant, hypothesis_id, seed, samples=10):
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -253,10 +253,10 @@ def retry_get_relevant_gene_proof(variant, hypothesis_id, seed):
             next_task="Creating enrich data"
         )
 
-        logger.info("Retrying get relevant gene proof")
+        logger.info(f"Retrying get relevant gene proof (samples={samples})")
         deps = get_deps()
         prolog_query = deps["prolog_query"]
-        raw_response = prolog_query.get_relevant_gene_proof(variant, seed, samples=10)
+        raw_response = prolog_query.get_relevant_gene_proof(variant, seed, samples=samples)
         graphs_list = parse_prolog_graphs(raw_response)
 
         emit_task_update(

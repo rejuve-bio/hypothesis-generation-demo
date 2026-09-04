@@ -1,5 +1,7 @@
 settings:
-  prolog_base: /data1/biocypher-kg/output/hsa/prolog_out_v4
+  # Container path (compose mounts PROLOG_OUT_V3_PATH here). Host path is
+  # /mnt/hdd_1/biocypher-kg/output/human/prolog_out_v3 for compile_kb.py.
+  prolog_base: /mnt/prolog_out_v3
 
 kbs:
   # === Gencode ===

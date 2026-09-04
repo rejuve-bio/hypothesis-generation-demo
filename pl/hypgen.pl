@@ -51,4 +51,3 @@ init :-
     format("Loading atomspace...~n", []),
     load_atomspace,
     format("Done!~n", []).
-

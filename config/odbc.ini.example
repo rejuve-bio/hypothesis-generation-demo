@@ -1,0 +1,20 @@
+; ODBC DSN for the PostgreSQL-backed knowledge base.
+;
+; Prolog connects through this DSN in pl/queries.pl (open_db/0 calls
+; odbc_connect('PGOT', ...)), so the section name must stay PGOT.
+;
+; Setup:
+;   cp config/odbc.ini.example config/odbc.ini
+;   # fill in Servername / UserName / Password, then recreate prolog-service
+;
+; docker/docker-compose.yml mounts config/odbc.ini to /root/.odbc.ini inside
+; the prolog container. config/odbc.ini is gitignored - never commit real
+; credentials.
+
+[PGOT]
+Driver = PostgreSQL Unicode
+Database = bioatomspace
+Servername = <postgres-host>
+Port = 5432
+UserName = <username>
+Password = <password>

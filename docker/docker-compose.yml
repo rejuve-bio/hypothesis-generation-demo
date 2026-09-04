@@ -26,8 +26,10 @@ services:
       - "4242:4242"
     volumes:
       - ../pl:/app/pl
+      - ../config:/app/config
       - ${PROLOG_OUT_V2_PATH}:/mnt/prolog_out_v2
       - ${PROLOG_OUT_V3_PATH}:/mnt/prolog_out_v3
+      - ../config/odbc.ini:/root/.odbc.ini
     networks:
       - app_network
     restart: unless-stopped
@@ -66,8 +68,8 @@ services:
       - DASK_ADDRESS=tcp://dask-scheduler:8786
       - PREFECT_API_URL=http://prefect-service:4200/api
       - PYTHONPATH=/app
-      - SWIPL_HOST=prolog-service
-      - SWIPL_PORT=4242
+      - SWIPL_HOST=${SWIPL_HOST:-prolog-service}
+      - SWIPL_PORT=${SWIPL_PORT:-4242}
       - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
@@ -127,8 +129,8 @@ services:
       - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
-      - SWIPL_HOST=prolog-service
-      - SWIPL_PORT=4242
+      - SWIPL_HOST=${SWIPL_HOST:-prolog-service}
+      - SWIPL_PORT=${SWIPL_PORT:-4242}
       - OPENAI_API_KEY=${OpenAI}
       - REDIS_URL=redis://redis:6379
     env_file:
@@ -278,7 +280,7 @@ services:
       uv run prefect concurrency-limit create harmonize_tag 2 || true &&
 
       echo '--- 2. Registering Flows ---' &&
-      uv run python src/deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl --go-map /app/data/go_map.pkl --swipl-host prolog-service --swipl-port 4242 &&
+      uv run python src/deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl --go-map /app/data/go_map.pkl --swipl-host ${SWIPL_HOST:-prolog-service} --swipl-port ${SWIPL_PORT:-4242} &&
 
       echo '--- 3. Starting The Chefs (Workers) ---' &&
       uv run prefect worker start --pool 'analysis-pool' --name 'heavy-worker' &
@@ -295,6 +297,8 @@ services:
       - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
+      - SWIPL_HOST=${SWIPL_HOST:-prolog-service}
+      - SWIPL_PORT=${SWIPL_PORT:-4242}
       - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
       - CREDIBLE_SETS_DB_HOST=credible-sets-postgres

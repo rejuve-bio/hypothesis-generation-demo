@@ -27,7 +27,7 @@ from src.utils import emit_task_update
     persist_result=False,
     task_runner=DaskTaskRunner(address=os.getenv("DASK_ADDRESS"))
 )
-def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id, seed):
+def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id, seed, samples=10):
     """
     Fully project-based enrichment flow that initializes dependencies from centralized config
     """
@@ -46,7 +46,10 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     gene_expression = deps['gene_expression']
 
     try:
-        logger.info(f"Running project-based enrichment for project {project_id}, variant {variant}")
+        logger.info(
+            f"Running project-based enrichment for project {project_id}, "
+            f"variant {variant}, seed={seed}, samples={samples}"
+        )
 
         # Check for existing enrichment data
         enrich = check_enrich.submit(current_user_id, variant, phenotype, hypothesis_id).result()
@@ -56,10 +59,10 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
             return {"id": enrich['id']}, 200
 
         candidate_genes = get_candidate_genes.submit(variant, hypothesis_id).result()
-        graphs_list = get_relevant_gene_proof.submit(variant, hypothesis_id, seed).result()
+        graphs_list = get_relevant_gene_proof.submit(variant, hypothesis_id, seed, samples).result()
 
         if not graphs_list or len(graphs_list) == 0:
-            graphs_list = retry_get_relevant_gene_proof.submit(variant, hypothesis_id, seed).result()
+            graphs_list = retry_get_relevant_gene_proof.submit(variant, hypothesis_id, seed, samples).result()
             logger.info(f"Retried graphs: {len(graphs_list) if graphs_list else 0} graphs received")
 
         # If still no graphs after retry, fail the enrichment

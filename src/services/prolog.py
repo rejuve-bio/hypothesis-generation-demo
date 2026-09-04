@@ -29,7 +29,7 @@ class PrologQuery:
     
     def get_relevant_gene_proof(self, variant_id, seed, samples):
         payload = {"rsid": variant_id, "seed": seed,  "samples": samples}
-        res = requests.get(f"{self.server}/api/hypgen", params=payload)
+        res = requests.get(f"{self.server}/api/hypgen", params=payload, timeout=1500)
         if not res.ok:
             logger.error(f"Prolog server error for variant {variant_id}: {res.status_code} - {res.text}")
             raise RuntimeError(f"get_relevant_gene_proof failed. Prolog server response: {res.text}")
@@ -75,7 +75,10 @@ class PrologQuery:
             try:
                 result = self.execute_query(query)
                 if result and len(result) > 0:
-                    gene_ids.append(result[0])
+                    raw = result[0]
+                    if isinstance(raw, str) and raw.startswith("gene(") and raw.endswith(")"):
+                        raw = raw[5:-1]
+                    gene_ids.append(raw)
                 else:
                     logger.warning(f"No gene ID found for gene name: {gene_name}")
                     gene_ids.append(gene_name)  
