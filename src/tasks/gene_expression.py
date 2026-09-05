@@ -532,226 +532,130 @@ def get_coexpression_matrix_for_tissue(gene, cell_type, k=500, batch_size=1000):
 
     ``cell_type`` is the LDSC / CTS name (e.g. ``Atrial_Cardiomyocyte``). Catlas TSVs
     resolve it to Census ``cell_type`` strings and/or CL ids.
+
+    The (cells x genes) raw-count matrix for the tissue is downloaded from
+    Census once and cached (in-process and on disk, see
+    ``_get_or_build_tissue_context``) — this used to be re-downloaded from
+    Census on every single call, which was the main bottleneck when several
+    genes are queried against the same tissue in one enrichment run.
     """
     config = Config.from_env()
-    resolved = resolve_ldsc_for_census(
-        cell_type,
-        repo_root=config.repo_root,
-        mapping_json_rel=config.catlas_celltype_cl_mapping_json,
-        catlas_aliases_rel=config.catlas_abc_aliases_tsv,
-    )
     log_label = cell_type.replace("_", " ").lower()
-    logger.info(
-        f"Starting coexpression for gene '{gene}' | ldsc={cell_type!r} "
-        f"(passthrough_label={log_label!r}) source={resolved.source} "
-        f"skip={resolved.skip_coexpression}"
-    )
+    logger.info(f"Starting coexpression for gene '{gene}' | ldsc={cell_type!r} (passthrough_label={log_label!r})")
 
-    with cellxgene_census.open_soma(census_version="2024-07-01") as census:
-        experiment = census["census_data"]["homo_sapiens"]
+    context = _get_or_build_tissue_context(cell_type, config)
+    if context is None:
+        return [], [], []
 
-        axis_query = _census_obs_axis_query_for_resolved(experiment, resolved)
-        if axis_query is None:
-            return [], [], []
+    gene = gene.upper()
 
-        obs_joinids = axis_query.obs_joinids().to_numpy()
-        logger.info(f"Found {len(obs_joinids)} cells for ldsc cell type '{cell_type}'")
+    if gene not in context.all_genes_list:
+        logger.warning(f"Gene of interest '{gene}' not found in dataset")
+        return [], [], context.all_genes_list
 
-        if len(obs_joinids) > 100000:
-            obs_joinids = obs_joinids[:100000] 
-            n = 100000
-        else:
-            n = len(obs_joinids)
-            
-        if n == 0:
-            logger.warning(f"No cells in join set for ldsc cell type '{cell_type}'")
-            return [], [], []
-
-        # Get library sizes from obs metadata
-        logger.info("Getting library sizes from obs metadata...")
-        obs_df = experiment.obs.read(
-            coords=(obs_joinids.tolist(),),
-            column_names=["soma_joinid", "n_measured_vars"]
-        ).concat().to_pandas()
-        
-        # Create mapping from joinid to library size
-        obs_df = obs_df.set_index("soma_joinid")
-        cell_sums = obs_df.loc[obs_joinids, "n_measured_vars"].values.astype(np.float32)
-        
-        # Avoid division by zero
-        cell_sums = np.where(cell_sums > 0, cell_sums, 1.0)
-        logger.info(f"Loaded library sizes for {n} cells (mean: {np.mean(cell_sums):.0f} counts/cell)")
-
-        # Pre-filter to highly variable genes
-        logger.info("Loading gene metadata and filtering to highly expressed genes...")
-        var_df = experiment.ms["RNA"].var.read(
-            column_names=["soma_joinid", "feature_id", "feature_name", "n_measured_obs"]
-        ).concat().to_pandas()
-        
-        # Filter genes: expressed in at least 1% of cells (1000 cells for 100k sample)
-        min_cells = max(10, int(n * 0.01))
-        var_df_filtered = var_df[var_df["n_measured_obs"] >= min_cells].copy()
-        
-        # Sort by number of cells expressing (keep top ~15k genes)
-        var_df_filtered = var_df_filtered.nlargest(15000, "n_measured_obs")
-        var_df_filtered = var_df_filtered.set_index("feature_id")
-        
-        genes_filtered = var_df_filtered.index.tolist()
-        all_genes_list = var_df.set_index("feature_id").index.tolist()
-        
-        logger.info(f"Filtered from {len(all_genes_list)} to {len(genes_filtered)} highly expressed genes")
-        
-        # CellxGene uses uppercase Ensembl IDs - convert input to uppercase
-        gene = gene.upper()
-        
-        if gene not in all_genes_list:
-            logger.warning(f"Gene of interest '{gene}' not found in dataset")
-            return [], [], all_genes_list
-        
-        # Make sure gene of interest is in filtered set
-        if gene not in genes_filtered:
-            logger.info(f"Gene of interest not in filtered set, adding it")
-            genes_filtered.append(gene)
-            # var_df uses a SOMA row index, not feature_id — select by column
-            gene_info = var_df[var_df["feature_id"] == gene]
-            if gene_info.empty:
-                logger.warning(
-                    f"Gene '{gene}' was in feature list but row metadata missing; skipping coexpression"
-                )
-                return [], [], all_genes_list
-            var_df_filtered = pd.concat([var_df_filtered, gene_info.set_index("feature_id")])
-        
-        logger.info(f"Found gene '{gene}' in dataset")
-        
-        # Use filtered genes for correlation analysis
-        var_df = var_df_filtered
-
-        gene_joinid = var_df.loc[gene]["soma_joinid"]
-
-        # Get gene expression from raw counts  
-        gene_table_iter = experiment.ms["RNA"].X["raw"].read((obs_joinids.tolist(), [gene_joinid])).tables()
-        gene_expr = np.zeros(n, dtype=np.float32)
-        gene_joinid_to_idx = {jid: idx for idx, jid in enumerate(obs_joinids)}
-        
-        for batch in gene_table_iter:
-            obs_jids = batch["soma_dim_0"].to_numpy()
-            values = batch["soma_data"].to_numpy()
-            
-            for obs_jid, value in zip(obs_jids, values):
-                if obs_jid in gene_joinid_to_idx:
-                    idx = gene_joinid_to_idx[obs_jid]
-                    gene_expr[idx] = value
-        
-        # Normalize by library size (CPM-like: counts per 10k) then log1p
-        gene_expr = np.log1p((gene_expr / cell_sums) * 1e4)
-
-        # Filter cells with non-zero expression
-        nonzero_mask = gene_expr > 0
-        if np.sum(nonzero_mask) < 10:
+    if gene in context.gene_index:
+        gene_col = context.gene_index[gene]
+        gene_counts = np.asarray(context.matrix[:, gene_col].todense()).ravel()
+        other_genes = [g for g in context.genes if g != gene]
+        other_matrix = context.matrix[:, [context.gene_index[g] for g in other_genes]]
+    else:
+        # Gene of interest wasn't among the cached top-expressed genes for
+        # this tissue — fetch just its column directly rather than
+        # invalidating/rebuilding the shared cache.
+        logger.info("Gene of interest not in cached filtered set, fetching it directly")
+        gene_counts = _fetch_single_gene_counts(context, gene)
+        if gene_counts is None:
             logger.warning(
-                f"Too few cells with non-zero expression for gene '{gene}' in "
-                f"ldsc cell type '{cell_type}'"
+                f"Gene '{gene}' was in feature list but row metadata missing; skipping coexpression"
             )
-            return [], [], all_genes_list
+            return [], [], context.all_genes_list
+        other_genes = context.genes
+        other_matrix = context.matrix
 
-        sub_joinids = obs_joinids[nonzero_mask]
-        gene_expr_sub = gene_expr[nonzero_mask]
-        cell_sums_sub = cell_sums[nonzero_mask]  # Subset library sizes too
-        
-        n_sub = len(sub_joinids)
-        logger.info(f"Gene expressed in {n_sub} cells, computing correlations...")
+    logger.info(f"Found gene '{gene}' in dataset")
 
-        # Get other genes (exclude gene of interest)
-        genes = var_df.index.tolist()
-        mask = np.array([g != gene for g in genes])
-        other_gene_joinids = var_df.loc[mask, "soma_joinid"].values
-        other_genes = np.array(genes)[mask]
+    # Normalize by library size (CPM-like: counts per 10k) then log1p
+    gene_expr = np.log1p((gene_counts / context.cell_sums) * 1e4)
 
-        # Pre-compute cell index mapping
-        sub_joinid_to_idx = {jid: idx for idx, jid in enumerate(sub_joinids)}
+    # Filter cells with non-zero expression
+    nonzero_mask = gene_expr > 0
+    if np.sum(nonzero_mask) < 10:
+        logger.warning(
+            f"Too few cells with non-zero expression for gene '{gene}' in "
+            f"ldsc cell type '{cell_type}'"
+        )
+        return [], [], context.all_genes_list
 
-        # Vectorized correlation computation
-        logger.info(f"Reading expression for {len(other_genes)} genes...")
-        all_table_iter = experiment.ms["RNA"].X["raw"].read(
-            (sub_joinids.tolist(), other_gene_joinids.tolist())
-        ).tables()
-        
-        # Build full expression matrix
-        all_expr = np.zeros((n_sub, len(other_genes)), dtype=np.float32)
-        gene_jid_to_idx = {jid: idx for idx, jid in enumerate(other_gene_joinids)}
-        
-        for table in all_table_iter:
-            obs_jids = table["soma_dim_0"].to_numpy()
-            gene_jids = table["soma_dim_1"].to_numpy()
-            values = table["soma_data"].to_numpy()
-            
-            for obs_jid, gene_jid, value in zip(obs_jids, gene_jids, values):
-                if obs_jid in sub_joinid_to_idx and gene_jid in gene_jid_to_idx:
-                    obs_idx = sub_joinid_to_idx[obs_jid]
-                    gene_idx = gene_jid_to_idx[gene_jid]
-                    all_expr[obs_idx, gene_idx] = value
-        
-        logger.info("Normalizing expression matrix...")
-        all_expr = (all_expr / cell_sums_sub[:, np.newaxis]) * 1e4
-        all_expr = np.log1p(all_expr)
-        
-        logger.info("Computing correlations (vectorized pre-filtering)...")
-        
-        # Filter genes with sufficient expression (at least 10 cells)
-        gene_counts = np.sum(all_expr > 0, axis=0)
-        valid_genes = gene_counts >= 10
-        
-        if np.sum(valid_genes) == 0:
-            logger.warning("No genes with sufficient expression for correlation")
-            return [], [], all_genes_list
-        
-        all_expr_filtered = all_expr[:, valid_genes]
-        other_genes_filtered = other_genes[valid_genes]
-        
-        # Standardize for correlation
-        gene_expr_centered = gene_expr_sub - np.mean(gene_expr_sub)
-        other_expr_centered = all_expr_filtered - np.mean(all_expr_filtered, axis=0)
-        
-        gene_std = np.std(gene_expr_sub)
-        other_std = np.std(all_expr_filtered, axis=0)
-        
-        # Avoid division by zero
-        valid_std = (gene_std > 1e-10) & (other_std > 1e-10)
-        
-        correlations_vec = np.zeros(len(other_genes_filtered))
-        if gene_std > 1e-10:
-            correlations_vec[valid_std] = np.dot(gene_expr_centered, other_expr_centered[:, valid_std]) / (
-                n_sub * gene_std * other_std[valid_std]
-            )
-        
-        # Get top candidates (top 2000 by absolute correlation for efficiency)
-        top_n = min(2000, len(correlations_vec))
-        top_indices = np.argsort(np.abs(correlations_vec))[-top_n:]
-        
-        logger.info(f"Pre-filtered to top {len(top_indices)} candidates, running scipy.stats.pearsonr...")
-        
-        correlations = {}
-        for idx in top_indices:
-            gene_symbol = other_genes_filtered[idx]
-            other_expr = all_expr_filtered[:, idx]
-            
-            if np.sum(other_expr > 0) >= 10:
-                try:
-                    corr, p_value = pearsonr(gene_expr_sub, other_expr)
-                    if p_value <= 0.05 and not np.isnan(corr):
-                        correlations[gene_symbol] = corr
-                except Exception:
-                    continue
-        
-        logger.info(f"Found {len(correlations)} significant correlations (p <= 0.05)")
+    gene_expr_sub = gene_expr[nonzero_mask]
+    cell_sums_sub = context.cell_sums[nonzero_mask]
 
-        # Sort by correlation and get top k
-        sorted_correlations = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
-        
-        top_positive = sorted_correlations[:k]
-        top_negative = sorted_correlations[-k:]
-        
-        return top_positive, top_negative, all_genes_list
+    n_sub = len(gene_expr_sub)
+    logger.info(f"Gene expressed in {n_sub} cells, computing correlations...")
+
+    other_genes = np.array(other_genes)
+    all_expr = np.asarray(other_matrix[nonzero_mask, :].todense())
+
+    logger.info("Normalizing expression matrix...")
+    all_expr = (all_expr / cell_sums_sub[:, np.newaxis]) * 1e4
+    all_expr = np.log1p(all_expr)
+
+    logger.info("Computing correlations (vectorized pre-filtering)...")
+
+    # Filter genes with sufficient expression (at least 10 cells)
+    gene_counts_nonzero = np.sum(all_expr > 0, axis=0)
+    valid_genes = gene_counts_nonzero >= 10
+
+    if np.sum(valid_genes) == 0:
+        logger.warning("No genes with sufficient expression for correlation")
+        return [], [], context.all_genes_list
+
+    all_expr_filtered = all_expr[:, valid_genes]
+    other_genes_filtered = other_genes[valid_genes]
+
+    # Standardize for correlation
+    gene_expr_centered = gene_expr_sub - np.mean(gene_expr_sub)
+    other_expr_centered = all_expr_filtered - np.mean(all_expr_filtered, axis=0)
+
+    gene_std = np.std(gene_expr_sub)
+    other_std = np.std(all_expr_filtered, axis=0)
+
+    # Avoid division by zero
+    valid_std = (gene_std > 1e-10) & (other_std > 1e-10)
+
+    correlations_vec = np.zeros(len(other_genes_filtered))
+    if gene_std > 1e-10:
+        correlations_vec[valid_std] = np.dot(gene_expr_centered, other_expr_centered[:, valid_std]) / (
+            n_sub * gene_std * other_std[valid_std]
+        )
+
+    # Get top candidates (top 2000 by absolute correlation for efficiency)
+    top_n = min(2000, len(correlations_vec))
+    top_indices = np.argsort(np.abs(correlations_vec))[-top_n:]
+
+    logger.info(f"Pre-filtered to top {len(top_indices)} candidates, running scipy.stats.pearsonr...")
+
+    correlations = {}
+    for idx in top_indices:
+        gene_symbol = other_genes_filtered[idx]
+        other_expr = all_expr_filtered[:, idx]
+
+        if np.sum(other_expr > 0) >= 10:
+            try:
+                corr, p_value = pearsonr(gene_expr_sub, other_expr)
+                if p_value <= 0.05 and not np.isnan(corr):
+                    correlations[gene_symbol] = corr
+            except Exception:
+                continue
+
+    logger.info(f"Found {len(correlations)} significant correlations (p <= 0.05)")
+
+    # Sort by correlation and get top k
+    sorted_correlations = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
+
+    top_positive = sorted_correlations[:k]
+    top_negative = sorted_correlations[-k:]
+
+    return top_positive, top_negative, context.all_genes_list
 
 @task(log_prints=True)
 def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_id):
