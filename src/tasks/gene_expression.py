@@ -304,6 +304,228 @@ def map_tissues_to_cellxgene(top_tissues):
     return results
 
 
+def _tissue_cache_paths(cell_type: str, config) -> dict:
+    """Where the (cells x genes) raw-count matrix for a tissue is cached on
+    disk, keyed by cell type + Census version."""
+    cache_dir = Path(getattr(config, "census_cache_dir", None) or os.path.join(config.data_dir, "census_cache"))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", cell_type)
+    key = f"{safe_name}__{CENSUS_VERSION}"
+    return {
+        "matrix": cache_dir / f"{key}.matrix.npz",
+        "meta": cache_dir / f"{key}.meta.json",
+        "obs": cache_dir / f"{key}.obs_joinids.npy",
+        "cellsums": cache_dir / f"{key}.cell_sums.npy",
+    }
+
+
+def _load_tissue_context_from_disk(cell_type: str, config) -> Optional[_TissueCoexpressionContext]:
+    paths = _tissue_cache_paths(cell_type, config)
+    if not all(p.exists() for p in paths.values()):
+        return None
+    try:
+        meta = json.loads(paths["meta"].read_text())
+        obs_joinids = np.load(paths["obs"])
+        cell_sums = np.load(paths["cellsums"])
+        matrix = sparse.load_npz(paths["matrix"])
+        genes = meta["genes"]
+        return _TissueCoexpressionContext(
+            cell_type=cell_type,
+            obs_joinids=obs_joinids,
+            cell_sums=cell_sums,
+            genes=genes,
+            gene_index={g: i for i, g in enumerate(genes)},
+            all_genes_list=meta["all_genes_list"],
+            matrix=matrix,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[Census cache] Failed to load cached matrix for {cell_type!r}: {e}. "
+            "Will re-download from Census."
+        )
+        return None
+
+
+def _save_tissue_context_to_disk(context: _TissueCoexpressionContext, config) -> None:
+    paths = _tissue_cache_paths(context.cell_type, config)
+    try:
+        sparse.save_npz(paths["matrix"], context.matrix)
+        np.save(paths["obs"], context.obs_joinids)
+        np.save(paths["cellsums"], context.cell_sums)
+        paths["meta"].write_text(json.dumps({
+            "genes": context.genes,
+            "all_genes_list": context.all_genes_list,
+        }))
+        logger.info(f"[Census cache] Cached coexpression matrix for {context.cell_type!r} at {paths['matrix']}")
+    except Exception as e:
+        logger.warning(f"[Census cache] Failed to persist cache for {context.cell_type!r}: {e}")
+
+
+def _build_tissue_context_from_census(
+    cell_type: str, resolved: ResolvedCensusCellFilter
+) -> Optional[_TissueCoexpressionContext]:
+    """The expensive part: open Census, select cells for the tissue, filter
+    to the highly-expressed genes, and download the raw-count matrix for
+    every (cell, gene) pair once. This is the "co-expression matrix
+    downloading step" — after this runs once per tissue, every subsequent
+    gene queried against the same tissue reuses the cached result instead of
+    re-downloading it from Census.
+    """
+    with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
+        experiment = census["census_data"]["homo_sapiens"]
+
+        axis_query = _census_obs_axis_query_for_resolved(experiment, resolved)
+        if axis_query is None:
+            return None
+
+        obs_joinids = axis_query.obs_joinids().to_numpy()
+        logger.info(f"Found {len(obs_joinids)} cells for ldsc cell type '{cell_type}'")
+
+        if len(obs_joinids) > 100000:
+            obs_joinids = obs_joinids[:100000]
+        n = len(obs_joinids)
+
+        if n == 0:
+            logger.warning(f"No cells in join set for ldsc cell type '{cell_type}'")
+            return None
+
+        logger.info("Getting library sizes from obs metadata...")
+        obs_df = experiment.obs.read(
+            coords=(obs_joinids.tolist(),),
+            column_names=["soma_joinid", "n_measured_vars"],
+        ).concat().to_pandas().set_index("soma_joinid")
+        cell_sums = obs_df.loc[obs_joinids, "n_measured_vars"].values.astype(np.float32)
+        cell_sums = np.where(cell_sums > 0, cell_sums, 1.0)
+        logger.info(f"Loaded library sizes for {n} cells (mean: {np.mean(cell_sums):.0f} counts/cell)")
+
+        logger.info("Loading gene metadata and filtering to highly expressed genes...")
+        var_df = experiment.ms["RNA"].var.read(
+            column_names=["soma_joinid", "feature_id", "feature_name", "n_measured_obs"]
+        ).concat().to_pandas()
+
+        min_cells = max(10, int(n * 0.01))
+        var_df_filtered = var_df[var_df["n_measured_obs"] >= min_cells].copy()
+        var_df_filtered = var_df_filtered.nlargest(15000, "n_measured_obs").set_index("feature_id")
+
+        genes_filtered = var_df_filtered.index.tolist()
+        all_genes_list = var_df.set_index("feature_id").index.tolist()
+        gene_joinids = var_df_filtered["soma_joinid"].values
+        logger.info(f"Filtered from {len(all_genes_list)} to {len(genes_filtered)} highly expressed genes")
+
+        # The actual matrix download: raw counts for every selected cell x
+        # every filtered gene, in one shot — this is what used to be
+        # re-fetched from Census on every single gene call.
+        logger.info(
+            f"[Census] Downloading raw expression matrix for {n} cells x "
+            f"{len(genes_filtered)} genes (tissue={cell_type!r})..."
+        )
+        obs_idx_map = {int(j): i for i, j in enumerate(obs_joinids)}
+        gene_idx_map = {int(j): i for i, j in enumerate(gene_joinids)}
+        matrix = sparse.lil_matrix((n, len(genes_filtered)), dtype=np.float32)
+
+        table_iter = experiment.ms["RNA"].X["raw"].read(
+            (obs_joinids.tolist(), gene_joinids.tolist())
+        ).tables()
+        for table in table_iter:
+            obs_jids = table["soma_dim_0"].to_numpy()
+            gene_jids = table["soma_dim_1"].to_numpy()
+            values = table["soma_data"].to_numpy()
+
+            rows = np.fromiter((obs_idx_map.get(int(j), -1) for j in obs_jids), dtype=np.int64, count=len(obs_jids))
+            cols = np.fromiter((gene_idx_map.get(int(j), -1) for j in gene_jids), dtype=np.int64, count=len(gene_jids))
+            valid = (rows >= 0) & (cols >= 0)
+            if np.any(valid):
+                matrix[rows[valid], cols[valid]] = values[valid]
+
+        matrix = matrix.tocsr()
+        logger.info(
+            f"[Census] Matrix download complete: {matrix.shape[0]} cells x "
+            f"{matrix.shape[1]} genes, {matrix.nnz} non-zero entries"
+        )
+
+        return _TissueCoexpressionContext(
+            cell_type=cell_type,
+            obs_joinids=obs_joinids,
+            cell_sums=cell_sums,
+            genes=genes_filtered,
+            gene_index={g: i for i, g in enumerate(genes_filtered)},
+            all_genes_list=all_genes_list,
+            matrix=matrix,
+        )
+
+
+def _fetch_single_gene_counts(context: _TissueCoexpressionContext, gene: str):
+    """Rare path: the gene of interest wasn't among the cached top-expressed
+    genes for this tissue. Fetch just its counts column directly instead of
+    re-downloading (or invalidating) the shared cached matrix."""
+    with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
+        experiment = census["census_data"]["homo_sapiens"]
+        esc = _escape_soma_string_literal(gene)
+        row = experiment.ms["RNA"].var.read(
+            column_names=["soma_joinid", "feature_id"],
+            value_filter=f"feature_id == '{esc}'",
+        ).concat().to_pandas()
+        if row.empty:
+            return None
+        gene_joinid = int(row.iloc[0]["soma_joinid"])
+
+        counts = np.zeros(len(context.obs_joinids), dtype=np.float32)
+        obs_idx_map = {int(j): i for i, j in enumerate(context.obs_joinids)}
+        table_iter = experiment.ms["RNA"].X["raw"].read(
+            (context.obs_joinids.tolist(), [gene_joinid])
+        ).tables()
+        for table in table_iter:
+            obs_jids = table["soma_dim_0"].to_numpy()
+            values = table["soma_data"].to_numpy()
+            for obs_jid, value in zip(obs_jids, values):
+                idx = obs_idx_map.get(int(obs_jid))
+                if idx is not None:
+                    counts[idx] = value
+        return counts
+
+
+def _get_or_build_tissue_context(cell_type: str, config) -> Optional[_TissueCoexpressionContext]:
+    """Return the cached coexpression context for a tissue, building and
+    persisting it on first use. Checks the in-process cache, then the disk
+    cache, and only falls through to a real Census download as a last
+    resort."""
+    with _TISSUE_CONTEXT_LOCK:
+        if cell_type in _TISSUE_CONTEXT_CACHE:
+            return _TISSUE_CONTEXT_CACHE[cell_type]
+
+    disk_context = _load_tissue_context_from_disk(cell_type, config)
+    if disk_context is not None:
+        logger.info(
+            f"[Census cache] Using cached coexpression matrix for {cell_type!r} "
+            "— skipping Census download entirely"
+        )
+        with _TISSUE_CONTEXT_LOCK:
+            _TISSUE_CONTEXT_CACHE[cell_type] = disk_context
+        return disk_context
+
+    resolved = resolve_ldsc_for_census(
+        cell_type,
+        repo_root=config.repo_root,
+        mapping_json_rel=config.catlas_celltype_cl_mapping_json,
+        catlas_aliases_rel=config.catlas_abc_aliases_tsv,
+    )
+    logger.info(
+        f"[Census cache] No cache for {cell_type!r} (source={resolved.source}, "
+        f"skip={resolved.skip_coexpression}) — checking whether a download is needed"
+    )
+    if resolved.skip_coexpression:
+        with _TISSUE_CONTEXT_LOCK:
+            _TISSUE_CONTEXT_CACHE[cell_type] = None
+        return None
+
+    context = _build_tissue_context_from_census(cell_type, resolved)
+    with _TISSUE_CONTEXT_LOCK:
+        _TISSUE_CONTEXT_CACHE[cell_type] = context
+    if context is not None:
+        _save_tissue_context_to_disk(context, config)
+    return context
+
+
 @task(log_prints=True)
 def get_coexpression_matrix_for_tissue(gene, cell_type, k=500, batch_size=1000):
     """Query CellxGene census for co-expressed genes in the given cell type.
