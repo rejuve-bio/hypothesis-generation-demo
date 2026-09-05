@@ -1,8 +1,12 @@
+import json
 import os
 import re
 import subprocess
+import threading
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import cellxgene_census
 import numpy as np
@@ -10,6 +14,7 @@ import pandas as pd
 import tiledbsoma as soma
 from loguru import logger
 from prefect import task
+from scipy import sparse
 from scipy.stats import pearsonr
 from statsmodels.stats.multitest import fdrcorrection
 
@@ -22,6 +27,29 @@ from src.catlas_census_mapping import (
     _escape_soma_string_literal,
     resolve_ldsc_for_census,
 )
+
+CENSUS_VERSION = "2024-07-01"
+
+# In-process memoization on top of the disk cache below, so repeated calls
+# within the same worker process (e.g. several genes queried against the
+# same tissue in one flow run) don't even hit the filesystem twice.
+_TISSUE_CONTEXT_CACHE: dict = {}
+_TISSUE_CONTEXT_LOCK = threading.Lock()
+
+
+@dataclass
+class _TissueCoexpressionContext:
+    """Everything needed to answer coexpression queries for a tissue, built
+    from a single CellxGene Census download and reused across every gene
+    queried against that tissue (in-process, and on disk across runs)."""
+
+    cell_type: str
+    obs_joinids: np.ndarray
+    cell_sums: np.ndarray
+    genes: list          # feature_ids of the top ~15k highly-expressed genes
+    gene_index: dict      # feature_id -> column index into `matrix`
+    all_genes_list: list  # feature_ids of every gene in the Census dataset
+    matrix: sparse.csr_matrix  # raw counts, shape (len(obs_joinids), len(genes))
 
 
 def _census_obs_axis_query_for_resolved(
