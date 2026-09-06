@@ -23,7 +23,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.prolog
     ports:
-      - "4242:4242"
+      - "127.0.0.1:${PROLOG_PORT}:4242"
     volumes:
       - ../pl:/app/pl
       - ${PROLOG_OUT_V2_PATH}:/mnt/prolog_out_v2
@@ -38,11 +38,11 @@ services:
       dockerfile: docker/Dockerfile
     hostname: dask-scheduler
     ports:
-      - "8786:8786" 
-      - "8787:8787" 
+      - "127.0.0.1:${DASK_SCHEDULER_PORT}:8786"
+      - "127.0.0.1:${DASK_DASHBOARD_PORT}:8787"
     environment:
       - PYTHONPATH=/app
-      - SKIP_SEED=true 
+      - SKIP_SEED=true
     volumes:
       - ..:/app
     entrypoint: []
@@ -98,16 +98,16 @@ services:
     command: >
       uv run dask worker tcp://dask-scheduler:8786
       --nworkers 4
-      --nthreads 1 
+      --nthreads 1
       --memory-limit 40GB
       --preload src.dask_preload
     deploy:
       mode: replicated
-      replicas: 1  
+      replicas: 1
       resources:
         limits:
-          cpus: '64.0'   
-          memory: 180G    
+          cpus: '64.0'
+          memory: 180G
     networks:
       - app_network
     restart: unless-stopped
@@ -117,7 +117,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "5008:5000"
+      - "127.0.0.1:${API_PORT}:5000"
     environment:
       - FLASK_ENV=development
       - PREFECT_API_URL=http://prefect-service:4200/api
@@ -165,7 +165,7 @@ services:
       POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD}
       POSTGRES_DB: ${PREFECT_DB_NAME}
     ports:
-      - "5409:5432" 
+      - "127.0.0.1:${PREFECT_DB_PORT}:5432"
     volumes:
       - prefect-postgres-data:/var/lib/postgresql/data
     networks:
@@ -184,7 +184,7 @@ services:
       POSTGRES_PASSWORD: ${CREDIBLE_SETS_DB_PASSWORD}
       POSTGRES_DB: ${CREDIBLE_SETS_DB_NAME}
     ports:
-      - "5411:5432"
+      - "127.0.0.1:${CREDIBLE_SETS_DB_PORT}:5432"
     volumes:
       - credible-sets-postgres-data:/var/lib/postgresql/data
       - ./init-credible-sets.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -250,10 +250,10 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.prefect
     ports:
-      - "4292:4200"
+      - "127.0.0.1:${PREFECT_UI_PORT}:4200"
     volumes:
       - ..:/app
-      - prefect-data:/root/.prefect 
+      - prefect-data:/root/.prefect
     environment:
       - PREFECT_API_URL=http://prefect-service:4200/api
       - PREFECT_UI_API_URL=https://dev.rejuve.bio:5054/api
@@ -265,7 +265,7 @@ services:
         condition: service_healthy
     env_file:
       - ../.env
-    command: > 
+    command: >
       sh -c "uv run prefect server start --host 0.0.0.0"
     networks:
       - app_network
@@ -276,7 +276,7 @@ services:
       retries: 20
       start_period: 300s
     restart: unless-stopped
-  
+
   prefect-deployment:
     build:
       context: ..
@@ -305,14 +305,14 @@ services:
       echo '--- 3. Starting The Chefs (Workers) ---' &&
       uv run prefect worker start --pool 'analysis-pool' --name 'heavy-worker' &
       uv run prefect worker start --pool 'interactive-pool' --name 'light-worker' &
-      
+
       echo '--- 4. Keeping Container Alive ---' &&
       tail -f /dev/null
       "
     environment:
       - PREFECT_API_URL=http://prefect-service:4200/api
       - UV_PROJECT_ENVIRONMENT=/opt/flask-venv
-      - DASK_ADDRESS=tcp://dask-scheduler:8786  
+      - DASK_ADDRESS=tcp://dask-scheduler:8786
       - PYTHONPATH=/app
       - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
@@ -341,7 +341,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6309:6379"
+      - "127.0.0.1:${REDIS_PORT}:6379"
     networks:
       - app_network
     healthcheck:

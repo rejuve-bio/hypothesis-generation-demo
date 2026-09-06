@@ -108,11 +108,6 @@ jobs:
         [ -f docker/docker-compose.yml ] && $COMPOSE down -v --remove-orphans 2>/dev/null || true
         docker network prune -f 2>/dev/null || true
         sleep 2
-        if netstat -tuln 2>/dev/null | grep -q ':6399 '; then
-          echo "Port 6399 still in use, forcing cleanup..."
-          docker ps -a | grep -i redis | awk '{print $1}' | xargs docker rm -f 2>/dev/null || true
-          sleep 1
-        fi
         echo "[success] Pre-cleanup completed"
 
     - name: Checkout repository
@@ -450,4 +445,3 @@ jobs:
           echo "[ERROR] Validation did not pass. Check the build-and-test-all job for details."
           exit 1
         fi
-
