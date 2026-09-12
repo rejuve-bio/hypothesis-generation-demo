@@ -1,8 +1,14 @@
+import hashlib
+import json
 import os
 import re
 import subprocess
+import threading
+import uuid
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import cellxgene_census
 import numpy as np
@@ -10,6 +16,7 @@ import pandas as pd
 import tiledbsoma as soma
 from loguru import logger
 from prefect import task
+from scipy import sparse
 from scipy.stats import pearsonr
 from statsmodels.stats.multitest import fdrcorrection
 
@@ -22,6 +29,42 @@ from src.catlas_census_mapping import (
     _escape_soma_string_literal,
     resolve_ldsc_for_census,
 )
+
+CENSUS_VERSION = "2024-07-01"
+
+# In-process memoization on top of the disk cache below, so repeated calls
+# within the same worker process (e.g. several genes queried against the
+# same tissue in one flow run) don't even hit the filesystem twice.
+_TISSUE_CONTEXT_CACHE: dict = {}
+_TISSUE_CONTEXT_LOCK = threading.Lock()
+
+# Per-tissue locks so concurrent calls for the SAME cold tissue don't both
+# download+write at once (the shared _TISSUE_CONTEXT_LOCK above only ever
+# guards the dict access itself, not the disk-load/Census-build/disk-save
+# path — see _get_or_build_tissue_context). _TISSUE_LOCKS_GUARD only
+# protects the registry dict itself, which is cheap and short-held.
+_TISSUE_LOCKS_GUARD = threading.Lock()
+_TISSUE_LOCKS: dict = {}
+
+
+def _lock_for_tissue(cell_type: str) -> threading.Lock:
+    with _TISSUE_LOCKS_GUARD:
+        return _TISSUE_LOCKS.setdefault(cell_type, threading.Lock())
+
+
+@dataclass
+class _TissueCoexpressionContext:
+    """Everything needed to answer coexpression queries for a tissue, built
+    from a single CellxGene Census download and reused across every gene
+    queried against that tissue (in-process, and on disk across runs)."""
+
+    cell_type: str
+    obs_joinids: np.ndarray
+    cell_sums: np.ndarray
+    genes: list          # feature_ids of the top ~15k highly-expressed genes
+    gene_index: dict      # feature_id -> column index into `matrix`
+    all_genes_list: list  # feature_ids of every gene in the Census dataset
+    matrix: sparse.csr_matrix  # raw counts, shape (len(obs_joinids), len(genes))
 
 
 def _census_obs_axis_query_for_resolved(
@@ -276,232 +319,489 @@ def map_tissues_to_cellxgene(top_tissues):
     return results
 
 
+def _resolved_fingerprint(resolved: ResolvedCensusCellFilter) -> str:
+    """Short hash of the mapping-resolution output, folded into the cache
+    key (see _tissue_cache_paths) so that a change to the underlying Catlas
+    mapping files naturally invalidates stale cache entries — a different
+    resolution produces a different key, causing a cache miss and rebuild,
+    instead of silently reusing a matrix built under an old mapping."""
+    fingerprint = json.dumps(
+        {
+            "source": resolved.source,
+            "cell_type_labels": resolved.cell_type_labels,
+            "cl_ids": resolved.cl_ids,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(fingerprint.encode()).hexdigest()[:12]
+
+
+def _tissue_cache_paths(cell_type: str, config, resolved: Optional[ResolvedCensusCellFilter] = None) -> dict:
+    """Where the (cells x genes) raw-count matrix for a tissue is cached on
+    disk, keyed by cell type + Census version + (when available) a
+    fingerprint of the mapping resolution."""
+    cache_dir = Path(getattr(config, "census_cache_dir", None) or os.path.join(config.data_dir, "census_cache"))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", cell_type)
+    key = f"{safe_name}__{CENSUS_VERSION}"
+    if resolved is not None:
+        key = f"{key}__{_resolved_fingerprint(resolved)}"
+    return {
+        "matrix": cache_dir / f"{key}.matrix.npz",
+        "meta": cache_dir / f"{key}.meta.json",
+        "obs": cache_dir / f"{key}.obs_joinids.npy",
+        "cellsums": cache_dir / f"{key}.cell_sums.npy",
+    }
+
+
+def _load_tissue_context_from_disk(
+    cell_type: str, resolved: ResolvedCensusCellFilter, config
+) -> Optional[_TissueCoexpressionContext]:
+    paths = _tissue_cache_paths(cell_type, config, resolved)
+    if not all(p.exists() for p in paths.values()):
+        return None
+    try:
+        meta = json.loads(paths["meta"].read_text())
+        obs_joinids = np.load(paths["obs"])
+        cell_sums = np.load(paths["cellsums"])
+        matrix = sparse.load_npz(paths["matrix"])
+        genes = meta["genes"]
+        return _TissueCoexpressionContext(
+            cell_type=cell_type,
+            obs_joinids=obs_joinids,
+            cell_sums=cell_sums,
+            genes=genes,
+            gene_index={g: i for i, g in enumerate(genes)},
+            all_genes_list=meta["all_genes_list"],
+            matrix=matrix,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[Census cache] Failed to load cached matrix for {cell_type!r}: {e}. "
+            "Will re-download from Census."
+        )
+        return None
+
+
+def _enforce_cache_size_limit(cache_dir: Path, max_bytes: Optional[int]) -> None:
+    """Evict the least-recently-written cached tissues (by their meta.json
+    mtime) until the cache directory's total size is back under max_bytes.
+    Simple, dependency-free LRU-by-mtime — no external cache library."""
+    if not max_bytes or max_bytes <= 0:
+        return
+
+    def _dir_size() -> int:
+        total = 0
+        for f in cache_dir.iterdir():
+            if f.is_file():
+                try:
+                    total += f.stat().st_size
+                except OSError:
+                    pass
+        return total
+
+    total = _dir_size()
+    if total <= max_bytes:
+        return
+
+    try:
+        meta_files = sorted(cache_dir.glob("*.meta.json"), key=lambda p: p.stat().st_mtime)
+    except OSError as e:
+        logger.warning(f"[Census cache] Could not list cache dir {cache_dir} for eviction: {e}")
+        return
+
+    logger.info(
+        f"[Census cache] Cache size {total} bytes exceeds cap {max_bytes} bytes — evicting oldest tissues"
+    )
+    for meta_path in meta_files:
+        if total <= max_bytes:
+            break
+        key = meta_path.name[: -len(".meta.json")]
+        entry_files = [
+            cache_dir / f"{key}.matrix.npz",
+            cache_dir / f"{key}.obs_joinids.npy",
+            cache_dir / f"{key}.cell_sums.npy",
+            meta_path,
+        ]
+        freed = 0
+        for f in entry_files:
+            try:
+                if f.exists():
+                    freed += f.stat().st_size
+                    f.unlink()
+            except OSError as e:
+                logger.warning(f"[Census cache] Failed to evict {f}: {e}")
+        total -= freed
+        logger.info(f"[Census cache] Evicted cached tissue {key!r}, freed {freed} bytes")
+
+
+def _save_tissue_context_to_disk(
+    context: _TissueCoexpressionContext, resolved: ResolvedCensusCellFilter, config
+) -> None:
+    """Write all 4 cache artifacts atomically: each is written to a temp
+    path first and only moved (os.replace, atomic on POSIX same-filesystem)
+    into its final path once fully written. A concurrent reader's
+    `all(p.exists())` check in _load_tissue_context_from_disk therefore
+    never observes a torn/partial file — a path only appears at its final
+    name once its contents are complete."""
+    paths = _tissue_cache_paths(context.cell_type, config, resolved)
+    tmp_suffix = uuid.uuid4().hex
+    tmp_paths = {k: p.with_name(p.name + f".tmp-{tmp_suffix}") for k, p in paths.items()}
+    try:
+        # Open as file handles (not bare path strings) so scipy/numpy don't
+        # append their own .npz/.npy suffix to our .tmp-<uuid> filename.
+        with open(tmp_paths["matrix"], "wb") as f:
+            sparse.save_npz(f, context.matrix)
+        with open(tmp_paths["obs"], "wb") as f:
+            np.save(f, context.obs_joinids)
+        with open(tmp_paths["cellsums"], "wb") as f:
+            np.save(f, context.cell_sums)
+        tmp_paths["meta"].write_text(json.dumps({
+            "genes": context.genes,
+            "all_genes_list": context.all_genes_list,
+        }))
+
+        for key in paths:
+            os.replace(tmp_paths[key], paths[key])
+
+        logger.info(f"[Census cache] Cached coexpression matrix for {context.cell_type!r} at {paths['matrix']}")
+        _enforce_cache_size_limit(paths["matrix"].parent, getattr(config, "census_cache_max_bytes", None))
+    except Exception as e:
+        logger.warning(f"[Census cache] Failed to persist cache for {context.cell_type!r}: {e}")
+        for tmp_path in tmp_paths.values():
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def _build_tissue_context_from_census(
+    cell_type: str, resolved: ResolvedCensusCellFilter
+) -> Optional[_TissueCoexpressionContext]:
+    """The expensive part: open Census, select cells for the tissue, filter
+    to the highly-expressed genes, and download the raw-count matrix for
+    every (cell, gene) pair once. This is the "co-expression matrix
+    downloading step" — after this runs once per tissue, every subsequent
+    gene queried against the same tissue reuses the cached result instead of
+    re-downloading it from Census.
+    """
+    with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
+        experiment = census["census_data"]["homo_sapiens"]
+
+        axis_query = _census_obs_axis_query_for_resolved(experiment, resolved)
+        if axis_query is None:
+            return None
+
+        obs_joinids = axis_query.obs_joinids().to_numpy()
+        logger.info(f"Found {len(obs_joinids)} cells for ldsc cell type '{cell_type}'")
+
+        if len(obs_joinids) > 100000:
+            obs_joinids = obs_joinids[:100000]
+        n = len(obs_joinids)
+
+        if n == 0:
+            logger.warning(f"No cells in join set for ldsc cell type '{cell_type}'")
+            return None
+
+        logger.info("Getting library sizes from obs metadata...")
+        obs_df = experiment.obs.read(
+            coords=(obs_joinids.tolist(),),
+            column_names=["soma_joinid", "n_measured_vars"],
+        ).concat().to_pandas().set_index("soma_joinid")
+        cell_sums = obs_df.loc[obs_joinids, "n_measured_vars"].values.astype(np.float32)
+        cell_sums = np.where(cell_sums > 0, cell_sums, 1.0)
+        logger.info(f"Loaded library sizes for {n} cells (mean: {np.mean(cell_sums):.0f} counts/cell)")
+
+        logger.info("Loading gene metadata and filtering to highly expressed genes...")
+        var_df = experiment.ms["RNA"].var.read(
+            column_names=["soma_joinid", "feature_id", "feature_name", "n_measured_obs"]
+        ).concat().to_pandas()
+
+        min_cells = max(10, int(n * 0.01))
+        var_df_filtered = var_df[var_df["n_measured_obs"] >= min_cells].copy()
+        var_df_filtered = var_df_filtered.nlargest(15000, "n_measured_obs").set_index("feature_id")
+
+        genes_filtered = var_df_filtered.index.tolist()
+        all_genes_list = var_df.set_index("feature_id").index.tolist()
+        gene_joinids = var_df_filtered["soma_joinid"].values
+        logger.info(f"Filtered from {len(all_genes_list)} to {len(genes_filtered)} highly expressed genes")
+
+        # The actual matrix download: raw counts for every selected cell x
+        # every filtered gene, in one shot — this is what used to be
+        # re-fetched from Census on every single gene call.
+        logger.info(
+            f"[Census] Downloading raw expression matrix for {n} cells x "
+            f"{len(genes_filtered)} genes (tissue={cell_type!r})..."
+        )
+        obs_idx_map = {int(j): i for i, j in enumerate(obs_joinids)}
+        gene_idx_map = {int(j): i for i, j in enumerate(gene_joinids)}
+
+        # Accumulate (row, col, value) COO triplets across batches and build
+        # the sparse matrix once at the end, instead of repeated
+        # lil_matrix.__setitem__ calls per batch (which is O(nnz) overhead
+        # per assignment at scale).
+        all_rows, all_cols, all_values = [], [], []
+
+        table_iter = experiment.ms["RNA"].X["raw"].read(
+            (obs_joinids.tolist(), gene_joinids.tolist())
+        ).tables()
+        for table in table_iter:
+            obs_jids = table["soma_dim_0"].to_numpy()
+            gene_jids = table["soma_dim_1"].to_numpy()
+            values = table["soma_data"].to_numpy()
+
+            rows = np.fromiter((obs_idx_map.get(int(j), -1) for j in obs_jids), dtype=np.int64, count=len(obs_jids))
+            cols = np.fromiter((gene_idx_map.get(int(j), -1) for j in gene_jids), dtype=np.int64, count=len(gene_jids))
+            valid = (rows >= 0) & (cols >= 0)
+            if np.any(valid):
+                all_rows.append(rows[valid])
+                all_cols.append(cols[valid])
+                all_values.append(values[valid])
+
+        if all_rows:
+            matrix = sparse.coo_matrix(
+                (np.concatenate(all_values), (np.concatenate(all_rows), np.concatenate(all_cols))),
+                shape=(n, len(genes_filtered)),
+                dtype=np.float32,
+            ).tocsr()
+        else:
+            matrix = sparse.csr_matrix((n, len(genes_filtered)), dtype=np.float32)
+        logger.info(
+            f"[Census] Matrix download complete: {matrix.shape[0]} cells x "
+            f"{matrix.shape[1]} genes, {matrix.nnz} non-zero entries"
+        )
+
+        return _TissueCoexpressionContext(
+            cell_type=cell_type,
+            obs_joinids=obs_joinids,
+            cell_sums=cell_sums,
+            genes=genes_filtered,
+            gene_index={g: i for i, g in enumerate(genes_filtered)},
+            all_genes_list=all_genes_list,
+            matrix=matrix,
+        )
+
+
+def _fetch_single_gene_counts(context: _TissueCoexpressionContext, gene: str):
+    """Rare path: the gene of interest wasn't among the cached top-expressed
+    genes for this tissue. Fetch just its counts column directly instead of
+    re-downloading (or invalidating) the shared cached matrix."""
+    with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
+        experiment = census["census_data"]["homo_sapiens"]
+        esc = _escape_soma_string_literal(gene)
+        row = experiment.ms["RNA"].var.read(
+            column_names=["soma_joinid", "feature_id"],
+            value_filter=f"feature_id == '{esc}'",
+        ).concat().to_pandas()
+        if row.empty:
+            return None
+        gene_joinid = int(row.iloc[0]["soma_joinid"])
+
+        counts = np.zeros(len(context.obs_joinids), dtype=np.float32)
+        obs_idx_map = {int(j): i for i, j in enumerate(context.obs_joinids)}
+        table_iter = experiment.ms["RNA"].X["raw"].read(
+            (context.obs_joinids.tolist(), [gene_joinid])
+        ).tables()
+        for table in table_iter:
+            obs_jids = table["soma_dim_0"].to_numpy()
+            values = table["soma_data"].to_numpy()
+            for obs_jid, value in zip(obs_jids, values):
+                idx = obs_idx_map.get(int(obs_jid))
+                if idx is not None:
+                    counts[idx] = value
+        return counts
+
+
+def _get_or_build_tissue_context(cell_type: str, config) -> Optional[_TissueCoexpressionContext]:
+    """Return the cached coexpression context for a tissue, building and
+    persisting it on first use. Checks the in-process cache, then the disk
+    cache, and only falls through to a real Census download as a last
+    resort.
+
+    The disk-load / Census-build / disk-save path runs under a per-tissue
+    lock (double-checked against the in-process cache) so two concurrent
+    calls for the same cold tissue can't both download+write at once — only
+    the dict lookup itself needs no lock (a plain read of an already-cached
+    entry is safe without one)."""
+    with _TISSUE_CONTEXT_LOCK:
+        if cell_type in _TISSUE_CONTEXT_CACHE:
+            return _TISSUE_CONTEXT_CACHE[cell_type]
+
+    with _lock_for_tissue(cell_type):
+        # Re-check now that we hold the per-tissue lock: another thread may
+        # have just finished building this tissue's context while we were
+        # waiting for the lock.
+        with _TISSUE_CONTEXT_LOCK:
+            if cell_type in _TISSUE_CONTEXT_CACHE:
+                return _TISSUE_CONTEXT_CACHE[cell_type]
+
+        # Resolve first (cheap, in-memory, no Census I/O) so the cache key
+        # used for both load and save can incorporate the resolution
+        # fingerprint (see _tissue_cache_paths / _resolved_fingerprint).
+        resolved = resolve_ldsc_for_census(
+            cell_type,
+            repo_root=config.repo_root,
+            mapping_json_rel=config.catlas_celltype_cl_mapping_json,
+            catlas_aliases_rel=config.catlas_abc_aliases_tsv,
+        )
+        logger.info(
+            f"[Census cache] Resolved {cell_type!r} (source={resolved.source}, "
+            f"skip={resolved.skip_coexpression})"
+        )
+        if resolved.skip_coexpression:
+            with _TISSUE_CONTEXT_LOCK:
+                _TISSUE_CONTEXT_CACHE[cell_type] = None
+            return None
+
+        disk_context = _load_tissue_context_from_disk(cell_type, resolved, config)
+        if disk_context is not None:
+            logger.info(
+                f"[Census cache] Using cached coexpression matrix for {cell_type!r} "
+                "— skipping Census download entirely"
+            )
+            with _TISSUE_CONTEXT_LOCK:
+                _TISSUE_CONTEXT_CACHE[cell_type] = disk_context
+            return disk_context
+
+        context = _build_tissue_context_from_census(cell_type, resolved)
+        with _TISSUE_CONTEXT_LOCK:
+            _TISSUE_CONTEXT_CACHE[cell_type] = context
+        if context is not None:
+            _save_tissue_context_to_disk(context, resolved, config)
+        return context
+
+
 @task(log_prints=True)
 def get_coexpression_matrix_for_tissue(gene, cell_type, k=500, batch_size=1000):
     """Query CellxGene census for co-expressed genes in the given cell type.
 
     ``cell_type`` is the LDSC / CTS name (e.g. ``Atrial_Cardiomyocyte``). Catlas TSVs
     resolve it to Census ``cell_type`` strings and/or CL ids.
+
+    The (cells x genes) raw-count matrix for the tissue is downloaded from
+    Census once and cached (in-process and on disk, see
+    ``_get_or_build_tissue_context``) — this used to be re-downloaded from
+    Census on every single call, which was the main bottleneck when several
+    genes are queried against the same tissue in one enrichment run.
     """
     config = Config.from_env()
-    resolved = resolve_ldsc_for_census(
-        cell_type,
-        repo_root=config.repo_root,
-        mapping_json_rel=config.catlas_celltype_cl_mapping_json,
-        catlas_aliases_rel=config.catlas_abc_aliases_tsv,
-    )
     log_label = cell_type.replace("_", " ").lower()
-    logger.info(
-        f"Starting coexpression for gene '{gene}' | ldsc={cell_type!r} "
-        f"(passthrough_label={log_label!r}) source={resolved.source} "
-        f"skip={resolved.skip_coexpression}"
-    )
+    logger.info(f"Starting coexpression for gene '{gene}' | ldsc={cell_type!r} (passthrough_label={log_label!r})")
 
-    with cellxgene_census.open_soma(census_version="2024-07-01") as census:
-        experiment = census["census_data"]["homo_sapiens"]
+    context = _get_or_build_tissue_context(cell_type, config)
+    if context is None:
+        return [], [], []
 
-        axis_query = _census_obs_axis_query_for_resolved(experiment, resolved)
-        if axis_query is None:
-            return [], [], []
+    gene = gene.upper()
 
-        obs_joinids = axis_query.obs_joinids().to_numpy()
-        logger.info(f"Found {len(obs_joinids)} cells for ldsc cell type '{cell_type}'")
+    if gene not in context.all_genes_list:
+        logger.warning(f"Gene of interest '{gene}' not found in dataset")
+        return [], [], context.all_genes_list
 
-        if len(obs_joinids) > 100000:
-            obs_joinids = obs_joinids[:100000] 
-            n = 100000
-        else:
-            n = len(obs_joinids)
-            
-        if n == 0:
-            logger.warning(f"No cells in join set for ldsc cell type '{cell_type}'")
-            return [], [], []
-
-        # Get library sizes from obs metadata
-        logger.info("Getting library sizes from obs metadata...")
-        obs_df = experiment.obs.read(
-            coords=(obs_joinids.tolist(),),
-            column_names=["soma_joinid", "n_measured_vars"]
-        ).concat().to_pandas()
-        
-        # Create mapping from joinid to library size
-        obs_df = obs_df.set_index("soma_joinid")
-        cell_sums = obs_df.loc[obs_joinids, "n_measured_vars"].values.astype(np.float32)
-        
-        # Avoid division by zero
-        cell_sums = np.where(cell_sums > 0, cell_sums, 1.0)
-        logger.info(f"Loaded library sizes for {n} cells (mean: {np.mean(cell_sums):.0f} counts/cell)")
-
-        # Pre-filter to highly variable genes
-        logger.info("Loading gene metadata and filtering to highly expressed genes...")
-        var_df = experiment.ms["RNA"].var.read(
-            column_names=["soma_joinid", "feature_id", "feature_name", "n_measured_obs"]
-        ).concat().to_pandas()
-        
-        # Filter genes: expressed in at least 1% of cells (1000 cells for 100k sample)
-        min_cells = max(10, int(n * 0.01))
-        var_df_filtered = var_df[var_df["n_measured_obs"] >= min_cells].copy()
-        
-        # Sort by number of cells expressing (keep top ~15k genes)
-        var_df_filtered = var_df_filtered.nlargest(15000, "n_measured_obs")
-        var_df_filtered = var_df_filtered.set_index("feature_id")
-        
-        genes_filtered = var_df_filtered.index.tolist()
-        all_genes_list = var_df.set_index("feature_id").index.tolist()
-        
-        logger.info(f"Filtered from {len(all_genes_list)} to {len(genes_filtered)} highly expressed genes")
-        
-        # CellxGene uses uppercase Ensembl IDs - convert input to uppercase
-        gene = gene.upper()
-        
-        if gene not in all_genes_list:
-            logger.warning(f"Gene of interest '{gene}' not found in dataset")
-            return [], [], all_genes_list
-        
-        # Make sure gene of interest is in filtered set
-        if gene not in genes_filtered:
-            logger.info(f"Gene of interest not in filtered set, adding it")
-            genes_filtered.append(gene)
-            # var_df uses a SOMA row index, not feature_id — select by column
-            gene_info = var_df[var_df["feature_id"] == gene]
-            if gene_info.empty:
-                logger.warning(
-                    f"Gene '{gene}' was in feature list but row metadata missing; skipping coexpression"
-                )
-                return [], [], all_genes_list
-            var_df_filtered = pd.concat([var_df_filtered, gene_info.set_index("feature_id")])
-        
-        logger.info(f"Found gene '{gene}' in dataset")
-        
-        # Use filtered genes for correlation analysis
-        var_df = var_df_filtered
-
-        gene_joinid = var_df.loc[gene]["soma_joinid"]
-
-        # Get gene expression from raw counts  
-        gene_table_iter = experiment.ms["RNA"].X["raw"].read((obs_joinids.tolist(), [gene_joinid])).tables()
-        gene_expr = np.zeros(n, dtype=np.float32)
-        gene_joinid_to_idx = {jid: idx for idx, jid in enumerate(obs_joinids)}
-        
-        for batch in gene_table_iter:
-            obs_jids = batch["soma_dim_0"].to_numpy()
-            values = batch["soma_data"].to_numpy()
-            
-            for obs_jid, value in zip(obs_jids, values):
-                if obs_jid in gene_joinid_to_idx:
-                    idx = gene_joinid_to_idx[obs_jid]
-                    gene_expr[idx] = value
-        
-        # Normalize by library size (CPM-like: counts per 10k) then log1p
-        gene_expr = np.log1p((gene_expr / cell_sums) * 1e4)
-
-        # Filter cells with non-zero expression
-        nonzero_mask = gene_expr > 0
-        if np.sum(nonzero_mask) < 10:
+    if gene in context.gene_index:
+        gene_col = context.gene_index[gene]
+        gene_counts = np.asarray(context.matrix[:, gene_col].todense()).ravel()
+        other_genes = [g for g in context.genes if g != gene]
+        other_matrix = context.matrix[:, [context.gene_index[g] for g in other_genes]]
+    else:
+        # Gene of interest wasn't among the cached top-expressed genes for
+        # this tissue — fetch just its column directly rather than
+        # invalidating/rebuilding the shared cache.
+        logger.info("Gene of interest not in cached filtered set, fetching it directly")
+        gene_counts = _fetch_single_gene_counts(context, gene)
+        if gene_counts is None:
             logger.warning(
-                f"Too few cells with non-zero expression for gene '{gene}' in "
-                f"ldsc cell type '{cell_type}'"
+                f"Gene '{gene}' was in feature list but row metadata missing; skipping coexpression"
             )
-            return [], [], all_genes_list
+            return [], [], context.all_genes_list
+        other_genes = context.genes
+        other_matrix = context.matrix
 
-        sub_joinids = obs_joinids[nonzero_mask]
-        gene_expr_sub = gene_expr[nonzero_mask]
-        cell_sums_sub = cell_sums[nonzero_mask]  # Subset library sizes too
-        
-        n_sub = len(sub_joinids)
-        logger.info(f"Gene expressed in {n_sub} cells, computing correlations...")
+    logger.info(f"Found gene '{gene}' in dataset")
 
-        # Get other genes (exclude gene of interest)
-        genes = var_df.index.tolist()
-        mask = np.array([g != gene for g in genes])
-        other_gene_joinids = var_df.loc[mask, "soma_joinid"].values
-        other_genes = np.array(genes)[mask]
+    # Normalize by library size (CPM-like: counts per 10k) then log1p
+    gene_expr = np.log1p((gene_counts / context.cell_sums) * 1e4)
 
-        # Pre-compute cell index mapping
-        sub_joinid_to_idx = {jid: idx for idx, jid in enumerate(sub_joinids)}
+    # Filter cells with non-zero expression
+    nonzero_mask = gene_expr > 0
+    if np.sum(nonzero_mask) < 10:
+        logger.warning(
+            f"Too few cells with non-zero expression for gene '{gene}' in "
+            f"ldsc cell type '{cell_type}'"
+        )
+        return [], [], context.all_genes_list
 
-        # Vectorized correlation computation
-        logger.info(f"Reading expression for {len(other_genes)} genes...")
-        all_table_iter = experiment.ms["RNA"].X["raw"].read(
-            (sub_joinids.tolist(), other_gene_joinids.tolist())
-        ).tables()
-        
-        # Build full expression matrix
-        all_expr = np.zeros((n_sub, len(other_genes)), dtype=np.float32)
-        gene_jid_to_idx = {jid: idx for idx, jid in enumerate(other_gene_joinids)}
-        
-        for table in all_table_iter:
-            obs_jids = table["soma_dim_0"].to_numpy()
-            gene_jids = table["soma_dim_1"].to_numpy()
-            values = table["soma_data"].to_numpy()
-            
-            for obs_jid, gene_jid, value in zip(obs_jids, gene_jids, values):
-                if obs_jid in sub_joinid_to_idx and gene_jid in gene_jid_to_idx:
-                    obs_idx = sub_joinid_to_idx[obs_jid]
-                    gene_idx = gene_jid_to_idx[gene_jid]
-                    all_expr[obs_idx, gene_idx] = value
-        
-        logger.info("Normalizing expression matrix...")
-        all_expr = (all_expr / cell_sums_sub[:, np.newaxis]) * 1e4
-        all_expr = np.log1p(all_expr)
-        
-        logger.info("Computing correlations (vectorized pre-filtering)...")
-        
-        # Filter genes with sufficient expression (at least 10 cells)
-        gene_counts = np.sum(all_expr > 0, axis=0)
-        valid_genes = gene_counts >= 10
-        
-        if np.sum(valid_genes) == 0:
-            logger.warning("No genes with sufficient expression for correlation")
-            return [], [], all_genes_list
-        
-        all_expr_filtered = all_expr[:, valid_genes]
-        other_genes_filtered = other_genes[valid_genes]
-        
-        # Standardize for correlation
-        gene_expr_centered = gene_expr_sub - np.mean(gene_expr_sub)
-        other_expr_centered = all_expr_filtered - np.mean(all_expr_filtered, axis=0)
-        
-        gene_std = np.std(gene_expr_sub)
-        other_std = np.std(all_expr_filtered, axis=0)
-        
-        # Avoid division by zero
-        valid_std = (gene_std > 1e-10) & (other_std > 1e-10)
-        
-        correlations_vec = np.zeros(len(other_genes_filtered))
-        if gene_std > 1e-10:
-            correlations_vec[valid_std] = np.dot(gene_expr_centered, other_expr_centered[:, valid_std]) / (
-                n_sub * gene_std * other_std[valid_std]
-            )
-        
-        # Get top candidates (top 2000 by absolute correlation for efficiency)
-        top_n = min(2000, len(correlations_vec))
-        top_indices = np.argsort(np.abs(correlations_vec))[-top_n:]
-        
-        logger.info(f"Pre-filtered to top {len(top_indices)} candidates, running scipy.stats.pearsonr...")
-        
-        correlations = {}
-        for idx in top_indices:
-            gene_symbol = other_genes_filtered[idx]
-            other_expr = all_expr_filtered[:, idx]
-            
-            if np.sum(other_expr > 0) >= 10:
-                try:
-                    corr, p_value = pearsonr(gene_expr_sub, other_expr)
-                    if p_value <= 0.05 and not np.isnan(corr):
-                        correlations[gene_symbol] = corr
-                except Exception:
-                    continue
-        
-        logger.info(f"Found {len(correlations)} significant correlations (p <= 0.05)")
+    gene_expr_sub = gene_expr[nonzero_mask]
+    cell_sums_sub = context.cell_sums[nonzero_mask]
 
-        # Sort by correlation and get top k
-        sorted_correlations = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
-        
-        top_positive = sorted_correlations[:k]
-        top_negative = sorted_correlations[-k:]
-        
-        return top_positive, top_negative, all_genes_list
+    n_sub = len(gene_expr_sub)
+    logger.info(f"Gene expressed in {n_sub} cells, computing correlations...")
+
+    other_genes = np.array(other_genes)
+    all_expr = np.asarray(other_matrix[nonzero_mask, :].todense())
+
+    logger.info("Normalizing expression matrix...")
+    all_expr = (all_expr / cell_sums_sub[:, np.newaxis]) * 1e4
+    all_expr = np.log1p(all_expr)
+
+    logger.info("Computing correlations (vectorized pre-filtering)...")
+
+    # Filter genes with sufficient expression (at least 10 cells)
+    gene_counts_nonzero = np.sum(all_expr > 0, axis=0)
+    valid_genes = gene_counts_nonzero >= 10
+
+    if np.sum(valid_genes) == 0:
+        logger.warning("No genes with sufficient expression for correlation")
+        return [], [], context.all_genes_list
+
+    all_expr_filtered = all_expr[:, valid_genes]
+    other_genes_filtered = other_genes[valid_genes]
+
+    # Standardize for correlation
+    gene_expr_centered = gene_expr_sub - np.mean(gene_expr_sub)
+    other_expr_centered = all_expr_filtered - np.mean(all_expr_filtered, axis=0)
+
+    gene_std = np.std(gene_expr_sub)
+    other_std = np.std(all_expr_filtered, axis=0)
+
+    # Avoid division by zero
+    valid_std = (gene_std > 1e-10) & (other_std > 1e-10)
+
+    correlations_vec = np.zeros(len(other_genes_filtered))
+    if gene_std > 1e-10:
+        correlations_vec[valid_std] = np.dot(gene_expr_centered, other_expr_centered[:, valid_std]) / (
+            n_sub * gene_std * other_std[valid_std]
+        )
+
+    # Get top candidates (top 2000 by absolute correlation for efficiency)
+    top_n = min(2000, len(correlations_vec))
+    top_indices = np.argsort(np.abs(correlations_vec))[-top_n:]
+
+    logger.info(f"Pre-filtered to top {len(top_indices)} candidates, running scipy.stats.pearsonr...")
+
+    correlations = {}
+    for idx in top_indices:
+        gene_symbol = other_genes_filtered[idx]
+        other_expr = all_expr_filtered[:, idx]
+
+        if np.sum(other_expr > 0) >= 10:
+            try:
+                corr, p_value = pearsonr(gene_expr_sub, other_expr)
+                if p_value <= 0.05 and not np.isnan(corr):
+                    correlations[gene_symbol] = corr
+            except Exception:
+                continue
+
+    logger.info(f"Found {len(correlations)} significant correlations (p <= 0.05)")
+
+    # Sort by correlation and get top k
+    sorted_correlations = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
+
+    top_positive = sorted_correlations[:k]
+    top_negative = sorted_correlations[-k:]
+
+    return top_positive, top_negative, context.all_genes_list
 
 @task(log_prints=True)
 def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_id):
