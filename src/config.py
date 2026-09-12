@@ -32,6 +32,9 @@ class Config:
         # (cells x genes) raw-count matrix from Census for every gene queried
         # against the same tissue.
         self.census_cache_dir = "./data/census_cache"
+        # Size cap for census_cache_dir, in bytes — oldest (by mtime) cached
+        # tissues are evicted once the directory exceeds this. Default 20 GB.
+        self.census_cache_max_bytes = 20 * 1024 * 1024 * 1024
         self.host = "0.0.0.0"
         self.port = 5000
         # Harmonization workflow configuration
@@ -98,6 +101,9 @@ class Config:
         config.data_dir = os.getenv("DATA_DIR", "./data")
         config.ontology_cache_dir = os.getenv("ONTOLOGY_CACHE_DIR", "./data/ontology")
         config.census_cache_dir = os.getenv("CENSUS_CACHE_DIR", "./data/census_cache")
+        config.census_cache_max_bytes = int(
+            os.getenv("CENSUS_CACHE_MAX_BYTES", str(20 * 1024 * 1024 * 1024))
+        )
         # Harmonization workflow configuration
         config.harmonizer_ref_dir_37 = os.getenv("HARMONIZER_REF_DIR_37", "/app/data/harmonizer_ref/b37")
         config.harmonizer_ref_dir_38 = os.getenv("HARMONIZER_REF_DIR_38", "/app/data/harmonizer_ref/b38")
