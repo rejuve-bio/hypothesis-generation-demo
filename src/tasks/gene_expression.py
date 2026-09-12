@@ -1,8 +1,10 @@
+import hashlib
 import json
 import os
 import re
 import subprocess
 import threading
+import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +37,19 @@ CENSUS_VERSION = "2024-07-01"
 # same tissue in one flow run) don't even hit the filesystem twice.
 _TISSUE_CONTEXT_CACHE: dict = {}
 _TISSUE_CONTEXT_LOCK = threading.Lock()
+
+# Per-tissue locks so concurrent calls for the SAME cold tissue don't both
+# download+write at once (the shared _TISSUE_CONTEXT_LOCK above only ever
+# guards the dict access itself, not the disk-load/Census-build/disk-save
+# path — see _get_or_build_tissue_context). _TISSUE_LOCKS_GUARD only
+# protects the registry dict itself, which is cheap and short-held.
+_TISSUE_LOCKS_GUARD = threading.Lock()
+_TISSUE_LOCKS: dict = {}
+
+
+def _lock_for_tissue(cell_type: str) -> threading.Lock:
+    with _TISSUE_LOCKS_GUARD:
+        return _TISSUE_LOCKS.setdefault(cell_type, threading.Lock())
 
 
 @dataclass
@@ -304,13 +319,33 @@ def map_tissues_to_cellxgene(top_tissues):
     return results
 
 
-def _tissue_cache_paths(cell_type: str, config) -> dict:
+def _resolved_fingerprint(resolved: ResolvedCensusCellFilter) -> str:
+    """Short hash of the mapping-resolution output, folded into the cache
+    key (see _tissue_cache_paths) so that a change to the underlying Catlas
+    mapping files naturally invalidates stale cache entries — a different
+    resolution produces a different key, causing a cache miss and rebuild,
+    instead of silently reusing a matrix built under an old mapping."""
+    fingerprint = json.dumps(
+        {
+            "source": resolved.source,
+            "cell_type_labels": resolved.cell_type_labels,
+            "cl_ids": resolved.cl_ids,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(fingerprint.encode()).hexdigest()[:12]
+
+
+def _tissue_cache_paths(cell_type: str, config, resolved: Optional[ResolvedCensusCellFilter] = None) -> dict:
     """Where the (cells x genes) raw-count matrix for a tissue is cached on
-    disk, keyed by cell type + Census version."""
+    disk, keyed by cell type + Census version + (when available) a
+    fingerprint of the mapping resolution."""
     cache_dir = Path(getattr(config, "census_cache_dir", None) or os.path.join(config.data_dir, "census_cache"))
     cache_dir.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", cell_type)
     key = f"{safe_name}__{CENSUS_VERSION}"
+    if resolved is not None:
+        key = f"{key}__{_resolved_fingerprint(resolved)}"
     return {
         "matrix": cache_dir / f"{key}.matrix.npz",
         "meta": cache_dir / f"{key}.meta.json",
@@ -319,8 +354,10 @@ def _tissue_cache_paths(cell_type: str, config) -> dict:
     }
 
 
-def _load_tissue_context_from_disk(cell_type: str, config) -> Optional[_TissueCoexpressionContext]:
-    paths = _tissue_cache_paths(cell_type, config)
+def _load_tissue_context_from_disk(
+    cell_type: str, resolved: ResolvedCensusCellFilter, config
+) -> Optional[_TissueCoexpressionContext]:
+    paths = _tissue_cache_paths(cell_type, config, resolved)
     if not all(p.exists() for p in paths.values()):
         return None
     try:
@@ -346,19 +383,97 @@ def _load_tissue_context_from_disk(cell_type: str, config) -> Optional[_TissueCo
         return None
 
 
-def _save_tissue_context_to_disk(context: _TissueCoexpressionContext, config) -> None:
-    paths = _tissue_cache_paths(context.cell_type, config)
+def _enforce_cache_size_limit(cache_dir: Path, max_bytes: Optional[int]) -> None:
+    """Evict the least-recently-written cached tissues (by their meta.json
+    mtime) until the cache directory's total size is back under max_bytes.
+    Simple, dependency-free LRU-by-mtime — no external cache library."""
+    if not max_bytes or max_bytes <= 0:
+        return
+
+    def _dir_size() -> int:
+        total = 0
+        for f in cache_dir.iterdir():
+            if f.is_file():
+                try:
+                    total += f.stat().st_size
+                except OSError:
+                    pass
+        return total
+
+    total = _dir_size()
+    if total <= max_bytes:
+        return
+
     try:
-        sparse.save_npz(paths["matrix"], context.matrix)
-        np.save(paths["obs"], context.obs_joinids)
-        np.save(paths["cellsums"], context.cell_sums)
-        paths["meta"].write_text(json.dumps({
+        meta_files = sorted(cache_dir.glob("*.meta.json"), key=lambda p: p.stat().st_mtime)
+    except OSError as e:
+        logger.warning(f"[Census cache] Could not list cache dir {cache_dir} for eviction: {e}")
+        return
+
+    logger.info(
+        f"[Census cache] Cache size {total} bytes exceeds cap {max_bytes} bytes — evicting oldest tissues"
+    )
+    for meta_path in meta_files:
+        if total <= max_bytes:
+            break
+        key = meta_path.name[: -len(".meta.json")]
+        entry_files = [
+            cache_dir / f"{key}.matrix.npz",
+            cache_dir / f"{key}.obs_joinids.npy",
+            cache_dir / f"{key}.cell_sums.npy",
+            meta_path,
+        ]
+        freed = 0
+        for f in entry_files:
+            try:
+                if f.exists():
+                    freed += f.stat().st_size
+                    f.unlink()
+            except OSError as e:
+                logger.warning(f"[Census cache] Failed to evict {f}: {e}")
+        total -= freed
+        logger.info(f"[Census cache] Evicted cached tissue {key!r}, freed {freed} bytes")
+
+
+def _save_tissue_context_to_disk(
+    context: _TissueCoexpressionContext, resolved: ResolvedCensusCellFilter, config
+) -> None:
+    """Write all 4 cache artifacts atomically: each is written to a temp
+    path first and only moved (os.replace, atomic on POSIX same-filesystem)
+    into its final path once fully written. A concurrent reader's
+    `all(p.exists())` check in _load_tissue_context_from_disk therefore
+    never observes a torn/partial file — a path only appears at its final
+    name once its contents are complete."""
+    paths = _tissue_cache_paths(context.cell_type, config, resolved)
+    tmp_suffix = uuid.uuid4().hex
+    tmp_paths = {k: p.with_name(p.name + f".tmp-{tmp_suffix}") for k, p in paths.items()}
+    try:
+        # Open as file handles (not bare path strings) so scipy/numpy don't
+        # append their own .npz/.npy suffix to our .tmp-<uuid> filename.
+        with open(tmp_paths["matrix"], "wb") as f:
+            sparse.save_npz(f, context.matrix)
+        with open(tmp_paths["obs"], "wb") as f:
+            np.save(f, context.obs_joinids)
+        with open(tmp_paths["cellsums"], "wb") as f:
+            np.save(f, context.cell_sums)
+        tmp_paths["meta"].write_text(json.dumps({
             "genes": context.genes,
             "all_genes_list": context.all_genes_list,
         }))
+
+        for key in paths:
+            os.replace(tmp_paths[key], paths[key])
+
         logger.info(f"[Census cache] Cached coexpression matrix for {context.cell_type!r} at {paths['matrix']}")
+        _enforce_cache_size_limit(paths["matrix"].parent, getattr(config, "census_cache_max_bytes", None))
     except Exception as e:
         logger.warning(f"[Census cache] Failed to persist cache for {context.cell_type!r}: {e}")
+        for tmp_path in tmp_paths.values():
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def _build_tissue_context_from_census(
@@ -421,7 +536,12 @@ def _build_tissue_context_from_census(
         )
         obs_idx_map = {int(j): i for i, j in enumerate(obs_joinids)}
         gene_idx_map = {int(j): i for i, j in enumerate(gene_joinids)}
-        matrix = sparse.lil_matrix((n, len(genes_filtered)), dtype=np.float32)
+
+        # Accumulate (row, col, value) COO triplets across batches and build
+        # the sparse matrix once at the end, instead of repeated
+        # lil_matrix.__setitem__ calls per batch (which is O(nnz) overhead
+        # per assignment at scale).
+        all_rows, all_cols, all_values = [], [], []
 
         table_iter = experiment.ms["RNA"].X["raw"].read(
             (obs_joinids.tolist(), gene_joinids.tolist())
@@ -435,9 +555,18 @@ def _build_tissue_context_from_census(
             cols = np.fromiter((gene_idx_map.get(int(j), -1) for j in gene_jids), dtype=np.int64, count=len(gene_jids))
             valid = (rows >= 0) & (cols >= 0)
             if np.any(valid):
-                matrix[rows[valid], cols[valid]] = values[valid]
+                all_rows.append(rows[valid])
+                all_cols.append(cols[valid])
+                all_values.append(values[valid])
 
-        matrix = matrix.tocsr()
+        if all_rows:
+            matrix = sparse.coo_matrix(
+                (np.concatenate(all_values), (np.concatenate(all_rows), np.concatenate(all_cols))),
+                shape=(n, len(genes_filtered)),
+                dtype=np.float32,
+            ).tocsr()
+        else:
+            matrix = sparse.csr_matrix((n, len(genes_filtered)), dtype=np.float32)
         logger.info(
             f"[Census] Matrix download complete: {matrix.shape[0]} cells x "
             f"{matrix.shape[1]} genes, {matrix.nnz} non-zero entries"
@@ -488,42 +617,59 @@ def _get_or_build_tissue_context(cell_type: str, config) -> Optional[_TissueCoex
     """Return the cached coexpression context for a tissue, building and
     persisting it on first use. Checks the in-process cache, then the disk
     cache, and only falls through to a real Census download as a last
-    resort."""
+    resort.
+
+    The disk-load / Census-build / disk-save path runs under a per-tissue
+    lock (double-checked against the in-process cache) so two concurrent
+    calls for the same cold tissue can't both download+write at once — only
+    the dict lookup itself needs no lock (a plain read of an already-cached
+    entry is safe without one)."""
     with _TISSUE_CONTEXT_LOCK:
         if cell_type in _TISSUE_CONTEXT_CACHE:
             return _TISSUE_CONTEXT_CACHE[cell_type]
 
-    disk_context = _load_tissue_context_from_disk(cell_type, config)
-    if disk_context is not None:
-        logger.info(
-            f"[Census cache] Using cached coexpression matrix for {cell_type!r} "
-            "— skipping Census download entirely"
+    with _lock_for_tissue(cell_type):
+        # Re-check now that we hold the per-tissue lock: another thread may
+        # have just finished building this tissue's context while we were
+        # waiting for the lock.
+        with _TISSUE_CONTEXT_LOCK:
+            if cell_type in _TISSUE_CONTEXT_CACHE:
+                return _TISSUE_CONTEXT_CACHE[cell_type]
+
+        # Resolve first (cheap, in-memory, no Census I/O) so the cache key
+        # used for both load and save can incorporate the resolution
+        # fingerprint (see _tissue_cache_paths / _resolved_fingerprint).
+        resolved = resolve_ldsc_for_census(
+            cell_type,
+            repo_root=config.repo_root,
+            mapping_json_rel=config.catlas_celltype_cl_mapping_json,
+            catlas_aliases_rel=config.catlas_abc_aliases_tsv,
         )
-        with _TISSUE_CONTEXT_LOCK:
-            _TISSUE_CONTEXT_CACHE[cell_type] = disk_context
-        return disk_context
+        logger.info(
+            f"[Census cache] Resolved {cell_type!r} (source={resolved.source}, "
+            f"skip={resolved.skip_coexpression})"
+        )
+        if resolved.skip_coexpression:
+            with _TISSUE_CONTEXT_LOCK:
+                _TISSUE_CONTEXT_CACHE[cell_type] = None
+            return None
 
-    resolved = resolve_ldsc_for_census(
-        cell_type,
-        repo_root=config.repo_root,
-        mapping_json_rel=config.catlas_celltype_cl_mapping_json,
-        catlas_aliases_rel=config.catlas_abc_aliases_tsv,
-    )
-    logger.info(
-        f"[Census cache] No cache for {cell_type!r} (source={resolved.source}, "
-        f"skip={resolved.skip_coexpression}) — checking whether a download is needed"
-    )
-    if resolved.skip_coexpression:
-        with _TISSUE_CONTEXT_LOCK:
-            _TISSUE_CONTEXT_CACHE[cell_type] = None
-        return None
+        disk_context = _load_tissue_context_from_disk(cell_type, resolved, config)
+        if disk_context is not None:
+            logger.info(
+                f"[Census cache] Using cached coexpression matrix for {cell_type!r} "
+                "— skipping Census download entirely"
+            )
+            with _TISSUE_CONTEXT_LOCK:
+                _TISSUE_CONTEXT_CACHE[cell_type] = disk_context
+            return disk_context
 
-    context = _build_tissue_context_from_census(cell_type, resolved)
-    with _TISSUE_CONTEXT_LOCK:
-        _TISSUE_CONTEXT_CACHE[cell_type] = context
-    if context is not None:
-        _save_tissue_context_to_disk(context, config)
-    return context
+        context = _build_tissue_context_from_census(cell_type, resolved)
+        with _TISSUE_CONTEXT_LOCK:
+            _TISSUE_CONTEXT_CACHE[cell_type] = context
+        if context is not None:
+            _save_tissue_context_to_disk(context, resolved, config)
+        return context
 
 
 @task(log_prints=True)
