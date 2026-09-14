@@ -160,3 +160,112 @@ def test_owned_docs_without_project_id_return_none(monkeypatch):
         **services, current_user_id="owner", enrich_id="enrich-1"
     ) is None
     assert "both have no project_id" in warning.call_args.args[0]
+
+
+def test_resolve_hypothesis_data_user_id_via_template_access(monkeypatch):
+    demo_templates = MagicMock()
+    hypotheses = MagicMock()
+    # Not the current user's own hypothesis.
+    hypotheses.get_hypotheses.return_value = None
+    hypotheses.get_hypothesis_by_id.return_value = {
+        "id": "hyp-shared", "user_id": "owner", "project_id": "template-1"
+    }
+    access = SimpleNamespace(owner_user_id="owner", mode="demo_read", template={})
+    monkeypatch.setattr(service, "resolve_project_access_or_none", lambda *_: access)
+
+    result = service.resolve_hypothesis_data_user_id(
+        demo_templates, hypotheses, "viewer", "hyp-shared"
+    )
+
+    assert result == "owner"
+
+
+def test_resolve_hypothesis_data_user_id_returns_none_when_owner_mismatched(monkeypatch):
+    demo_templates = MagicMock()
+    hypotheses = MagicMock()
+    hypotheses.get_hypotheses.return_value = None
+    hypotheses.get_hypothesis_by_id.return_value = {
+        "id": "hyp-shared", "user_id": "someone-else", "project_id": "template-1"
+    }
+    access = SimpleNamespace(owner_user_id="owner", mode="demo_read", template={})
+    monkeypatch.setattr(service, "resolve_project_access_or_none", lambda *_: access)
+
+    result = service.resolve_hypothesis_data_user_id(
+        demo_templates, hypotheses, "viewer", "hyp-shared"
+    )
+
+    assert result is None
+
+
+def test_build_project_summary_includes_credible_sets_hypotheses_and_state():
+    projects = MagicMock()
+    analysis = MagicMock()
+    hypotheses = MagicMock()
+    files = MagicMock()
+    projects.get_projects.return_value = {
+        "gwas_file_id": "file-1", "population": "EUR", "ref_genome": "GRCh38"
+    }
+    files.get_file_metadata.return_value = {
+        "download_url": "/download/1", "record_count": 42
+    }
+    projects.load_analysis_state.return_value = {"status": "Completed"}
+    analysis.get_credible_sets_for_project.return_value = [
+        {"variants_count": 3}, {"variants_count": 5}
+    ]
+    hypotheses.get_hypotheses.return_value = [
+        {"project_id": "project-1"}, {"project_id": "other"}
+    ]
+
+    summary = service.build_project_summary(
+        project_id="project-1",
+        name="Demo Project",
+        phenotype="Trait",
+        created_at="2026-01-01",
+        data_user_id="owner",
+        projects=projects,
+        analysis=analysis,
+        hypotheses=hypotheses,
+        files=files,
+    )
+
+    assert summary["gwas_file"] == "/download/1"
+    assert summary["gwas_records_count"] == 42
+    assert summary["status"] == "Completed"
+    assert summary["total_credible_sets_count"] == 2
+    assert summary["total_variants_count"] == 8
+    assert summary["hypothesis_count"] == 1
+    assert summary["population"] == "European"
+    assert summary["ref_genome"] == "GRCh38"
+
+
+def test_build_project_summary_degrades_gracefully_when_a_sub_call_raises():
+    """build_project_summary has no top-level try/except: each optional
+    sub-section (file metadata, analysis state, credible sets, hypothesis
+    count) swallows its own exception and degrades to a safe default. It
+    never returns None -- confirmed by reading the source before writing
+    this test."""
+    projects = MagicMock()
+    analysis = MagicMock()
+    hypotheses = MagicMock()
+    files = MagicMock()
+    projects.get_projects.return_value = {}
+    projects.load_analysis_state.side_effect = RuntimeError("state file corrupt")
+    analysis.get_credible_sets_for_project.return_value = []
+    hypotheses.get_hypotheses.return_value = []
+
+    summary = service.build_project_summary(
+        project_id="project-1",
+        name="Demo Project",
+        phenotype="Trait",
+        created_at="2026-01-01",
+        data_user_id="owner",
+        projects=projects,
+        analysis=analysis,
+        hypotheses=hypotheses,
+        files=files,
+    )
+
+    assert summary is not None
+    assert summary["status"] == "Completed"
+    assert summary["running_task"] == "Analysis completed successfully."
+    assert summary["total_credible_sets_count"] == 0
