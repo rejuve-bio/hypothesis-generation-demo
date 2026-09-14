@@ -1,11 +1,25 @@
 version: '3.8'
 
-# CI-only deltas on top of docker-compose.yml: remapped ports + a scaled-down
-# dask-worker. Add an entry here only if a new service needs the same.
+# CI uses the Compose network and container healthchecks, so no service needs
+# a published host port. Reset inherited ports to avoid shared-runner conflicts.
 services:
   prolog-service:
-    ports: !override
-      - "4343:4242"
+    ports: !reset []
+
+  dask-scheduler:
+    ports: !reset []
+
+  prefect-postgres:
+    ports: !reset []
+
+  credible-sets-postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  api-service:
+    ports: !reset []
 
   dask-worker:
     command: >
@@ -15,29 +29,7 @@ services:
       --memory-limit 8GB
       --preload src.dask_preload
 
-  dask-scheduler:
-    ports: !override
-      - "8796:8786"
-      - "8797:8787"
-
-  prefect-postgres:
-    ports: !override
-      - "5419:5432"
-
-  credible-sets-postgres:
-    ports: !override
-      - "5421:5432"
-
-  redis:
-    ports: !override
-      - "6399:6379"
-
   prefect-service:
-    ports: !override
-      - "4293:4200"
+    ports: !reset []
     environment:
-      - PREFECT_UI_API_URL=http://localhost:4293/api
-
-  api-service:
-    ports: !override
-      - "5009:5000"
+      - PREFECT_UI_API_URL=http://localhost:${PREFECT_UI_PORT}/api
