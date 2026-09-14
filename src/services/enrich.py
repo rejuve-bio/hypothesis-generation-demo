@@ -17,6 +17,16 @@ _ENSG_RE = re.compile(r"^ENSG\d+$", re.IGNORECASE)
 class EnrichrAPIUnavailableError(RuntimeError):
     """Raised when all attempts to call the Enrichr API fail."""
 
+    def __init__(self, message: str, *, variant: str | None = None) -> None:
+        super().__init__(message)
+        self.variant = variant
+
+    def as_detail(self) -> dict[str, str]:
+        detail = {"error_type": "enrichr_service_unavailable", "message": str(self)}
+        if self.variant:
+            detail["variant"] = self.variant
+        return detail
+
 
 class Enrich:
 

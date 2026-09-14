@@ -163,3 +163,80 @@ def test_summarize_failure_propagates(
         flow_module.hypothesis_flow.fn(
             "user-1", "hyp-1", "enrich-1", "GO:0006954"
         )
+
+
+def test_child_enrich_ids_trigger_batch_deployment(
+    monkeypatch, immediate_task_factory, sample_enrichment
+):
+    deps, _ = _configure_flow(monkeypatch, immediate_task_factory, sample_enrichment)
+    deps["hypotheses"].get_hypotheses.return_value = {
+        "id": "hyp-1", "child_enrich_ids": ["child-1", "child-2"]
+    }
+    invoke = MagicMock()
+    monkeypatch.setattr("src.run_deployment.invoke_child_batch_deployment", invoke)
+
+    flow_module.hypothesis_flow.fn(
+        "user-1", "hyp-1", "enrich-1", "GO:0006954"
+    )
+
+    invoke.assert_called_once_with("user-1", ["child-1", "child-2"], "hyp-1")
+
+
+def test_go_term_not_found_returns_404(
+    monkeypatch, immediate_task_factory, sample_enrichment
+):
+    _configure_flow(monkeypatch, immediate_task_factory, sample_enrichment)
+
+    response, status = flow_module.hypothesis_flow.fn(
+        "user-1", "hyp-1", "enrich-1", "GO:9999999"
+    )
+
+    assert status == 404
+    assert response == {"message": "GO term GO:9999999 not found in this enrichment."}
+
+
+def test_gene_name_lookup_failure_falls_back_to_existing_name(
+    monkeypatch, immediate_task_factory, sample_enrichment
+):
+    _, saved = _configure_flow(monkeypatch, immediate_task_factory, sample_enrichment)
+    monkeypatch.setattr(
+        flow_module,
+        "execute_gene_query",
+        immediate_task_factory(lambda *_: (_ for _ in ()).throw(RuntimeError("prolog down"))),
+    )
+
+    response, status = flow_module.hypothesis_flow.fn(
+        "user-1", "hyp-1", "enrich-1", "GO:0006954"
+    )
+
+    assert status == 201
+    gene_node = next(
+        n for n in response["graph"]["nodes"] if n["id"] == "ENSG00000140968"
+    )
+    assert gene_node["name"] == "IRF8"
+    warning_codes = {w["code"] for w in saved[0][9]}
+    assert "gene_name_lookup_failed" in warning_codes
+
+
+def test_phenotype_lookup_failure_falls_back_to_raw_phenotype(
+    monkeypatch, immediate_task_factory, sample_enrichment
+):
+    _, saved = _configure_flow(monkeypatch, immediate_task_factory, sample_enrichment)
+    monkeypatch.setattr(
+        flow_module,
+        "execute_phenotype_query",
+        immediate_task_factory(lambda *_: (_ for _ in ()).throw(RuntimeError("prolog down"))),
+    )
+
+    response, status = flow_module.hypothesis_flow.fn(
+        "user-1", "hyp-1", "enrich-1", "GO:0006954"
+    )
+
+    assert status == 201
+    assert any(
+        node == {"id": "Ulcerative colitis", "type": "phenotype", "name": "Ulcerative colitis"}
+        for node in response["graph"]["nodes"]
+    )
+    warning_codes = {w["code"] for w in saved[0][9]}
+    assert "phenotype_id_lookup_failed" in warning_codes
+    assert "phenotype_id_fallback" not in warning_codes

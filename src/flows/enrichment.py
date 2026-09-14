@@ -10,6 +10,7 @@ from src.services.status_tracker import TaskState
 from src.config import Config, create_dependencies
 from src.catlas_census_mapping import CatlasMappingError
 from src.services.enrich import EnrichrAPIUnavailableError
+from src.services.prolog import PrologNoEvidenceError, PrologServiceError
 from src.tasks import (
     check_enrich,
     get_candidate_genes,
@@ -65,9 +66,12 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
 
         # If still no graphs after retry, fail the enrichment
         if not graphs_list or len(graphs_list) == 0:
-            error_msg = f"No causal graphs found for variant {variant}. Prolog server returned 0 graphs."
+            error_msg = (
+                f"No causal-gene evidence was found for variant {variant} in the "
+                "knowledge base (Prolog responded but returned 0 graphs, even after retrying)."
+            )
             logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise PrologNoEvidenceError(error_msg, variant=variant)
 
         logger.info(f"Creating enrichments for {len(graphs_list)} graphs from Prolog server")
 
@@ -122,9 +126,11 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
             hypotheses.update_hypothesis(
                 hypothesis_id, {"skipped_enrich_ids": skipped_enrich_ids}
             )
-            raise ValueError(
-                f"No causal genes found in any graph for variant {variant}. "
-                "All causal graphs were skipped."
+            raise PrologNoEvidenceError(
+                f"No causal-gene evidence was found for variant {variant}: "
+                "Prolog returned graphs, but none had a direct SNP-gene connection "
+                "(all causal graphs were skipped).",
+                variant=variant,
             )
 
         # Check if all graphs have the same causal gene
@@ -288,7 +294,8 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
             )
             raise EnrichrAPIUnavailableError(
                 f"No enrichment could be completed for variant {variant}. "
-                "All eligible graphs were skipped after Enrichr failures."
+                "All eligible graphs were skipped after Enrichr failures.",
+                variant=variant,
             )
 
         all_enrich_ids = [e['enrich_id'] for e in enrichment_data]
@@ -318,6 +325,69 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
     except CatlasMappingError as e:
         error_detail = e.as_detail()
         logger.error(f"Enrichment flow failed (catlas mapping): {error_detail}")
+
+        hypotheses.update_hypothesis(hypothesis_id, {
+            "status": "failed",
+            "error": str(e),
+            "error_detail": error_detail,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+        })
+
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Enrichment",
+            state=TaskState.FAILED,
+            error=str(e),
+            details=error_detail,
+            progress=0,
+        )
+        raise
+
+    except PrologServiceError as e:
+        error_detail = e.as_detail()
+        logger.error(f"Enrichment flow failed (Prolog service unavailable): {error_detail}")
+
+        hypotheses.update_hypothesis(hypothesis_id, {
+            "status": "failed",
+            "error": str(e),
+            "error_detail": error_detail,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+        })
+
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Enrichment",
+            state=TaskState.FAILED,
+            error=str(e),
+            details=error_detail,
+            progress=0,
+        )
+        raise
+
+    except PrologNoEvidenceError as e:
+        error_detail = e.as_detail()
+        logger.error(f"Enrichment flow failed (no causal evidence): {error_detail}")
+
+        hypotheses.update_hypothesis(hypothesis_id, {
+            "status": "failed",
+            "error": str(e),
+            "error_detail": error_detail,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
+        })
+
+        emit_task_update(
+            hypothesis_id=hypothesis_id,
+            task_name="Enrichment",
+            state=TaskState.FAILED,
+            error=str(e),
+            details=error_detail,
+            progress=0,
+        )
+        raise
+
+    except EnrichrAPIUnavailableError as e:
+        error_detail = e.as_detail()
+        logger.error(f"Enrichment flow failed (Enrichr unavailable): {error_detail}")
 
         hypotheses.update_hypothesis(hypothesis_id, {
             "status": "failed",

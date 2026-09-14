@@ -159,35 +159,88 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
     if prolog_gene_ids:
         gene_entities = [f"gene({gene_id})" for gene_id in prolog_gene_ids]
         query = f"maplist(gene_name, {gene_entities}, X)".replace("'", "")
-        prolog_gene_names = execute_gene_query.submit(query, hypothesis_id).result()
-        for gene_id_node, prolog_name, node in zip(
-            prolog_gene_ids, prolog_gene_names, prolog_gene_nodes
-        ):
-            node["name"] = (
-                enrichr.to_symbol(prolog_name)
-                if prolog_name
-                else enrichr.to_symbol(node.get("name") or gene_id_node)
+        gene_lookup_failed = False
+        try:
+            prolog_gene_names = execute_gene_query.submit(query, hypothesis_id).result()
+        except Exception as exc:
+            gene_lookup_failed = True
+            prolog_gene_names = [None] * len(prolog_gene_ids)
+            logger.warning(
+                f"Gene name lookup failed for {prolog_gene_ids}; retaining existing names: {exc}"
+            )
+            warnings.append(
+                {
+                    "code": "gene_name_lookup_failed",
+                    "message": (
+                        "Gene name lookup failed; existing gene names were retained."
+                    ),
+                    "genes": prolog_gene_ids,
+                }
             )
 
-    phenotype_result = execute_phenotype_query.submit(phenotype, hypothesis_id).result()
+        if not isinstance(prolog_gene_names, (list, tuple)):
+            prolog_gene_names = [prolog_gene_names] if prolog_gene_names else []
+
+        for index, (gene_id_node, node) in enumerate(zip(prolog_gene_ids, prolog_gene_nodes)):
+            prolog_name = prolog_gene_names[index] if index < len(prolog_gene_names) else None
+            if prolog_name:
+                node["name"] = enrichr.to_symbol(prolog_name)
+            else:
+                node["name"] = enrichr.to_symbol(node.get("name") or gene_id_node)
+                if not gene_lookup_failed:
+                    logger.warning(
+                        f"No mapped gene name returned for {gene_id_node}; retaining existing name"
+                    )
+                    warnings.append(
+                        {
+                            "code": "gene_name_fallback",
+                            "message": (
+                                "No mapped gene name was returned; the existing "
+                                "gene identifier was used instead."
+                            ),
+                            "gene": gene_id_node,
+                        }
+                    )
+
+    phenotype_lookup_failed = False
+    try:
+        phenotype_result = execute_phenotype_query.submit(phenotype, hypothesis_id).result()
+    except Exception as exc:
+        phenotype_lookup_failed = True
+        phenotype_result = None
+        logger.warning(
+            f"Phenotype ID lookup failed for {phenotype!r}; retaining raw phenotype: {exc}"
+        )
+        warnings.append(
+            {
+                "code": "phenotype_id_lookup_failed",
+                "message": (
+                    "Phenotype ID lookup failed; the raw phenotype was used as "
+                    "the node ID."
+                ),
+                "phenotype": phenotype,
+            }
+        )
+
     if isinstance(phenotype_result, list):
         phenotype_id = phenotype_result[0] if phenotype_result else None
     else:
         phenotype_id = phenotype_result
     if not phenotype_id:
         phenotype_id = phenotype
-        logger.warning(
-            f"No phenotype ID returned for {phenotype!r}; using raw phenotype"
-        )
-        warnings.append(
-            {
-                "code": "phenotype_id_fallback",
-                "message": (
-                    "No EFO ID was returned; the raw phenotype was used as the node ID."
-                ),
-                "phenotype": phenotype,
-            }
-        )
+        if not phenotype_lookup_failed:
+            logger.warning(
+                f"No phenotype ID returned for {phenotype!r}; using raw phenotype"
+            )
+            warnings.append(
+                {
+                    "code": "phenotype_id_fallback",
+                    "message": (
+                        "No EFO ID was returned; the raw phenotype was used as the node ID."
+                    ),
+                    "phenotype": phenotype,
+                }
+            )
 
     if not any(n.get("id") == go_id for n in nodes):
         nodes.append({"id": go_id, "type": "go", "name": go_name})

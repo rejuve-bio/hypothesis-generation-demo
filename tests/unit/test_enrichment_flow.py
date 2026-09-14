@@ -1,8 +1,12 @@
 from copy import deepcopy
 from unittest.mock import MagicMock, call
 
+import pytest
+
+from src.catlas_census_mapping import CatlasMappingError
 from src.flows import enrichment as flow_module
 from src.services.enrich import EnrichrAPIUnavailableError
+from src.services.prolog import PrologNoEvidenceError, PrologServiceError
 
 
 def _configure_flow(monkeypatch, immediate_task_factory, graphs, *, enrich_table=None):
@@ -228,3 +232,184 @@ def test_tissue_empty_result_falls_back_to_standard_enrichment(
         call("IRF8"),
     ]
     assert created[0][6]["non_tissue_specific_fallback"] is True
+
+
+def test_zero_graphs_after_retry_raises_no_evidence_error(
+    monkeypatch, immediate_task_factory
+):
+    deps, created = _configure_flow(monkeypatch, immediate_task_factory, [])
+    # _configure_flow already wires retry_get_relevant_gene_proof to return [].
+
+    with pytest.raises(PrologNoEvidenceError, match="No causal-gene evidence"):
+        flow_module.enrichment_flow.fn(
+            "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+        )
+
+    assert created == []
+    assert deps["hypotheses"].update_hypothesis.call_count == 1
+    fail_call = deps["hypotheses"].update_hypothesis.call_args
+    assert fail_call.args[0] == "hyp-1"
+    assert fail_call.args[1]["status"] == "failed"
+    assert "No causal-gene evidence" in fail_call.args[1]["error"]
+    assert fail_call.args[1]["error_detail"] == {
+        "error_type": "prolog_no_evidence",
+        "message": fail_call.args[1]["error"],
+        "variant": "rs16940186",
+    }
+
+
+def test_prolog_service_unavailable_is_distinguished_from_no_evidence(
+    monkeypatch, immediate_task_factory
+):
+    """A Prolog outage (PrologServiceError) must not be reported the same
+    way as a clean "no evidence found" result (PrologNoEvidenceError)."""
+    deps, created = _configure_flow(monkeypatch, immediate_task_factory, [])
+    monkeypatch.setattr(
+        flow_module,
+        "get_relevant_gene_proof",
+        immediate_task_factory(
+            lambda *_: (_ for _ in ()).throw(
+                PrologServiceError("get_relevant_gene_proof failed. Prolog server is unreachable")
+            )
+        ),
+    )
+
+    with pytest.raises(PrologServiceError, match="unreachable"):
+        flow_module.enrichment_flow.fn(
+            "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+        )
+
+    assert created == []
+    fail_call = deps["hypotheses"].update_hypothesis.call_args
+    assert fail_call.args[1]["error_detail"]["error_type"] == "prolog_service_unavailable"
+
+
+def test_all_graphs_skipped_raises_and_persists_skip_reason(
+    monkeypatch, immediate_task_factory, sample_graph
+):
+    def _invalid(prob):
+        graph = deepcopy(sample_graph)
+        graph["edges"] = [{"source": "rs16940186", "target": "enhancer-1"}]
+        graph["nodes"] = graph["nodes"] + [{"id": "enhancer-1", "type": "enhancer"}]
+        graph["prob"]["value"] = prob
+        return graph
+
+    deps, created = _configure_flow(
+        monkeypatch, immediate_task_factory, [_invalid(0.9), _invalid(0.1)]
+    )
+
+    with pytest.raises(PrologNoEvidenceError, match="all causal graphs were skipped"):
+        flow_module.enrichment_flow.fn(
+            "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+        )
+
+    assert len(created) == 2
+    for entry in created:
+        assert entry[8:] == (
+            "skipped", "No direct SNP-gene edge found in causal graph."
+        )
+    deps["hypotheses"].update_hypothesis.assert_any_call(
+        "hyp-1", {"skipped_enrich_ids": ["enrich-1", "enrich-2"]}
+    )
+    fail_call = deps["hypotheses"].update_hypothesis.call_args
+    assert fail_call.args[1]["error_detail"]["error_type"] == "prolog_no_evidence"
+    assert fail_call.args[1]["error_detail"]["variant"] == "rs16940186"
+
+
+def test_all_graphs_enrichr_failed_raises_unavailable_error(
+    monkeypatch, immediate_task_factory, sample_graph
+):
+    second = deepcopy(sample_graph)
+    second["nodes"][0]["id"] = "ENSG2"
+    second["edges"][0]["target"] = "ENSG2"
+    deps, created = _configure_flow(
+        monkeypatch, immediate_task_factory, [sample_graph, second]
+    )
+    deps["enrichr"].run.side_effect = EnrichrAPIUnavailableError("Enrichr down")
+
+    with pytest.raises(EnrichrAPIUnavailableError, match="No enrichment could be completed"):
+        flow_module.enrichment_flow.fn(
+            "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+        )
+
+    assert len(created) == 2
+    assert all(entry[8] == "skipped" for entry in created)
+    deps["hypotheses"].update_hypothesis.assert_any_call(
+        "hyp-1", {"skipped_enrich_ids": ["enrich-1", "enrich-2"]}
+    )
+    failed_calls = [
+        c for c in deps["hypotheses"].update_hypothesis.call_args_list
+        if c.args[1].get("status") == "failed"
+    ]
+    assert len(failed_calls) == 1
+    assert failed_calls[0].args[1]["error_detail"] == {
+        "error_type": "enrichr_service_unavailable",
+        "message": failed_calls[0].args[1]["error"],
+        "variant": "rs16940186",
+    }
+
+
+def test_shared_causal_gene_reuses_cached_enrichment(
+    monkeypatch, immediate_task_factory, sample_graph
+):
+    second = deepcopy(sample_graph)
+    second["prob"]["value"] = 0.1
+    deps, created = _configure_flow(
+        monkeypatch, immediate_task_factory, [sample_graph, second]
+    )
+
+    result = flow_module.enrichment_flow.fn(
+        "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+    )
+
+    assert result == ({"id": "enrich-1"}, 200)
+    deps["enrichr"].run.assert_called_once_with("IRF8")
+    assert len(created) == 2
+    assert created[0][5] == created[1][5]
+
+
+def test_no_tissue_selection_falls_back_to_top_ldsc_tissue(
+    monkeypatch, immediate_task_factory, sample_graph
+):
+    deps, _ = _configure_flow(monkeypatch, immediate_task_factory, [sample_graph])
+    deps["gene_expression"].get_tissue_selection.return_value = None
+    deps["gene_expression"].get_ldsc_results_for_project.return_value = [
+        {"tissue_name": "Liver"}
+    ]
+
+    flow_module.enrichment_flow.fn(
+        "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+    )
+
+    deps["gene_expression"].get_ldsc_results_for_project.assert_called_once_with(
+        "user-1", "project-1", limit=1, format="selection"
+    )
+    deps["enrichr"].run.assert_called_once_with(
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+    )
+
+
+def test_catlas_mapping_error_persists_structured_error_detail(
+    monkeypatch, immediate_task_factory, sample_graph
+):
+    deps, _ = _configure_flow(monkeypatch, immediate_task_factory, [sample_graph])
+    deps["gene_expression"].get_tissue_selection.return_value = {
+        "tissue_name": "Weird_Tissue"
+    }
+    error = CatlasMappingError("Unknown LDSC cell type", ldsc_name="Weird_Tissue")
+    deps["enrichr"].run.side_effect = error
+
+    with pytest.raises(CatlasMappingError):
+        flow_module.enrichment_flow.fn(
+            "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+        )
+
+    fail_call = deps["hypotheses"].update_hypothesis.call_args
+    assert fail_call.args[0] == "hyp-1"
+    patch = fail_call.args[1]
+    assert patch["status"] == "failed"
+    assert patch["error_detail"] == {
+        "error_type": "catlas_mapping",
+        "message": "Unknown LDSC cell type",
+        "ldsc_name": "Weird_Tissue",
+    }
