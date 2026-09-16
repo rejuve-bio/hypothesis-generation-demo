@@ -68,6 +68,7 @@ def _response_from_hypothesis_document(
         "hypothesis_id": hypothesis_id,
         "summary": doc.get("summary") if doc else None,
         "graph": doc.get("graph") if doc else None,
+        "warnings": doc.get("warnings", []) if doc else [],
     }
     if enrich_id is not None:
         response["enrich_id"] = enrich_id
@@ -160,6 +161,7 @@ async def get_hypothesis(
                 "result": enrich_data,
                 "summary": hypothesis.get("summary"),
                 "graph": hypothesis.get("graph"),
+                "warnings": hypothesis.get("warnings", []),
             }
 
             if "tissue_rankings" in hypothesis:

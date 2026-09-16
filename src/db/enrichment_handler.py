@@ -11,7 +11,18 @@ class EnrichmentHandler(BaseHandler):
         super().__init__(uri, db_name)
         self.enrich_collection = self.db['enrich']
     
-    def create_enrich(self, user_id, project_id, variant, phenotype, causal_gene, go_terms, causal_graph):
+    def create_enrich(
+        self,
+        user_id,
+        project_id,
+        variant,
+        phenotype,
+        causal_gene,
+        go_terms,
+        causal_graph,
+        status=None,
+        skip_reason=None,
+    ):
         """Create enrichment entry with project references"""
         enrich_data = {
             'id': str(uuid4()),
@@ -24,6 +35,10 @@ class EnrichmentHandler(BaseHandler):
             'causal_graph': causal_graph,
             'created_at': datetime.now(timezone.utc)
         }
+        if status is not None:
+            enrich_data['status'] = status
+        if skip_reason is not None:
+            enrich_data['skip_reason'] = skip_reason
         self.enrich_collection.insert_one(enrich_data)
         return enrich_data['id']
 
