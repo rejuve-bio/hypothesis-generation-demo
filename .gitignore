@@ -252,8 +252,8 @@ CLAUDE.md
 
 # test_dir
 scratch/*
-tests/*
 results/*
+tests/fixtures/*
 
 
 #images

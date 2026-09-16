@@ -15,6 +15,7 @@ class HypothesisGraphResponse(BaseModel):
     enrich_id: str | None = None
     project_id: str | None = None
     forked: bool = False
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class HypothesisChatResponse(BaseModel):
