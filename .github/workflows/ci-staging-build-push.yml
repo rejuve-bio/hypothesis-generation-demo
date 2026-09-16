@@ -13,8 +13,17 @@ env:
   DOCKER_HUB_ORG: rejuvebio
 
 jobs:
+  # Unit test suite (reusable workflow, see run-tests.yml)
+  run-tests:
+    uses: ./.github/workflows/run-tests.yml
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
   # SonarQube Code Quality Analysis
   code-quality-analysis:
+    needs: [run-tests]
     runs-on: [self-hosted, dev-runner]
     if: github.event_name == 'pull_request' || github.event_name == 'push'
 
@@ -32,19 +41,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest pytest-cov pylint
+        pip install pylint
 
-    - name: Run tests with coverage
-      env:
-        MONGODB_URI: mongodb://localhost:27017
-        DB_NAME: test
-        OPENAI_API_KEY: dummy-key-for-ci
-        ANTHROPIC_API_KEY: dummy-key-for-ci
-        HF_TOKEN: dummy-token-for-ci
-        JWT_SECRET_KEY: test-secret-key
-        JWT_SECRET: test-secret
-      run: |
-        pytest --cov=. --cov-report=xml --cov-report=html . || echo "No tests found, skipping coverage"
+    - name: Download coverage report from run-tests
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: test-reports
 
     - name: Run pylint
       run: |
@@ -63,6 +66,7 @@ jobs:
           -Dsonar.host.url=http://${{ secrets.HETZNER_IP }}:9000
           -Dsonar.token=${{ secrets.SONAR_TOKEN }}
           -Dsonar.python.pylint.reportPaths=pylint-report.json
+          -Dsonar.python.coverage.reportPaths=coverage.xml
           -Dsonar.exclusions=**/venv/**,**/__pycache__/**,**/data/**,**/pl/**,**/prolog_out_ci/**,**/external_data_ci/**,.github/**
 
     - name: SonarQube Quality Gate Check
@@ -73,18 +77,15 @@ jobs:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       continue-on-error: true
 
-    - name: Upload coverage reports
+    - name: Upload pylint report
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: coverage-reports
-        path: |
-          coverage.xml
-          htmlcov/
-          pylint-report.json
+        name: pylint-report
+        path: pylint-report.json
 
   build-and-test-all:
-    needs: [code-quality-analysis]
+    needs: [run-tests, code-quality-analysis]
     if: |
       (github.event_name == 'pull_request') ||
       (github.event_name == 'push')
