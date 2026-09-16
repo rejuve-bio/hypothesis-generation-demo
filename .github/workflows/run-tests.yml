@@ -1,0 +1,70 @@
+name: Run Unit Tests
+
+on:
+  workflow_call:
+    outputs:
+      tests-outcome:
+        description: "Outcome of the pytest step (success/failure)"
+        value: ${{ jobs.run-tests.outputs.tests-outcome }}
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  run-tests:
+    runs-on: [self-hosted, dev-runner]
+
+    outputs:
+      tests-outcome: ${{ steps.pytest.outcome }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+
+    - name: Set up Python
+      run: uv python install 3.10
+
+    - name: Install project dependencies (incl. dev/test extras)
+      run: uv sync --frozen --extra dev
+
+    - name: Run pytest
+      id: pytest
+      env:
+        MONGODB_URI: mongodb://localhost:27017
+        DB_NAME: test
+        OPENAI_API_KEY: dummy-key-for-ci
+        ANTHROPIC_API_KEY: dummy-key-for-ci
+        HF_TOKEN: dummy-token-for-ci
+        JWT_SECRET_KEY: test-secret-key
+        JWT_SECRET: test-secret
+      run: |
+        uv run --with pytest-cov pytest tests/ \
+          --continue-on-collection-errors \
+          --cov=src --cov-report=xml --cov-report=html \
+          --junitxml=junit.xml -v
+
+    - name: Publish test results
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: Pytest Results
+        path: junit.xml
+        reporter: java-junit
+        fail-on-error: 'false'
+
+    - name: Upload coverage and test reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-reports
+        path: |
+          junit.xml
+          coverage.xml
+          htmlcov/
