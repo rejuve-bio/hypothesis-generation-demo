@@ -20,7 +20,7 @@ jobs:
       - name: Setup kubectl
         run: |
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_STAGING }}" > ~/.kube/config
+          echo "${{ secrets.KUBECONFIG_DEV }}" > ~/.kube/config
           chmod 600 ~/.kube/config
           echo "KUBECONFIG=$HOME/.kube/config" >> $GITHUB_ENV
 
