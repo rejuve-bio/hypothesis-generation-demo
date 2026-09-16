@@ -58,12 +58,12 @@ jobs:
       uses: sonarsource/sonarqube-scan-action@master
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: http://${{ secrets.HETZNER_IP }}:9000
+        SONAR_HOST_URL: https://dev.rejuve.bio:5058
       with:
         args: >
           -Dsonar.projectKey=hypothesis-generation-demo
           -Dsonar.sources=.
-          -Dsonar.host.url=http://${{ secrets.HETZNER_IP }}:9000
+          -Dsonar.host.url=https://dev.rejuve.bio:5058
           -Dsonar.token=${{ secrets.SONAR_TOKEN }}
           -Dsonar.python.pylint.reportPaths=pylint-report.json
           -Dsonar.python.coverage.reportPaths=coverage.xml
