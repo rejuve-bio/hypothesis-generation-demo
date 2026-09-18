@@ -38,6 +38,13 @@ CENSUS_VERSION = "2024-07-01"
 _TISSUE_CONTEXT_CACHE: dict = {}
 _TISSUE_CONTEXT_LOCK = threading.Lock()
 
+# all_genes_list is the full, unfiltered Census feature list — it's
+# tissue-independent (identical for every tissue at a given CENSUS_VERSION),
+# so it's cached once per version here and on disk (see
+# _all_genes_cache_path), instead of being duplicated into every tissue's
+# meta.json.
+_ALL_GENES_CACHE: dict = {}
+
 # Per-tissue locks so concurrent calls for the SAME cold tissue don't both
 # download+write at once (the shared _TISSUE_CONTEXT_LOCK above only ever
 # guards the dict access itself, not the disk-load/Census-build/disk-save
@@ -336,6 +343,60 @@ def _resolved_fingerprint(resolved: ResolvedCensusCellFilter) -> str:
     return hashlib.sha256(fingerprint.encode()).hexdigest()[:12]
 
 
+def _all_genes_cache_path(cache_dir: Path) -> Path:
+    """Shared, tissue-independent cache file for the full Census feature
+    list — one per CENSUS_VERSION, reused across every tissue instead of
+    being duplicated into each tissue's meta.json."""
+    return cache_dir / f"all_genes__{CENSUS_VERSION}.json"
+
+
+def _load_all_genes_list(cache_dir: Path) -> Optional[list]:
+    """Return the shared all-genes list, checking the in-process cache
+    first, then disk. Returns None on a cold cache (caller must then build
+    it from Census)."""
+    with _TISSUE_CONTEXT_LOCK:
+        cached = _ALL_GENES_CACHE.get(CENSUS_VERSION)
+    if cached is not None:
+        return cached
+
+    path = _all_genes_cache_path(cache_dir)
+    if not path.exists():
+        return None
+    try:
+        all_genes_list = json.loads(path.read_text())
+    except Exception as e:
+        logger.warning(f"[Census cache] Failed to load shared all_genes list: {e}. Will rebuild.")
+        return None
+
+    with _TISSUE_CONTEXT_LOCK:
+        _ALL_GENES_CACHE[CENSUS_VERSION] = all_genes_list
+    return all_genes_list
+
+
+def _save_all_genes_list(cache_dir: Path, all_genes_list: list) -> None:
+    """Persist the shared all-genes list once per CENSUS_VERSION. A no-op
+    if it's already on disk — it's tissue-independent, so once written for
+    this version it never needs to be rewritten."""
+    with _TISSUE_CONTEXT_LOCK:
+        _ALL_GENES_CACHE[CENSUS_VERSION] = all_genes_list
+
+    path = _all_genes_cache_path(cache_dir)
+    if path.exists():
+        return
+    tmp_path = path.with_name(path.name + f".tmp-{uuid.uuid4().hex}")
+    try:
+        tmp_path.write_text(json.dumps(all_genes_list))
+        os.replace(tmp_path, path)
+        logger.info(f"[Census cache] Cached shared all_genes list ({len(all_genes_list)} genes) at {path}")
+    except Exception as e:
+        logger.warning(f"[Census cache] Failed to persist shared all_genes list: {e}")
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+
+
 def _tissue_cache_paths(cell_type: str, config, resolved: Optional[ResolvedCensusCellFilter] = None) -> dict:
     """Where the (cells x genes) raw-count matrix for a tissue is cached on
     disk, keyed by cell type + Census version + (when available) a
@@ -366,13 +427,28 @@ def _load_tissue_context_from_disk(
         cell_sums = np.load(paths["cellsums"])
         matrix = sparse.load_npz(paths["matrix"])
         genes = meta["genes"]
+
+        # all_genes_list is version-scoped, not tissue-scoped — it lives in
+        # a shared file (see _load_all_genes_list), not in this tissue's
+        # meta.json. Fall back to an old-format meta.json (from before this
+        # was split out) if the shared file isn't there for some reason.
+        all_genes_list = _load_all_genes_list(paths["matrix"].parent)
+        if all_genes_list is None:
+            all_genes_list = meta.get("all_genes_list")
+        if all_genes_list is None:
+            logger.warning(
+                f"[Census cache] Cached matrix for {cell_type!r} exists but the shared "
+                "all_genes list is missing. Will re-download from Census."
+            )
+            return None
+
         return _TissueCoexpressionContext(
             cell_type=cell_type,
             obs_joinids=obs_joinids,
             cell_sums=cell_sums,
             genes=genes,
             gene_index={g: i for i, g in enumerate(genes)},
-            all_genes_list=meta["all_genes_list"],
+            all_genes_list=all_genes_list,
             matrix=matrix,
         )
     except Exception as e:
@@ -476,13 +552,18 @@ def _save_tissue_context_to_disk(
             np.save(f, context.obs_joinids)
         with open(tmp_paths["cellsums"], "wb") as f:
             np.save(f, context.cell_sums)
+        # all_genes_list is tissue-independent (identical across every
+        # tissue for this CENSUS_VERSION) — it's persisted once, separately,
+        # via _save_all_genes_list, instead of being duplicated into every
+        # tissue's meta.json.
         tmp_paths["meta"].write_text(json.dumps({
             "genes": context.genes,
-            "all_genes_list": context.all_genes_list,
         }))
 
         for key in paths:
             os.replace(tmp_paths[key], paths[key])
+
+        _save_all_genes_list(paths["matrix"].parent, context.all_genes_list)
 
         logger.info(f"[Census cache] Cached coexpression matrix for {context.cell_type!r} at {paths['matrix']}")
         just_saved_key = paths["meta"].name[: -len(".meta.json")]

@@ -17,7 +17,9 @@ can verify, without any network access:
   4. Cache entries are correctly scoped per tissue.
 """
 import concurrent.futures
+import json
 import threading
+from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
@@ -226,14 +228,19 @@ def _fake_axis_query_for_resolved(experiment, resolved):
 @pytest.fixture(autouse=True)
 def _clear_tissue_caches():
     """Every test starts and ends with clean in-process caches, so tests
-    don't leak state into each other."""
+    don't leak state into each other. This includes _ALL_GENES_CACHE, which
+    is keyed by CENSUS_VERSION (not by tmp_path), so it would otherwise leak
+    a previous test's shared all_genes list across tests in the same
+    pytest process."""
     with ge._TISSUE_CONTEXT_LOCK:
         ge._TISSUE_CONTEXT_CACHE.clear()
+        ge._ALL_GENES_CACHE.clear()
     with ge._TISSUE_LOCKS_GUARD:
         ge._TISSUE_LOCKS.clear()
     yield
     with ge._TISSUE_CONTEXT_LOCK:
         ge._TISSUE_CONTEXT_CACHE.clear()
+        ge._ALL_GENES_CACHE.clear()
     with ge._TISSUE_LOCKS_GUARD:
         ge._TISSUE_LOCKS.clear()
 
@@ -324,6 +331,31 @@ def test_different_tissue_triggers_its_own_download(census_double):
 
     assert double.download_log["big_matrix_reads"] == 2
     assert double.download_log["open_soma_calls"] == 2
+
+
+def test_all_genes_list_is_shared_once_per_version_not_duplicated_per_tissue(census_double):
+    """all_genes_list is tissue-independent (identical Census feature list
+    for every tissue at a given CENSUS_VERSION), so it must be written to a
+    single shared file once, not duplicated into every tissue's meta.json —
+    and every tissue must still get the correct (identical) list back."""
+    double, fake_config = census_double
+
+    _, _, all_genes_t1 = ge.get_coexpression_matrix_for_tissue.fn("GENE_A", "TissueT1", k=5)
+    _, _, all_genes_t2 = ge.get_coexpression_matrix_for_tissue.fn("GENE_A", "TissueT2", k=5)
+
+    assert sorted(all_genes_t1) == sorted(GENE_IDS)
+    assert sorted(all_genes_t2) == sorted(GENE_IDS)
+
+    cache_dir = Path(fake_config.census_cache_dir)
+    shared_files = list(cache_dir.glob(f"all_genes__{ge.CENSUS_VERSION}.json"))
+    assert len(shared_files) == 1, f"expected exactly one shared all_genes file, found {shared_files}"
+
+    # No per-tissue meta.json should carry its own copy of all_genes_list.
+    for meta_path in cache_dir.glob("*.meta.json"):
+        meta = json.loads(meta_path.read_text())
+        assert "all_genes_list" not in meta, (
+            f"{meta_path.name} should not duplicate all_genes_list — it belongs in the shared file"
+        )
 
 
 def test_concurrent_calls_for_same_cold_tissue_download_exactly_once(monkeypatch, tmp_path):
