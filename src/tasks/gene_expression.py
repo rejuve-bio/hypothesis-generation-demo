@@ -383,10 +383,20 @@ def _load_tissue_context_from_disk(
         return None
 
 
-def _enforce_cache_size_limit(cache_dir: Path, max_bytes: Optional[int]) -> None:
+def _enforce_cache_size_limit(
+    cache_dir: Path, max_bytes: Optional[int], protected_key: Optional[str] = None
+) -> None:
     """Evict the least-recently-written cached tissues (by their meta.json
     mtime) until the cache directory's total size is back under max_bytes.
-    Simple, dependency-free LRU-by-mtime — no external cache library."""
+    Simple, dependency-free LRU-by-mtime — no external cache library.
+
+    ``protected_key`` (the tissue that was *just* saved by the caller) is
+    never a candidate for eviction here — otherwise a single cache cycle
+    could evict the entry it just finished writing (e.g. if that one
+    tissue's cache alone exceeds max_bytes, or exceeds what's left after
+    evicting everything else). If the cache is still over cap once every
+    other entry has been evicted, we log a warning and keep the freshly
+    written data rather than silently deleting it."""
     if not max_bytes or max_bytes <= 0:
         return
 
@@ -409,6 +419,9 @@ def _enforce_cache_size_limit(cache_dir: Path, max_bytes: Optional[int]) -> None
     except OSError as e:
         logger.warning(f"[Census cache] Could not list cache dir {cache_dir} for eviction: {e}")
         return
+
+    protected_meta_name = f"{protected_key}.meta.json" if protected_key else None
+    meta_files = [p for p in meta_files if p.name != protected_meta_name]
 
     logger.info(
         f"[Census cache] Cache size {total} bytes exceeds cap {max_bytes} bytes — evicting oldest tissues"
@@ -433,6 +446,13 @@ def _enforce_cache_size_limit(cache_dir: Path, max_bytes: Optional[int]) -> None
                 logger.warning(f"[Census cache] Failed to evict {f}: {e}")
         total -= freed
         logger.info(f"[Census cache] Evicted cached tissue {key!r}, freed {freed} bytes")
+
+    if total > max_bytes and protected_key is not None:
+        logger.warning(
+            f"[Census cache] Cache size {total} bytes still exceeds cap {max_bytes} bytes "
+            f"after evicting every other entry — keeping the just-cached tissue {protected_key!r} "
+            "rather than deleting the data it just wrote."
+        )
 
 
 def _save_tissue_context_to_disk(
@@ -465,7 +485,12 @@ def _save_tissue_context_to_disk(
             os.replace(tmp_paths[key], paths[key])
 
         logger.info(f"[Census cache] Cached coexpression matrix for {context.cell_type!r} at {paths['matrix']}")
-        _enforce_cache_size_limit(paths["matrix"].parent, getattr(config, "census_cache_max_bytes", None))
+        just_saved_key = paths["meta"].name[: -len(".meta.json")]
+        _enforce_cache_size_limit(
+            paths["matrix"].parent,
+            getattr(config, "census_cache_max_bytes", None),
+            protected_key=just_saved_key,
+        )
     except Exception as e:
         logger.warning(f"[Census cache] Failed to persist cache for {context.cell_type!r}: {e}")
         for tmp_path in tmp_paths.values():

@@ -415,3 +415,44 @@ def test_cache_eviction_removes_oldest_tissue_when_over_size_cap(monkeypatch, tm
     assert any("TissueNew" in k for k in remaining_keys), (
         f"expected the newer tissue's cache entry to survive, remaining: {remaining_keys}"
     )
+
+
+def test_freshly_saved_tissue_survives_even_if_it_alone_exceeds_cap(monkeypatch, tmp_path):
+    """Edge case: a single tissue's cache is written, and its size alone
+    already exceeds census_cache_max_bytes. The freshly-saved entry must be
+    excluded from eviction (there's nothing older to evict instead) and
+    survive, rather than being deleted moments after being written."""
+    double = FakeCensusDouble()
+
+    fake_config = type("FakeConfig", (), {})()
+    fake_config.census_cache_dir = str(tmp_path)
+    fake_config.data_dir = str(tmp_path)
+    fake_config.repo_root = "."
+    fake_config.catlas_celltype_cl_mapping_json = "x"
+    fake_config.catlas_abc_aliases_tsv = "y"
+    # Cap smaller than any single tissue's cache size, so the very act of
+    # saving the first (and only) tissue immediately exceeds the cap.
+    fake_config.census_cache_max_bytes = 1
+
+    monkeypatch.setattr(ge.cellxgene_census, "open_soma", double.open_soma)
+    monkeypatch.setattr(ge, "resolve_ldsc_for_census", _fake_resolve_ldsc_for_census)
+    monkeypatch.setattr(ge, "_census_obs_axis_query_for_resolved", _fake_axis_query_for_resolved)
+    monkeypatch.setattr(ge.Config, "from_env", classmethod(lambda cls: fake_config))
+
+    ge.get_coexpression_matrix_for_tissue.fn("GENE_A", "TissueOnly", k=5)
+
+    from pathlib import Path
+    remaining = list(Path(fake_config.census_cache_dir).glob("*.meta.json"))
+    remaining_keys = {f.name[: -len(".meta.json")] for f in remaining}
+
+    assert any("TissueOnly" in k for k in remaining_keys), (
+        f"expected the freshly-cached tissue to survive even though it alone exceeds the cap, "
+        f"remaining: {remaining_keys}"
+    )
+
+    # And the in-process cache must agree — a subsequent call for the same
+    # gene/tissue should hit the (still-present) disk cache, not re-download.
+    with ge._TISSUE_CONTEXT_LOCK:
+        ge._TISSUE_CONTEXT_CACHE.clear()
+    ge.get_coexpression_matrix_for_tissue.fn("GENE_A", "TissueOnly", k=5)
+    assert double.download_log["big_matrix_reads"] == 1
