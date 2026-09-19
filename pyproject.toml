@@ -59,6 +59,7 @@ dependencies = [
     "dependency-injector>=4.41",
     "fastapi-mail>=1.4.0",
     "psycopg2-binary>=2.9.9",
+    "filelock>=3.13.0",
 ]
 
 [project.optional-dependencies]
