@@ -226,6 +226,7 @@ data/ldsc_test
 data/gene_expression
 data/temp/
 data/ontology
+data/census_cache
 .nextflow.*
 .nextflow/
 data/harmonizer_ref/
