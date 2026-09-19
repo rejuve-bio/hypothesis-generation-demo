@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import cellxgene_census
+import filelock
 import numpy as np
 import pandas as pd
 import tiledbsoma as soma
@@ -459,12 +460,46 @@ def _load_tissue_context_from_disk(
         return None
 
 
+_CACHE_LOCK_TIMEOUT_SECONDS = 60
+
+
+def _cache_lock_path(cache_dir: Path) -> Path:
+    return cache_dir / ".cache.lock"
+
+
+def _cache_lock(cache_dir: Path) -> filelock.FileLock:
+    """Cross-process (and cross-thread) lock guarding the publish (rename)
+    + eviction cycle for a tissue's cache entry.
+
+    This task runs via DaskTaskRunner, and Dask workers are separate OS
+    processes (see docker-compose's dask-worker), not just threads within
+    one process — so an in-process threading.Lock alone cannot prevent two
+    different tissues' publish+evict cycles (in different processes, or
+    different threads of the same process) from interleaving. Concretely,
+    without this lock: tissue A's eviction pass can glob the directory
+    while tissue B's rename-into-place is only partially complete, or A's
+    eviction can run in the gap after B's rename finishes but before B gets
+    a chance to protect itself via its own protected_key — in both cases A
+    can delete B's just-published (or being-published) files. Wrapping the
+    whole rename+evict sequence in one file lock, acquired here with the
+    *same lock file path* across every process touching this cache_dir,
+    fully serializes those critical sections via the OS-level lock
+    (fcntl.flock under the hood on POSIX), closing the race regardless of
+    whether the callers are threads or separate processes."""
+    return filelock.FileLock(str(_cache_lock_path(cache_dir)), timeout=_CACHE_LOCK_TIMEOUT_SECONDS)
+
+
 def _enforce_cache_size_limit(
     cache_dir: Path, max_bytes: Optional[int], protected_key: Optional[str] = None
 ) -> None:
     """Evict the least-recently-written cached tissues (by their meta.json
     mtime) until the cache directory's total size is back under max_bytes.
     Simple, dependency-free LRU-by-mtime — no external cache library.
+
+    Callers must hold _cache_lock(cache_dir) for the duration of this call
+    (see _save_tissue_context_to_disk) — this function does not lock on its
+    own, since it needs to run as part of the same locked critical section
+    as the publish (rename) step that precedes it.
 
     ``protected_key`` (the tissue that was *just* saved by the caller) is
     never a candidate for eviction here — otherwise a single cache cycle
@@ -479,7 +514,12 @@ def _enforce_cache_size_limit(
     def _dir_size() -> int:
         total = 0
         for f in cache_dir.iterdir():
-            if f.is_file():
+            # Skip in-flight ".tmp-<uuid>" files from a concurrent save —
+            # they're not yet part of any committed cache entry (and will
+            # either be renamed into place, counting then, or cleaned up on
+            # failure), so counting them here would inflate the measured
+            # total based on transient, uncommitted state.
+            if f.is_file() and ".tmp-" not in f.name:
                 try:
                     total += f.stat().st_size
                 except OSError:
@@ -539,8 +579,16 @@ def _save_tissue_context_to_disk(
     into its final path once fully written. A concurrent reader's
     `all(p.exists())` check in _load_tissue_context_from_disk therefore
     never observes a torn/partial file — a path only appears at its final
-    name once its contents are complete."""
+    name once its contents are complete.
+
+    The expensive part (serializing the matrix/obs/cellsums to temp files)
+    happens unlocked, so different tissues can do this concurrently. Only
+    the publish (rename into place) + eviction cycle is wrapped in the
+    cross-process _cache_lock — see that function's docstring for why an
+    in-process lock alone isn't enough here (Dask runs this across separate
+    worker processes, not just threads)."""
     paths = _tissue_cache_paths(context.cell_type, config, resolved)
+    cache_dir = paths["matrix"].parent
     tmp_suffix = uuid.uuid4().hex
     tmp_paths = {k: p.with_name(p.name + f".tmp-{tmp_suffix}") for k, p in paths.items()}
     try:
@@ -560,18 +608,35 @@ def _save_tissue_context_to_disk(
             "genes": context.genes,
         }))
 
-        for key in paths:
-            os.replace(tmp_paths[key], paths[key])
+        try:
+            with _cache_lock(cache_dir):
+                for key in paths:
+                    os.replace(tmp_paths[key], paths[key])
 
-        _save_all_genes_list(paths["matrix"].parent, context.all_genes_list)
+                _save_all_genes_list(cache_dir, context.all_genes_list)
 
-        logger.info(f"[Census cache] Cached coexpression matrix for {context.cell_type!r} at {paths['matrix']}")
-        just_saved_key = paths["meta"].name[: -len(".meta.json")]
-        _enforce_cache_size_limit(
-            paths["matrix"].parent,
-            getattr(config, "census_cache_max_bytes", None),
-            protected_key=just_saved_key,
-        )
+                logger.info(
+                    f"[Census cache] Cached coexpression matrix for {context.cell_type!r} at {paths['matrix']}"
+                )
+                just_saved_key = paths["meta"].name[: -len(".meta.json")]
+                _enforce_cache_size_limit(
+                    cache_dir,
+                    getattr(config, "census_cache_max_bytes", None),
+                    protected_key=just_saved_key,
+                )
+        except filelock.Timeout:
+            # Another process/thread held the lock past our timeout. Publish
+            # unlocked rather than lose this tissue's cache entirely — worst
+            # case is a skipped eviction pass this cycle (the next successful
+            # save elsewhere will run one), not data loss or corruption,
+            # since each individual os.replace is still independently atomic.
+            logger.warning(
+                f"[Census cache] Timed out waiting for cache lock while publishing "
+                f"{context.cell_type!r}; publishing without eviction this cycle."
+            )
+            for key in paths:
+                os.replace(tmp_paths[key], paths[key])
+            _save_all_genes_list(cache_dir, context.all_genes_list)
     except Exception as e:
         logger.warning(f"[Census cache] Failed to persist cache for {context.cell_type!r}: {e}")
         for tmp_path in tmp_paths.values():

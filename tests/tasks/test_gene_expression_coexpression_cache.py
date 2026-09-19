@@ -18,6 +18,7 @@ can verify, without any network access:
 """
 import concurrent.futures
 import json
+import multiprocessing
 import threading
 from pathlib import Path
 
@@ -488,3 +489,100 @@ def test_freshly_saved_tissue_survives_even_if_it_alone_exceeds_cap(monkeypatch,
         ge._TISSUE_CONTEXT_CACHE.clear()
     ge.get_coexpression_matrix_for_tissue.fn("GENE_A", "TissueOnly", k=5)
     assert double.download_log["big_matrix_reads"] == 1
+
+
+def _mp_save_tissue_worker(barrier, tissue_name: str) -> None:
+    """Module-level (picklable/fork-safe) worker: runs in its own OS
+    process, saving one tissue's cache entry. Relies on the parent test
+    process's monkeypatches (cellxgene_census.open_soma, etc.) being
+    inherited via fork's copy-on-write semantics — no re-patching needed
+    here, since fork duplicates the already-patched module state.
+
+    Waits on a shared Barrier immediately before starting, so every worker
+    begins at the same instant — without this, process-start jitter alone
+    is enough to let each save complete before the next one begins, which
+    never exercises the actual interleaving the race depends on."""
+    barrier.wait()
+    ge.get_coexpression_matrix_for_tissue.fn("GENE_A", tissue_name, k=5)
+
+
+def test_cross_process_concurrent_saves_respect_cache_cap(monkeypatch, tmp_path):
+    """Reproduces the race Tesnim found: several different tissues saving
+    concurrently from SEPARATE OS PROCESSES (not just threads — Dask
+    workers are separate processes, so an in-process threading.Lock cannot
+    prevent one tissue's eviction pass from sweeping up another tissue's
+    concurrently-in-flight or just-published cache entry) under a cap sized
+    for only a few of them.
+
+    Verifies the final on-disk cache: (a) never balloons far past the
+    configured cap, and (b) never contains a torn/partial entry (missing
+    one of its 4 files) as a result of losing a race mid-publish."""
+    if multiprocessing.get_start_method(allow_none=True) not in (None, "fork"):
+        pytest.skip("test relies on fork-based multiprocessing (inherits monkeypatches via COW)")
+
+    # A small delay per Census "read" call widens the race window enough to
+    # actually exercise interleaving between processes — the synthetic
+    # dataset is tiny and writes near-instantly otherwise, which (unlike a
+    # real multi-second Census download) doesn't give concurrent processes
+    # enough overlap to race against each other.
+    double = FakeCensusDouble(download_delay=0.05)
+
+    fake_config = type("FakeConfig", (), {})()
+    fake_config.census_cache_dir = str(tmp_path)
+    fake_config.data_dir = str(tmp_path)
+    fake_config.repo_root = "."
+    fake_config.catlas_celltype_cl_mapping_json = "x"
+    fake_config.catlas_abc_aliases_tsv = "y"
+    fake_config.census_cache_max_bytes = 0  # sized below, once we know one entry's footprint
+
+    monkeypatch.setattr(ge.cellxgene_census, "open_soma", double.open_soma)
+    monkeypatch.setattr(ge, "resolve_ldsc_for_census", _fake_resolve_ldsc_for_census)
+    monkeypatch.setattr(ge, "_census_obs_axis_query_for_resolved", _fake_axis_query_for_resolved)
+    monkeypatch.setattr(ge.Config, "from_env", classmethod(lambda cls: fake_config))
+
+    # Measure one tissue's on-disk footprint, then remove it and size the
+    # cap to fit roughly 4 of the 8 tissues we're about to save concurrently.
+    ge.get_coexpression_matrix_for_tissue.fn("GENE_A", "SizerTissue", k=5)
+    sizer_files = [p for p in tmp_path.iterdir() if "SizerTissue" in p.name]
+    one_tissue_size = sum(p.stat().st_size for p in sizer_files)
+    for p in sizer_files:
+        p.unlink()
+    with ge._TISSUE_CONTEXT_LOCK:
+        ge._TISSUE_CONTEXT_CACHE.clear()
+
+    fake_config.census_cache_max_bytes = int(one_tissue_size * 4.5)
+
+    n_tissues = 8
+    tissue_names = [f"Tissue{i}" for i in range(n_tissues)]
+    ctx = multiprocessing.get_context("fork")
+    barrier = ctx.Barrier(n_tissues)
+    procs = [ctx.Process(target=_mp_save_tissue_worker, args=(barrier, name)) for name in tissue_names]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=60)
+        assert p.exitcode == 0, f"worker process for a tissue save failed with exitcode {p.exitcode}"
+
+    remaining_meta = list(tmp_path.glob("*.meta.json"))
+    surviving_keys = {p.name[: -len(".meta.json")] for p in remaining_meta}
+    assert len(surviving_keys) >= 1, "expected at least one tissue's cache entry to survive"
+
+    # No torn/partial entries: every surviving tissue must have all 4 files.
+    for key in surviving_keys:
+        for ext in (".matrix.npz", ".obs_joinids.npy", ".cell_sums.npy"):
+            assert (tmp_path / f"{key}{ext}").exists(), (
+                f"surviving cache entry {key!r} is missing {ext} — torn/partial entry from a lost race"
+            )
+
+    total_size = sum(
+        f.stat().st_size for f in tmp_path.iterdir()
+        if f.is_file() and ".tmp-" not in f.name and not f.name.endswith(".lock")
+    )
+    # Slack: the cap only bounds per-tissue entries; the one shared
+    # all_genes file plus the "always keep the entry you just wrote" floor
+    # both add a bounded amount of unavoidable overhead on top of the cap.
+    max_allowed = fake_config.census_cache_max_bytes + one_tissue_size + 2_000_000
+    assert total_size <= max_allowed, (
+        f"cache grew to {total_size} bytes, past cap {fake_config.census_cache_max_bytes} "
+        f"(+ slack {max_allowed - fake_config.census_cache_max_bytes}) — eviction race not fixed"
+    )
