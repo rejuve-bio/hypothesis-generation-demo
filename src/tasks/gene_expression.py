@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
@@ -489,12 +490,40 @@ def _cache_lock(cache_dir: Path) -> filelock.FileLock:
     return filelock.FileLock(str(_cache_lock_path(cache_dir)), timeout=_CACHE_LOCK_TIMEOUT_SECONDS)
 
 
+_STALE_TMP_MAX_AGE_SECONDS = 3600  # legitimate writes finish in seconds
+
+
+def _sweep_stale_tmp_files(cache_dir: Path, max_age_seconds: int = _STALE_TMP_MAX_AGE_SECONDS) -> None:
+    """Remove orphaned ".tmp-<uuid>" files left behind by a save that never
+    completed — a process hard-killed mid-write (OOM, ``docker compose down
+    -t 0``, a reaped Dask worker, etc.) can leave one of these stuck
+    forever. _dir_size() (below) deliberately excludes in-flight ".tmp-"
+    files from cap accounting so a normal concurrent save-in-progress isn't
+    double-counted, but that same exclusion means an orphaned one is
+    invisible to the cap and would otherwise silently consume disk space
+    outside census_cache_max_bytes indefinitely. Legitimate writes rename
+    into place within seconds, so anything older than max_age_seconds is
+    safe to assume abandoned."""
+    now = time.time()
+    for f in cache_dir.glob("*.tmp-*"):
+        try:
+            if f.is_file() and (now - f.stat().st_mtime) > max_age_seconds:
+                f.unlink()
+                logger.info(f"[Census cache] Swept stale orphaned temp file {f.name!r}")
+        except OSError as e:
+            logger.warning(f"[Census cache] Failed to sweep stale temp file {f}: {e}")
+
+
 def _enforce_cache_size_limit(
     cache_dir: Path, max_bytes: Optional[int], protected_key: Optional[str] = None
 ) -> None:
     """Evict the least-recently-written cached tissues (by their meta.json
     mtime) until the cache directory's total size is back under max_bytes.
     Simple, dependency-free LRU-by-mtime — no external cache library.
+
+    Also sweeps stale orphaned ".tmp-*" files on every call (see
+    _sweep_stale_tmp_files) — this is the natural place, since it already
+    runs under the cache lock on every save cycle.
 
     Callers must hold _cache_lock(cache_dir) for the duration of this call
     (see _save_tissue_context_to_disk) — this function does not lock on its
@@ -508,6 +537,8 @@ def _enforce_cache_size_limit(
     evicting everything else). If the cache is still over cap once every
     other entry has been evicted, we log a warning and keep the freshly
     written data rather than silently deleting it."""
+    _sweep_stale_tmp_files(cache_dir)
+
     if not max_bytes or max_bytes <= 0:
         return
 

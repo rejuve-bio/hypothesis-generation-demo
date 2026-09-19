@@ -19,7 +19,9 @@ can verify, without any network access:
 import concurrent.futures
 import json
 import multiprocessing
+import os
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -404,6 +406,31 @@ def test_atomic_save_leaves_no_tmp_files_behind(census_double):
     files = list(Path(fake_config.census_cache_dir).iterdir())
     assert files, "expected cache files to have been written"
     assert not any(".tmp-" in f.name for f in files), f"leftover tmp files: {files}"
+
+
+def test_stale_tmp_files_are_swept_but_fresh_ones_are_left_alone(census_double):
+    """A .tmp-<uuid> file left behind by a process that was hard-killed
+    mid-write (OOM, docker compose down -t 0, a reaped Dask worker) should
+    get cleaned up on the next save cycle once it's old enough to be
+    unambiguously abandoned — but a genuinely fresh in-flight temp file
+    (a concurrent save actually in progress) must NOT be swept."""
+    double, fake_config = census_double
+    cache_dir = Path(fake_config.census_cache_dir)
+
+    stale_tmp = cache_dir / "OrphanedTissue__2024-07-01__deadbeef.matrix.npz.tmp-abc123"
+    stale_tmp.write_bytes(b"leftover from a crashed process")
+    old_time = time.time() - (ge._STALE_TMP_MAX_AGE_SECONDS + 60)
+    os.utime(stale_tmp, (old_time, old_time))
+
+    fresh_tmp = cache_dir / "OtherTissue__2024-07-01__cafef00d.matrix.npz.tmp-def456"
+    fresh_tmp.write_bytes(b"a save that is genuinely still in progress")
+
+    # Triggers _enforce_cache_size_limit (and therefore the sweep) as a
+    # side effect of a normal save.
+    ge.get_coexpression_matrix_for_tissue.fn("GENE_A", "TissueT1", k=5)
+
+    assert not stale_tmp.exists(), "stale orphaned tmp file should have been swept"
+    assert fresh_tmp.exists(), "a genuinely fresh in-flight tmp file must not be swept"
 
 
 def test_cache_eviction_removes_oldest_tissue_when_over_size_cap(monkeypatch, tmp_path):
