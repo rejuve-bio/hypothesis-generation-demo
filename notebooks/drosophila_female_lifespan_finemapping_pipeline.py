@@ -64,6 +64,8 @@ NUMERIC_COLUMNS = ["POS", "freq", "b", "se", "p", "N"]
 COJO_COLUMNS = ["SNP", "A1", "A2", "freq", "b", "se", "p", "N"]
 COJO_RESULT_COLUMNS = ["Chr", "SNP", "bp", "b", "p", "bJ", "pJ"]
 COJO_RESULT_NUMERIC_COLUMNS = ["Chr", "bp", "b", "p", "bJ", "pJ"]
+SUSIE_SUMMARY_COLUMNS = ["SNP", "b", "se", "p", "N"]
+SUSIE_NUMERIC_COLUMNS = ["b", "se", "p", "N"]
 
 
 # %% [markdown]
@@ -350,6 +352,36 @@ def region_label(region_file: Path) -> str:
     if not region_file.stem.endswith(suffix):
         raise ValueError(f"Invalid fine-mapping region filename: {region_file.name}")
     return region_file.stem.removesuffix(suffix)
+
+
+def load_region_summary(region_file: Path) -> pd.DataFrame:
+    region = pd.read_csv(region_file, sep="\t", low_memory=False)
+    missing_columns = sorted(set(SUSIE_SUMMARY_COLUMNS) - set(region.columns))
+    if missing_columns:
+        raise ValueError(f"{region_file} is missing columns: {', '.join(missing_columns)}")
+    if region.empty:
+        raise ValueError(f"Fine-mapping region is empty: {region_file}")
+
+    region = region.copy()
+    for column in SUSIE_NUMERIC_COLUMNS:
+        region[column] = pd.to_numeric(region[column], errors="coerce")
+    if not np.isfinite(region[SUSIE_NUMERIC_COLUMNS].to_numpy(dtype=float)).all():
+        raise ValueError(f"Fine-mapping region contains invalid numeric values: {region_file}")
+    if (region["se"] <= 0).any():
+        raise ValueError(f"Fine-mapping region contains non-positive standard errors: {region_file}")
+    if not region["p"].between(0, 1).all():
+        raise ValueError(f"Fine-mapping region contains P-values outside [0, 1]: {region_file}")
+
+    rounded_sample_size = np.rint(region["N"])
+    if not np.allclose(region["N"], rounded_sample_size) or (rounded_sample_size <= 0).any():
+        raise ValueError(f"Fine-mapping region contains invalid sample sizes: {region_file}")
+    region["N"] = rounded_sample_size.astype(int)
+
+    duplicate_snps = region.loc[region["SNP"].duplicated(keep=False), "SNP"].unique()
+    if len(duplicate_snps):
+        duplicate_list = ", ".join(map(str, duplicate_snps[:5]))
+        raise ValueError(f"Fine-mapping region contains duplicate SNP IDs: {duplicate_list}")
+    return region
 
 
 # %% [markdown]
