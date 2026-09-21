@@ -456,6 +456,47 @@ def extract_region_bfile(
     return output_prefix
 
 
+def compute_region_ld(
+    bfile_prefix: Path, plink_bin: str = PLINK_BIN, force: bool = False
+) -> Path:
+    genotype_files = [bfile_prefix.with_suffix(ext) for ext in (".bed", ".bim", ".fam")]
+    missing_genotypes = [path for path in genotype_files if not path.is_file()]
+    if missing_genotypes:
+        missing_list = "\n".join(f"  {path}" for path in missing_genotypes)
+        raise FileNotFoundError(f"Missing locus genotype files:\n{missing_list}")
+
+    ld_file = bfile_prefix.with_suffix(".ld")
+    if ld_file.is_file() and ld_file.stat().st_size > 0 and not force:
+        print(f"Using existing locus LD matrix: {ld_file}")
+        return ld_file
+
+    plink_command = str(Path(plink_bin).expanduser())
+    plink_executable = shutil.which(plink_command)
+    if plink_executable is None:
+        raise FileNotFoundError(
+            f"Could not execute {plink_bin!r}; add plink to PATH or pass --plink-bin"
+        )
+
+    ld_file.unlink(missing_ok=True)
+    command = [
+        plink_executable,
+        "--bfile",
+        str(bfile_prefix),
+        "--r",
+        "square",
+        "--out",
+        str(bfile_prefix),
+    ]
+    print(f"Running: {shlex.join(command)}")
+    subprocess.run(command, check=True)
+
+    if not ld_file.is_file() or ld_file.stat().st_size == 0:
+        raise RuntimeError(f"PLINK did not create a nonempty LD matrix: {ld_file}")
+
+    print(f"Saved locus LD matrix: {ld_file}")
+    return ld_file
+
+
 # %% [markdown]
 # ## Pipeline Command-Line Interface
 
