@@ -688,6 +688,35 @@ def finemap_region(
     return output_file
 
 
+def run_susie_finemapping(
+    plink_bin: str = PLINK_BIN, force: bool = False, runtime=None
+) -> list[Path]:
+    region_files = find_region_files()
+    output_files = []
+    shared_runtime = runtime
+
+    for region_file in region_files:
+        expected_output = SUSIE_RESULTS_DIR / f"{region_label(region_file)}_susie.tsv"
+        needs_inference = force or not expected_output.is_file() or expected_output.stat().st_size == 0
+        if needs_inference and shared_runtime is None:
+            shared_runtime = load_susie_runtime()
+        output_files.append(
+            finemap_region(
+                region_file,
+                plink_bin=plink_bin,
+                force=force,
+                runtime=shared_runtime,
+            )
+        )
+
+    expected_outputs = set(output_files)
+    for stale_file in set(SUSIE_RESULTS_DIR.glob("*_susie.tsv")) - expected_outputs:
+        stale_file.unlink()
+        print(f"Removed stale SuSiE result: {stale_file}")
+
+    return output_files
+
+
 # %% [markdown]
 # ## Pipeline Command-Line Interface
 
