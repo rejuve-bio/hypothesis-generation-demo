@@ -75,7 +75,7 @@ SUSIE_NUMERIC_COLUMNS = ["b", "se", "p", "N"]
 def merge_gwas_sumstats() -> pd.DataFrame:
     frames = []
     for chrom in FLY_CHROMS:
-        input_file = GLM_DIR / f"lifespan_{chrom}.{PHENO_NAME}.glm.linear"
+        input_file = GLM_DIR / f"lifespan_female_{chrom}.{PHENO_NAME}.glm.linear"
         if not input_file.is_file():
             raise FileNotFoundError(f"Missing female GWAS output for {chrom}: {input_file}")
 
