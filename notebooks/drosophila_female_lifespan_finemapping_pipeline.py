@@ -647,6 +647,47 @@ def run_susie_rss(
     return pip, credible_sets
 
 
+def finemap_region(
+    region_file: Path,
+    plink_bin: str = PLINK_BIN,
+    force: bool = False,
+    runtime=None,
+) -> Path:
+    label = region_label(region_file)
+    output_file = SUSIE_RESULTS_DIR / f"{label}_susie.tsv"
+    if output_file.is_file() and output_file.stat().st_size > 0 and not force:
+        print(f"Using existing SuSiE result: {output_file}")
+        return output_file
+
+    bfile_prefix = extract_region_bfile(region_file, plink_bin=plink_bin, force=force)
+    ld_file = compute_region_ld(bfile_prefix, plink_bin=plink_bin, force=force)
+    aligned, ld = load_aligned_region_data(region_file, bfile_prefix, ld_file)
+    pip, credible_sets = run_susie_rss(aligned, ld, runtime=runtime)
+
+    result = aligned.copy()
+    result["PIP"] = pip
+    result["CS"] = pd.array(credible_sets, dtype="Int64")
+    result = result.sort_values(["PIP", "SNP"], ascending=[False, True]).reset_index(drop=True)
+
+    SUSIE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    temporary_file = output_file.with_suffix(".tsv.tmp")
+    try:
+        result.to_csv(temporary_file, sep="\t", index=False)
+        temporary_file.replace(output_file)
+    finally:
+        temporary_file.unlink(missing_ok=True)
+
+    credible_set_count = result["CS"].nunique(dropna=True)
+    credible_set_label = "credible set" if credible_set_count == 1 else "credible sets"
+    top_variant = result.iloc[0]
+    print(
+        f"{label}: {len(result):,} SNPs, {credible_set_count} {credible_set_label}, "
+        f"top PIP {top_variant['SNP']} = {top_variant['PIP']:.3f}"
+    )
+    print(f"Saved SuSiE result: {output_file}")
+    return output_file
+
+
 # %% [markdown]
 # ## Pipeline Command-Line Interface
 
