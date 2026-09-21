@@ -64,7 +64,7 @@ NUMERIC_COLUMNS = ["POS", "freq", "b", "se", "p", "N"]
 COJO_COLUMNS = ["SNP", "A1", "A2", "freq", "b", "se", "p", "N"]
 COJO_RESULT_COLUMNS = ["Chr", "SNP", "bp", "b", "p", "bJ", "pJ"]
 COJO_RESULT_NUMERIC_COLUMNS = ["Chr", "bp", "b", "p", "bJ", "pJ"]
-SUSIE_SUMMARY_COLUMNS = ["SNP", "b", "se", "p", "N"]
+SUSIE_SUMMARY_COLUMNS = ["SNP", "A1", "A2", "b", "se", "p", "N"]
 SUSIE_NUMERIC_COLUMNS = ["b", "se", "p", "N"]
 
 
@@ -366,6 +366,18 @@ def load_region_summary(region_file: Path) -> pd.DataFrame:
     invalid_snp = region["SNP"].isna() | region["SNP"].astype(str).str.contains(r"\s|^$")
     if invalid_snp.any():
         raise ValueError(f"Fine-mapping region contains invalid SNP IDs: {region_file}")
+    region["SNP"] = region["SNP"].astype(str)
+
+    alleles = region[["A1", "A2"]]
+    invalid_alleles = alleles.isna().any(axis=1) | alleles.astype(str).apply(
+        lambda column: column.str.contains(r"\s|^$")
+    ).any(axis=1)
+    if invalid_alleles.any():
+        raise ValueError(f"Fine-mapping region contains invalid alleles: {region_file}")
+    region[["A1", "A2"]] = alleles.astype(str)
+    if (region["A1"] == region["A2"]).any():
+        raise ValueError(f"Fine-mapping region contains identical A1 and A2 alleles: {region_file}")
+
     for column in SUSIE_NUMERIC_COLUMNS:
         region[column] = pd.to_numeric(region[column], errors="coerce")
     if not np.isfinite(region[SUSIE_NUMERIC_COLUMNS].to_numpy(dtype=float)).all():
