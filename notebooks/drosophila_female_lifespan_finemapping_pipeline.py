@@ -509,6 +509,82 @@ def compute_region_ld(
     return ld_file
 
 
+def load_aligned_region_data(
+    region_file: Path, bfile_prefix: Path, ld_file: Path
+) -> tuple[pd.DataFrame, np.ndarray]:
+    region = load_region_summary(region_file)
+    bim_file = bfile_prefix.with_suffix(".bim")
+    if not bim_file.is_file():
+        raise FileNotFoundError(f"Missing locus BIM file: {bim_file}")
+    if not ld_file.is_file():
+        raise FileNotFoundError(f"Missing locus LD matrix: {ld_file}")
+
+    bim = pd.read_csv(
+        bim_file,
+        sep=r"\s+",
+        header=None,
+        names=["CHR", "SNP", "CM", "POS", "LD_A1", "LD_A2"],
+    )
+    if bim.empty:
+        raise ValueError(f"Locus BIM file is empty: {bim_file}")
+    duplicate_bim_snps = bim.loc[bim["SNP"].duplicated(keep=False), "SNP"].unique()
+    if len(duplicate_bim_snps):
+        duplicate_list = ", ".join(map(str, duplicate_bim_snps[:5]))
+        raise ValueError(f"Locus BIM contains duplicate SNP IDs: {duplicate_list}")
+
+    ld = np.loadtxt(ld_file, dtype=float, ndmin=2)
+    expected_shape = (len(bim), len(bim))
+    if ld.shape != expected_shape:
+        raise ValueError(
+            f"LD matrix shape {ld.shape} does not match {len(bim)} BIM variants: {ld_file}"
+        )
+
+    aligned = bim.merge(region, on="SNP", how="left", validate="one_to_one", indicator=True)
+    missing_summary = aligned.loc[aligned["_merge"] != "both", "SNP"].tolist()
+    if missing_summary:
+        missing_list = ", ".join(map(str, missing_summary[:5]))
+        raise ValueError(f"BIM variants are missing summary statistics: {missing_list}")
+    aligned = aligned.drop(columns="_merge")
+
+    missing_reference_count = int((~region["SNP"].isin(bim["SNP"])).sum())
+    if missing_reference_count:
+        print(f"Excluded {missing_reference_count:,} region SNPs absent from the LD reference")
+
+    summary_a1 = aligned["A1"].str.upper()
+    summary_a2 = aligned["A2"].str.upper()
+    ld_a1 = aligned["LD_A1"].astype(str).str.upper()
+    ld_a2 = aligned["LD_A2"].astype(str).str.upper()
+    matching = (summary_a1 == ld_a1) & (summary_a2 == ld_a2)
+    swapped = (summary_a1 == ld_a2) & (summary_a2 == ld_a1)
+    incompatible = ~(matching | swapped)
+    if incompatible.any():
+        incompatible_snps = ", ".join(aligned.loc[incompatible, "SNP"].astype(str).head(5))
+        raise ValueError(f"Summary statistics and BIM alleles are incompatible: {incompatible_snps}")
+
+    aligned.loc[swapped, "b"] = -aligned.loc[swapped, "b"]
+    aligned["A1"] = aligned["LD_A1"].astype(str)
+    aligned["A2"] = aligned["LD_A2"].astype(str)
+    aligned = aligned.drop(columns=["LD_A1", "LD_A2"])
+
+    finite_variants = np.isfinite(ld).all(axis=0) & np.isfinite(ld).all(axis=1)
+    if not finite_variants.all():
+        removed_count = int((~finite_variants).sum())
+        aligned = aligned.loc[finite_variants].reset_index(drop=True)
+        ld = ld[np.ix_(finite_variants, finite_variants)]
+        print(f"Excluded {removed_count:,} variants with non-finite LD values")
+
+    if len(aligned) < 2:
+        raise ValueError(f"Fewer than two usable variants remain for locus {region_label(region_file)}")
+    if not np.allclose(ld, ld.T, atol=1e-8):
+        raise ValueError(f"LD matrix is not symmetric: {ld_file}")
+    if not np.allclose(np.diag(ld), 1.0, atol=1e-6):
+        raise ValueError(f"LD matrix diagonal is not one: {ld_file}")
+    if (np.abs(ld) > 1 + 1e-8).any():
+        raise ValueError(f"LD matrix contains correlations outside [-1, 1]: {ld_file}")
+
+    return aligned, ld
+
+
 # %% [markdown]
 # ## Pipeline Command-Line Interface
 
