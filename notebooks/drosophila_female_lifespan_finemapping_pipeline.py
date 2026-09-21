@@ -405,6 +405,57 @@ def write_region_snplist(region_file: Path) -> Path:
     return snplist_file
 
 
+def extract_region_bfile(
+    region_file: Path, plink_bin: str = PLINK_BIN, force: bool = False
+) -> Path:
+    label = region_label(region_file)
+    output_prefix = SUSIE_WORK_DIR / label
+    output_files = [output_prefix.with_suffix(ext) for ext in (".bed", ".bim", ".fam")]
+    if all(path.is_file() for path in output_files) and not force:
+        print(f"Using existing locus genotype files: {output_prefix}")
+        return output_prefix
+
+    reference_files = [LD_REF_BFILE.with_suffix(ext) for ext in (".bed", ".bim", ".fam")]
+    missing_reference = [path for path in reference_files if not path.is_file()]
+    if missing_reference:
+        missing_list = "\n".join(f"  {path}" for path in missing_reference)
+        raise FileNotFoundError(f"Missing PLINK LD-reference files:\n{missing_list}")
+
+    plink_command = str(Path(plink_bin).expanduser())
+    plink_executable = shutil.which(plink_command)
+    if plink_executable is None:
+        raise FileNotFoundError(
+            f"Could not execute {plink_bin!r}; add plink to PATH or pass --plink-bin"
+        )
+
+    snplist_file = write_region_snplist(region_file)
+    for output_file in output_files:
+        output_file.unlink(missing_ok=True)
+
+    command = [
+        plink_executable,
+        "--bfile",
+        str(LD_REF_BFILE),
+        "--extract",
+        str(snplist_file),
+        "--make-bed",
+        "--out",
+        str(output_prefix),
+    ]
+    print(f"Running: {shlex.join(command)}")
+    subprocess.run(command, check=True)
+
+    missing_output = [path for path in output_files if not path.is_file()]
+    if missing_output:
+        missing_list = "\n".join(f"  {path}" for path in missing_output)
+        raise RuntimeError(f"PLINK did not create the expected locus files:\n{missing_list}")
+    if output_prefix.with_suffix(".bim").stat().st_size == 0:
+        raise ValueError(f"PLINK extracted no variants for locus {label}")
+
+    print(f"Saved locus genotype files: {output_prefix}")
+    return output_prefix
+
+
 # %% [markdown]
 # ## Pipeline Command-Line Interface
 
