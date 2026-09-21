@@ -746,7 +746,13 @@ def run_cojo_stage(gcta_bin: str = GCTA_BIN, force: bool = False) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Select independent female lifespan GWAS signals for fine-mapping."
+        description="Run the Drosophila female lifespan fine-mapping pipeline."
+    )
+    parser.add_argument(
+        "--stage",
+        choices=("cojo", "susie", "all"),
+        default="all",
+        help="Pipeline stage to run (default: all)",
     )
     parser.add_argument(
         "--gcta-bin",
@@ -754,16 +760,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="GCTA executable name or path (default: gcta64)",
     )
     parser.add_argument(
+        "--plink-bin",
+        default=PLINK_BIN,
+        help="PLINK executable name or path (default: plink)",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
-        help="Run GCTA-COJO even when its result file already exists",
+        help="Regenerate cached outputs for the selected stage or stages",
     )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    run_cojo_stage(gcta_bin=args.gcta_bin, force=args.force)
+    if args.stage in ("cojo", "all"):
+        run_cojo_stage(gcta_bin=args.gcta_bin, force=args.force)
+    if args.stage in ("susie", "all"):
+        run_susie_finemapping(plink_bin=args.plink_bin, force=args.force)
 
 
 if __name__ == "__main__":
