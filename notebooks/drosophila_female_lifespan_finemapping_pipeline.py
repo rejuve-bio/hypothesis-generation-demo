@@ -721,6 +721,29 @@ def run_susie_finemapping(
 # ## Pipeline Command-Line Interface
 
 # %%
+def run_cojo_stage(gcta_bin: str = GCTA_BIN, force: bool = False) -> None:
+    print("\n[1/7] Loading chromosome-level GWAS results")
+    gwas = merge_gwas_sumstats()
+
+    print("\n[2/7] Filtering COJO-eligible SNPs")
+    significant_snps = filter_significant_snps(gwas)
+
+    print("\n[3/7] Writing GCTA-COJO summary statistics")
+    write_cojo_input(significant_snps)
+
+    print("\n[4/7] Preparing the PLINK LD reference")
+    prepare_cojo_bfile()
+
+    print("\n[5/7] Selecting independent signals with GCTA-COJO")
+    run_cojo(gcta_bin=gcta_bin, force=force)
+
+    print("\n[6/7] Loading independent COJO signals")
+    signals = load_cojo_signals()
+
+    print("\n[7/7] Extracting fine-mapping regions")
+    extract_regions(gwas, signals)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Select independent female lifespan GWAS signals for fine-mapping."
@@ -740,27 +763,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-
-    print("\n[1/7] Loading chromosome-level GWAS results")
-    gwas = merge_gwas_sumstats()
-
-    print("\n[2/7] Filtering COJO-eligible SNPs")
-    significant_snps = filter_significant_snps(gwas)
-
-    print("\n[3/7] Writing GCTA-COJO summary statistics")
-    write_cojo_input(significant_snps)
-
-    print("\n[4/7] Preparing the PLINK LD reference")
-    prepare_cojo_bfile()
-
-    print("\n[5/7] Selecting independent signals with GCTA-COJO")
-    run_cojo(gcta_bin=args.gcta_bin, force=args.force)
-
-    print("\n[6/7] Loading independent COJO signals")
-    signals = load_cojo_signals()
-
-    print("\n[7/7] Extracting fine-mapping regions")
-    extract_regions(gwas, signals)
+    run_cojo_stage(gcta_bin=args.gcta_bin, force=args.force)
 
 
 if __name__ == "__main__":
