@@ -585,6 +585,68 @@ def load_aligned_region_data(
     return aligned, ld
 
 
+def load_susie_runtime():
+    try:
+        import rpy2.robjects as ro
+        from rpy2.robjects.packages import importr
+    except ImportError as error:
+        raise RuntimeError("Stage 2 requires rpy2 and an accessible R installation") from error
+
+    try:
+        susie_r = importr("susieR")
+    except Exception as error:
+        raise RuntimeError("Stage 2 requires the R package susieR") from error
+    return ro, susie_r
+
+
+def run_susie_rss(
+    aligned: pd.DataFrame, ld: np.ndarray, runtime=None
+) -> tuple[np.ndarray, np.ndarray]:
+    if len(aligned) != ld.shape[0] or ld.shape[0] != ld.shape[1]:
+        raise ValueError("SuSiE summary statistics and LD matrix dimensions do not match")
+    if len(aligned) < 2:
+        raise ValueError("SuSiE requires at least two aligned variants")
+
+    ro, susie_r = runtime or load_susie_runtime()
+    sample_size = int(np.rint(aligned["N"].median()))
+    bhat = ro.FloatVector(aligned["b"].to_numpy(dtype=float))
+    shat = ro.FloatVector(aligned["se"].to_numpy(dtype=float))
+    r_matrix = ro.r["matrix"](
+        ro.FloatVector(ld.flatten(order="F")),
+        nrow=ld.shape[0],
+    )
+
+    fit = susie_r.susie_rss(
+        bhat=bhat,
+        shat=shat,
+        R=r_matrix,
+        n=sample_size,
+        L=SUSIE_MAX_EFFECTS,
+        estimate_residual_variance=True,
+        verbose=False,
+    )
+    pip = np.asarray(fit.rx2("pip"), dtype=float)
+    if pip.shape != (len(aligned),) or not np.isfinite(pip).all():
+        raise ValueError("SuSiE returned invalid posterior inclusion probabilities")
+    if ((pip < 0) | (pip > 1)).any():
+        raise ValueError("SuSiE returned posterior inclusion probabilities outside [0, 1]")
+
+    credible_sets = np.full(len(aligned), np.nan)
+    cs_result = susie_r.susie_get_cs(fit, coverage=SUSIE_COVERAGE, Xcorr=r_matrix)
+    cs_list = cs_result.rx2("cs")
+    if cs_list is not ro.NULL:
+        cs_names = [] if cs_list.names is ro.NULL else [str(name) for name in cs_list.names]
+        for cs_number, cs_name in enumerate(cs_names, start=1):
+            member_indices = np.asarray(cs_list.rx2(cs_name), dtype=int) - 1
+            if ((member_indices < 0) | (member_indices >= len(aligned))).any():
+                raise ValueError("SuSiE returned an invalid credible-set index")
+            if np.isfinite(credible_sets[member_indices]).any():
+                raise ValueError("SuSiE returned overlapping credible sets")
+            credible_sets[member_indices] = cs_number
+
+    return pip, credible_sets
+
+
 # %% [markdown]
 # ## Pipeline Command-Line Interface
 
