@@ -363,6 +363,9 @@ def load_region_summary(region_file: Path) -> pd.DataFrame:
         raise ValueError(f"Fine-mapping region is empty: {region_file}")
 
     region = region.copy()
+    invalid_snp = region["SNP"].isna() | region["SNP"].astype(str).str.contains(r"\s|^$")
+    if invalid_snp.any():
+        raise ValueError(f"Fine-mapping region contains invalid SNP IDs: {region_file}")
     for column in SUSIE_NUMERIC_COLUMNS:
         region[column] = pd.to_numeric(region[column], errors="coerce")
     if not np.isfinite(region[SUSIE_NUMERIC_COLUMNS].to_numpy(dtype=float)).all():
@@ -382,6 +385,24 @@ def load_region_summary(region_file: Path) -> pd.DataFrame:
         duplicate_list = ", ".join(map(str, duplicate_snps[:5]))
         raise ValueError(f"Fine-mapping region contains duplicate SNP IDs: {duplicate_list}")
     return region
+
+
+def write_region_snplist(region_file: Path) -> Path:
+    region = load_region_summary(region_file)
+    label = region_label(region_file)
+    SUSIE_WORK_DIR.mkdir(parents=True, exist_ok=True)
+    snplist_file = SUSIE_WORK_DIR / f"{label}.snplist"
+    temporary_file = snplist_file.with_suffix(".snplist.tmp")
+
+    try:
+        snp_text = "\n".join(region["SNP"].astype(str)) + "\n"
+        temporary_file.write_text(snp_text, encoding="utf-8")
+        temporary_file.replace(snplist_file)
+    finally:
+        temporary_file.unlink(missing_ok=True)
+
+    print(f"Saved PLINK SNP list: {snplist_file} ({len(region):,} SNPs)")
+    return snplist_file
 
 
 # %% [markdown]
