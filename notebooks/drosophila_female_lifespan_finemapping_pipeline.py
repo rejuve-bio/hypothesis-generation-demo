@@ -5,9 +5,15 @@
 
 # %%
 import argparse
+import hashlib
+import platform
 import shlex
 import shutil
 import subprocess
+import tarfile
+import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +55,17 @@ SUSIE_MAX_EFFECTS = 10
 GCTA_BIN = "gcta64"
 PLINK_BIN = "plink"
 
+GCTA_VERSION = "1.94.1"
+GCTA_PACKAGE_URL = (
+    "https://conda.anaconda.org/bioconda/linux-64/"
+    "gcta-1.94.1-h9ee0642_0.tar.bz2"
+)
+GCTA_PACKAGE_SHA256 = (
+    "8be7f419e57de1453422cb512d073388aa000672a28149af81121043d0cebbee"
+)
+GCTA_ARCHIVE_MEMBER = f"bin/gcta-{GCTA_VERSION}"
+GCTA_LOCAL_BIN = BASE_DIR / "tools" / "gcta" / GCTA_VERSION / "gcta64"
+
 GWAS_COLUMN_MAP = {
     "#CHROM": "CHR",
     "ID": "SNP",
@@ -66,6 +83,83 @@ COJO_RESULT_COLUMNS = ["Chr", "SNP", "bp", "b", "p", "bJ", "pJ"]
 COJO_RESULT_NUMERIC_COLUMNS = ["Chr", "bp", "b", "p", "bJ", "pJ"]
 SUSIE_SUMMARY_COLUMNS = ["SNP", "A1", "A2", "b", "se", "p", "N"]
 SUSIE_NUMERIC_COLUMNS = ["b", "se", "p", "N"]
+
+
+# %% [markdown]
+# ## GCTA Setup
+
+# %%
+def install_gcta(destination: Path = GCTA_LOCAL_BIN) -> Path:
+    machine = platform.machine().lower()
+    if platform.system() != "Linux" or machine not in {"x86_64", "amd64"}:
+        raise RuntimeError(
+            "Automatic GCTA installation supports Linux x86_64 only; "
+            "install GCTA manually and pass its path with --gcta-bin"
+        )
+
+    destination = destination.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="gcta-download-", dir=destination.parent
+        ) as temporary_directory:
+            archive = Path(temporary_directory) / "gcta.tar.bz2"
+            print(f"Downloading GCTA {GCTA_VERSION} from {GCTA_PACKAGE_URL}")
+            urllib.request.urlretrieve(GCTA_PACKAGE_URL, archive)
+
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            if digest != GCTA_PACKAGE_SHA256:
+                raise RuntimeError(
+                    "Downloaded GCTA package failed SHA-256 verification: "
+                    f"expected {GCTA_PACKAGE_SHA256}, found {digest}"
+                )
+
+            with tarfile.open(archive, mode="r:bz2") as package:
+                executable = package.extractfile(GCTA_ARCHIVE_MEMBER)
+                if executable is None:
+                    raise RuntimeError(
+                        f"GCTA package does not contain {GCTA_ARCHIVE_MEMBER}"
+                    )
+                temporary_executable = Path(temporary_directory) / "gcta64"
+                with executable, temporary_executable.open("wb") as output_file:
+                    shutil.copyfileobj(executable, output_file)
+
+            if temporary_executable.stat().st_size == 0:
+                raise RuntimeError("Downloaded GCTA executable is empty")
+            with temporary_executable.open("rb") as executable_file:
+                if executable_file.read(4) != b"\x7fELF":
+                    raise RuntimeError(
+                        "Downloaded GCTA executable is not a Linux ELF binary"
+                    )
+
+            temporary_executable.chmod(0o755)
+            temporary_executable.replace(destination)
+    except (OSError, tarfile.TarError, urllib.error.URLError) as error:
+        raise RuntimeError(
+            f"Could not install GCTA {GCTA_VERSION} in {destination.parent}: {error}"
+        ) from error
+
+    print(f"Installed GCTA {GCTA_VERSION}: {destination}")
+    return destination
+
+
+def resolve_gcta_binary(gcta_bin: str = GCTA_BIN) -> str:
+    requested = str(Path(gcta_bin).expanduser())
+    executable = shutil.which(requested)
+    if executable is not None:
+        return executable
+
+    if gcta_bin != GCTA_BIN:
+        raise FileNotFoundError(
+            f"Could not execute the requested GCTA binary: {gcta_bin}"
+        )
+
+    local_executable = shutil.which(str(GCTA_LOCAL_BIN))
+    if local_executable is not None:
+        return local_executable
+
+    return str(install_gcta())
 
 
 # %% [markdown]
@@ -208,12 +302,7 @@ def run_cojo(gcta_bin: str = GCTA_BIN, force: bool = False) -> None:
         print(f"Using existing COJO result: {jma_file}")
         return
 
-    gcta_command = str(Path(gcta_bin).expanduser())
-    gcta_executable = shutil.which(gcta_command)
-    if gcta_executable is None:
-        raise FileNotFoundError(
-            f"Could not execute {gcta_bin!r}; add gcta64 to PATH or pass --gcta-bin"
-        )
+    gcta_executable = resolve_gcta_binary(gcta_bin)
 
     required_inputs = [
         COJO_INPUT_FILE,
