@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 
-# %% [markdown]
-# # Female Lifespan Fine-Mapping Pipeline
 
-# %%
 import argparse
 import gzip
 import hashlib
@@ -22,10 +19,6 @@ import numpy as np
 import pandas as pd
 
 
-# %% [markdown]
-# ## Shared Configuration
-
-# %%
 BASE_DIR = Path(__file__).resolve().parents[1]
 FLY_CHROMS = ("2L", "2R", "3L", "3R", "4", "X")
 
@@ -87,10 +80,6 @@ SUSIE_SUMMARY_COLUMNS = ["SNP", "A1", "A2", "b", "se", "p", "N"]
 SUSIE_NUMERIC_COLUMNS = ["b", "se", "p", "N"]
 
 
-# %% [markdown]
-# ## GCTA Setup
-
-# %%
 def install_gcta(destination: Path = GCTA_LOCAL_BIN) -> Path:
     machine = platform.machine().lower()
     if platform.system() != "Linux" or machine not in {"x86_64", "amd64"}:
@@ -164,10 +153,6 @@ def resolve_gcta_binary(gcta_bin: str = GCTA_BIN) -> str:
     return str(install_gcta())
 
 
-# %% [markdown]
-# ## Stage 1 — GCTA-COJO Signal Selection
-
-# %%
 def merge_gwas_sumstats() -> pd.DataFrame:
     frames = []
     for chrom in FLY_CHROMS:
@@ -425,10 +410,6 @@ def extract_regions(gwas: pd.DataFrame, signals: pd.DataFrame) -> None:
         print(f"{snp}: {len(region):,} {snp_label} within +/-{WINDOW_BP:,} bp -> {out_file}")
 
 
-# %% [markdown]
-# ## Stage 2 — SuSiE-RSS Fine-Mapping
-
-# %%
 def find_region_files() -> list[Path]:
     region_files = sorted(
         path for path in REGIONS_DIR.glob("chr*_pos*_snps.tsv") if path.is_file()
@@ -779,10 +760,6 @@ def finemap_region(
     return output_file
 
 
-# %% [markdown]
-# ## SuSiE Credible-Set Summary
-
-# %%
 def summarize_susie_results(output_files: list[Path]) -> None:
     total_credible_sets = 0
     total_credible_variants = 0
@@ -859,10 +836,6 @@ def run_susie_finemapping(
     return output_files
 
 
-# %% [markdown]
-# ## Stage 3 — Gene Mapping
-
-# %%
 GTF_FILE = BASE_DIR / "data" / "genes" / "Drosophila_melanogaster.BDGP6.54.62.chr.gtf.gz"
 GENE_MAPPING_FILE = OUT_DIR / "female_finemap_gene_mapping.tsv"
 
@@ -1016,10 +989,6 @@ def run_gene_mapping_stage() -> pd.DataFrame:
     return map_finemap_genes(output_files)
 
 
-# %% [markdown]
-# ## Stage 4 — Enhancer Mapping
-
-# %%
 ENHANCER_ATLAS_DIR = Path("/mnt/hdd_2/biocypher-kg/input/enhancer_atlas/dm")
 ENHANCER_LOCAL_DIR = BASE_DIR / "data" / "enhancers" / "dm"
 ENHANCER_MAPPING_FILE = OUT_DIR / "female_finemap_enhancer_overlap.tsv"
@@ -1152,10 +1121,6 @@ def run_enhancer_mapping_stage() -> pd.DataFrame | None:
     return map_finemap_enhancers(output_files, enhancer_dir)
 
 
-# %% [markdown]
-# ## Pipeline Command-Line Interface
-
-# %%
 def run_cojo_stage(gcta_bin: str = GCTA_BIN, force: bool = False) -> None:
     print("\n[1/7] Loading chromosome-level GWAS results")
     gwas = merge_gwas_sumstats()
