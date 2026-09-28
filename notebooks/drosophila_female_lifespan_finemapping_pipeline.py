@@ -25,6 +25,11 @@ FLY_CHROMS = ("2L", "2R", "3L", "3R", "4", "X")
 PHENO_NAME = "S18_1537_F"
 GLM_DIR = BASE_DIR / "data" / "gwas" / "tmp"
 
+PHENO_FILE = BASE_DIR / "data" / "gwas" / "lifespan_female.pheno"
+QC_GENOTYPE_DIR = GLM_DIR / "qc"
+EIGENVEC_FILE = GLM_DIR / "dgrp_pca.eigenvec"
+N_PCS = 4
+
 MERGED_QC_SOURCE = GLM_DIR / "merged_qc"
 
 OUT_DIR = BASE_DIR / "data" / "finemap" / "female"
@@ -49,6 +54,7 @@ SUSIE_MAX_EFFECTS = 10
 
 GCTA_BIN = "gcta64"
 PLINK_BIN = "plink"
+PLINK2_BIN = "plink2"
 
 GCTA_VERSION = "1.94.1"
 GCTA_PACKAGE_URL = (
@@ -1119,6 +1125,60 @@ def run_enhancer_mapping_stage() -> pd.DataFrame | None:
     return map_finemap_enhancers(output_files, enhancer_dir)
 
 
+def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
+    plink2_command = str(Path(plink2_bin).expanduser())
+    plink2_executable = shutil.which(plink2_command)
+    if plink2_executable is None:
+        raise FileNotFoundError(
+            f"Could not execute {plink2_bin!r}; add plink2 to PATH or pass --plink2-bin"
+        )
+    if not PHENO_FILE.is_file():
+        raise FileNotFoundError(f"Missing phenotype file: {PHENO_FILE}")
+    if not EIGENVEC_FILE.is_file():
+        raise FileNotFoundError(f"Missing PCA eigenvector file: {EIGENVEC_FILE}")
+
+    covar_columns = f"3-{2 + N_PCS}"
+    print(
+        f"Running per-chromosome GWAS with the first {N_PCS} principal components "
+        f"(PC1-PC{N_PCS}) as covariates"
+    )
+
+    for chrom in FLY_CHROMS:
+        bfile = QC_GENOTYPE_DIR / chrom
+        output_prefix = GLM_DIR / f"lifespan_female_{chrom}"
+        output_file = GLM_DIR / f"lifespan_female_{chrom}.{PHENO_NAME}.glm.linear"
+        if output_file.is_file() and not force:
+            print(f"  {chrom}: using existing GWAS output")
+            continue
+
+        missing = [bfile.with_suffix(ext) for ext in (".bed", ".bim", ".fam")
+                   if not bfile.with_suffix(ext).is_file()]
+        if missing:
+            missing_list = "\n".join(f"    {path}" for path in missing)
+            raise FileNotFoundError(f"Missing QC'd genotype files for {chrom}:\n{missing_list}")
+
+        command = [
+            plink2_executable,
+            "--bfile", str(bfile),
+            "--pheno", str(PHENO_FILE),
+            "--pheno-name", PHENO_NAME,
+            "--covar", str(EIGENVEC_FILE),
+            "--covar-col-nums", covar_columns,
+            "--linear", "hide-covar",
+            "--out", str(output_prefix),
+            "--no-psam-pheno",
+            "--allow-extra-chr",
+        ]
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+
+        if not output_file.is_file():
+            raise RuntimeError(f"plink2 did not create the expected GWAS output: {output_file}")
+        n_snps = sum(1 for _ in open(output_file)) - 1
+        print(f"  {chrom}: {n_snps:,} SNPs tested")
+
+    print(f"GWAS complete: {N_PCS}-PC association results in {GLM_DIR}")
+
+
 def run_cojo_stage(gcta_bin: str = GCTA_BIN, force: bool = False) -> None:
     print("\n[1/7] Loading chromosome-level GWAS results")
     gwas = merge_gwas_sumstats()
@@ -1148,7 +1208,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--stage",
-        choices=("cojo", "susie", "genes", "enhancers", "all"),
+        choices=("gwas", "cojo", "susie", "genes", "enhancers", "all"),
         default="all",
         help="Pipeline stage to run (default: all)",
     )
@@ -1163,6 +1223,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PLINK executable name or path (default: plink)",
     )
     parser.add_argument(
+        "--plink2-bin",
+        default=PLINK2_BIN,
+        help="PLINK2 executable name or path (default: plink2)",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Regenerate cached outputs for the selected stage or stages",
@@ -1172,6 +1237,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.stage in ("gwas", "all"):
+        run_gwas_stage(plink2_bin=args.plink2_bin, force=args.force)
     if args.stage in ("cojo", "all"):
         run_cojo_stage(gcta_bin=args.gcta_bin, force=args.force)
     if args.stage in ("susie", "all"):
