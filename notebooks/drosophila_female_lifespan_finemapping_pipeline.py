@@ -843,7 +843,7 @@ GENE_ID_PATTERN = re.compile(r'gene_id "([^"]+)"')
 GENE_NAME_PATTERN = re.compile(r'gene_name "([^"]+)"')
 GENE_BIOTYPE_PATTERN = re.compile(r'gene_biotype "([^"]+)"')
 GENE_MAPPING_COLUMNS = [
-    "locus", "SNP", "CHR", "POS", "PIP", "CS", "variant_role",
+    "locus", "SNP", "CHR", "POS", "PIP", "CS",
     "gene_id", "gene_name", "gene_biotype", "relation", "distance_bp",
 ]
 
@@ -886,7 +886,7 @@ def load_gene_annotations(gtf_file: Path = GTF_FILE) -> pd.DataFrame:
     return genes
 
 
-def select_finemap_variants(output_files: list[Path]) -> pd.DataFrame:
+def select_credible_set_variants(output_files: list[Path]) -> pd.DataFrame:
     frames = []
     for output_file in output_files:
         result = pd.read_csv(output_file, sep="\t", low_memory=False)
@@ -901,22 +901,17 @@ def select_finemap_variants(output_files: list[Path]) -> pd.DataFrame:
     variants["PIP"] = pd.to_numeric(variants["PIP"], errors="coerce")
     variants["CS"] = pd.to_numeric(variants["CS"], errors="coerce")
 
-    in_credible_set = variants["CS"].notna()
-    credible = variants.loc[in_credible_set].copy()
-    credible["variant_role"] = "credible_set"
+    credible = variants.loc[variants["CS"].notna()].copy()
+    credible = credible.sort_values(
+        ["locus", "CS", "PIP"], ascending=[True, True, False]
+    ).reset_index(drop=True)
 
-    loci_with_cs = set(credible["locus"])
-    no_cs = variants.loc[~variants["locus"].isin(loci_with_cs)]
-    top_no_cs = no_cs.loc[no_cs.groupby("locus")["PIP"].idxmax()].copy()
-    top_no_cs["variant_role"] = "top_pip_no_cs"
-
-    selected = pd.concat([credible, top_no_cs], ignore_index=True)
-    selected = selected.sort_values(["locus", "PIP"], ascending=[True, False]).reset_index(drop=True)
+    credible_set_count = credible.groupby("locus")["CS"].nunique().sum()
     print(
-        f"Selected {len(selected):,} fine-mapped variants "
-        f"({len(credible):,} credible-set, {len(top_no_cs):,} top-PIP fallback)"
+        f"Selected {len(credible):,} credible-set variants "
+        f"across {credible['locus'].nunique()} loci ({credible_set_count} credible sets)"
     )
-    return selected
+    return credible
 
 
 def map_variant_to_gene(genes: pd.DataFrame, chrom: str, pos: int) -> pd.DataFrame:
@@ -940,32 +935,33 @@ def map_variant_to_gene(genes: pd.DataFrame, chrom: str, pos: int) -> pd.DataFra
 
 
 def map_finemap_genes(output_files: list[Path]) -> pd.DataFrame:
-    genes = load_gene_annotations()
-    variants = select_finemap_variants(output_files)
-
-    rows = []
-    for variant in variants.itertuples(index=False):
-        chrom = str(variant.SNP).split("_", maxsplit=1)[0]
-        pos = int(variant.POS_x)
-        for gene in map_variant_to_gene(genes, chrom, pos).itertuples(index=False):
-            rows.append(
-                {
-                    "locus": variant.locus,
-                    "SNP": variant.SNP,
-                    "CHR": chrom,
-                    "POS": pos,
-                    "PIP": variant.PIP,
-                    "CS": variant.CS,
-                    "variant_role": variant.variant_role,
-                    "gene_id": gene.gene_id,
-                    "gene_name": gene.gene_name,
-                    "gene_biotype": gene.gene_biotype,
-                    "relation": gene.relation,
-                    "distance_bp": gene.distance_bp,
-                }
-            )
-
-    mapping = pd.DataFrame(rows, columns=GENE_MAPPING_COLUMNS)
+    variants = select_credible_set_variants(output_files)
+    if variants.empty:
+        print("No credible-set variants to map to genes")
+        mapping = pd.DataFrame(columns=GENE_MAPPING_COLUMNS)
+    else:
+        genes = load_gene_annotations()
+        rows = []
+        for variant in variants.itertuples(index=False):
+            chrom = str(variant.SNP).split("_", maxsplit=1)[0]
+            pos = int(variant.POS_x)
+            for gene in map_variant_to_gene(genes, chrom, pos).itertuples(index=False):
+                rows.append(
+                    {
+                        "locus": variant.locus,
+                        "SNP": variant.SNP,
+                        "CHR": chrom,
+                        "POS": pos,
+                        "PIP": variant.PIP,
+                        "CS": variant.CS,
+                        "gene_id": gene.gene_id,
+                        "gene_name": gene.gene_name,
+                        "gene_biotype": gene.gene_biotype,
+                        "relation": gene.relation,
+                        "distance_bp": gene.distance_bp,
+                    }
+                )
+        mapping = pd.DataFrame(rows, columns=GENE_MAPPING_COLUMNS)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     temporary_file = GENE_MAPPING_FILE.with_suffix(".tsv.tmp")
     try:
@@ -993,7 +989,7 @@ ENHANCER_ATLAS_DIR = Path("/mnt/hdd_2/biocypher-kg/input/enhancer_atlas/dm")
 ENHANCER_LOCAL_DIR = BASE_DIR / "data" / "enhancers" / "dm"
 ENHANCER_MAPPING_FILE = OUT_DIR / "female_finemap_enhancer_overlap.tsv"
 ENHANCER_MAPPING_COLUMNS = [
-    "locus", "SNP", "CHR", "POS", "PIP", "CS", "variant_role",
+    "locus", "SNP", "CHR", "POS", "PIP", "CS",
     "enhancer_tissue", "enh_start", "enh_end", "enh_score",
 ]
 
@@ -1050,9 +1046,12 @@ def map_variant_to_enhancers(
 
 
 def map_finemap_enhancers(output_files: list[Path], enhancer_dir: Path) -> pd.DataFrame:
-    atlas = load_enhancer_atlas(enhancer_dir)
-    variants = select_finemap_variants(output_files)
+    variants = select_credible_set_variants(output_files)
+    if variants.empty:
+        print("No credible-set variants to overlap with enhancers")
+        return pd.DataFrame(columns=ENHANCER_MAPPING_COLUMNS)
 
+    atlas = load_enhancer_atlas(enhancer_dir)
     rows = []
     for variant in variants.itertuples(index=False):
         chrom = str(variant.SNP).split("_", maxsplit=1)[0]
@@ -1065,7 +1064,6 @@ def map_finemap_enhancers(output_files: list[Path], enhancer_dir: Path) -> pd.Da
             "POS": pos,
             "PIP": variant.PIP,
             "CS": variant.CS,
-            "variant_role": variant.variant_role,
         }
         if hits:
             for hit in hits:
