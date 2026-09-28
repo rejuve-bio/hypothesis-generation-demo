@@ -777,6 +777,56 @@ def finemap_region(
     return output_file
 
 
+# %% [markdown]
+# ## SuSiE Credible-Set Summary
+
+# %%
+def summarize_susie_results(output_files: list[Path]) -> None:
+    total_credible_sets = 0
+    total_credible_variants = 0
+    print("\nSuSiE credible-set summary")
+
+    for output_file in output_files:
+        result = pd.read_csv(output_file, sep="\t", low_memory=False)
+        required_columns = {"SNP", "PIP", "CS"}
+        missing_columns = sorted(required_columns - set(result.columns))
+        if missing_columns:
+            raise ValueError(
+                f"{output_file} is missing columns: {', '.join(missing_columns)}"
+            )
+
+        result["PIP"] = pd.to_numeric(result["PIP"], errors="coerce")
+        result["CS"] = pd.to_numeric(result["CS"], errors="coerce")
+        if result["PIP"].isna().any() or not result["PIP"].between(0, 1).all():
+            raise ValueError(f"{output_file} contains invalid PIP values")
+
+        credible_variants = result.loc[result["CS"].notna()].copy()
+        if not credible_variants.empty:
+            rounded_sets = np.rint(credible_variants["CS"])
+            if (
+                not np.allclose(credible_variants["CS"], rounded_sets)
+                or (rounded_sets < 1).any()
+            ):
+                raise ValueError(f"{output_file} contains invalid credible-set values")
+            credible_variants["CS"] = rounded_sets.astype(int)
+
+        locus = output_file.stem.removesuffix("_susie")
+        credible_set_count = credible_variants["CS"].nunique()
+        print(f"{locus}: {credible_set_count} credible set(s)")
+
+        credible_variants = credible_variants.sort_values(
+            ["CS", "PIP", "SNP"], ascending=[True, False, True]
+        )
+        for variant in credible_variants.itertuples(index=False):
+            print(f"  CS {variant.CS}: {variant.SNP}, PIP = {variant.PIP:.6f}")
+
+        total_credible_sets += credible_set_count
+        total_credible_variants += len(credible_variants)
+
+    print(f"Total credible sets: {total_credible_sets}")
+    print(f"Total credible-set variants: {total_credible_variants}")
+
+
 def run_susie_finemapping(
     plink_bin: str = PLINK_BIN, force: bool = False, runtime=None
 ) -> list[Path]:
@@ -803,6 +853,7 @@ def run_susie_finemapping(
         stale_file.unlink()
         print(f"Removed stale SuSiE result: {stale_file}")
 
+    summarize_susie_results(output_files)
     return output_files
 
 
