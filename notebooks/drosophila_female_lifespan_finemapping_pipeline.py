@@ -5,8 +5,10 @@
 
 # %%
 import argparse
+import gzip
 import hashlib
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -858,6 +860,299 @@ def run_susie_finemapping(
 
 
 # %% [markdown]
+# ## Stage 3 — Gene Mapping
+
+# %%
+GTF_FILE = BASE_DIR / "data" / "genes" / "Drosophila_melanogaster.BDGP6.54.62.chr.gtf.gz"
+GENE_MAPPING_FILE = OUT_DIR / "female_finemap_gene_mapping.tsv"
+
+GENE_ID_PATTERN = re.compile(r'gene_id "([^"]+)"')
+GENE_NAME_PATTERN = re.compile(r'gene_name "([^"]+)"')
+GENE_BIOTYPE_PATTERN = re.compile(r'gene_biotype "([^"]+)"')
+GENE_MAPPING_COLUMNS = [
+    "locus", "SNP", "CHR", "POS", "PIP", "CS", "variant_role",
+    "gene_id", "gene_name", "gene_biotype", "relation", "distance_bp",
+]
+
+
+def _extract_gtf_attribute(pattern: re.Pattern, attributes: str, default: str = "") -> str:
+    match = pattern.search(attributes)
+    return match.group(1) if match else default
+
+
+def load_gene_annotations(gtf_file: Path = GTF_FILE) -> pd.DataFrame:
+    if not gtf_file.is_file():
+        raise FileNotFoundError(f"Missing gene annotation GTF: {gtf_file}")
+
+    rows = []
+    with gzip.open(gtf_file, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("#"):
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) != 9 or fields[2] != "gene":
+                continue
+            attributes = fields[8]
+            gene_id = _extract_gtf_attribute(GENE_ID_PATTERN, attributes)
+            rows.append(
+                {
+                    "CHR": fields[0],
+                    "start": int(fields[3]),
+                    "end": int(fields[4]),
+                    "strand": fields[6],
+                    "gene_id": gene_id,
+                    "gene_name": _extract_gtf_attribute(GENE_NAME_PATTERN, attributes, gene_id),
+                    "gene_biotype": _extract_gtf_attribute(GENE_BIOTYPE_PATTERN, attributes),
+                }
+            )
+
+    genes = pd.DataFrame(rows)
+    if genes.empty:
+        raise ValueError(f"No gene features parsed from {gtf_file}")
+    print(f"Loaded {len(genes):,} genes from {gtf_file.name}")
+    return genes
+
+
+def select_finemap_variants(output_files: list[Path]) -> pd.DataFrame:
+    frames = []
+    for output_file in output_files:
+        result = pd.read_csv(output_file, sep="\t", low_memory=False)
+        required_columns = {"SNP", "POS_x", "PIP", "CS"}
+        missing_columns = sorted(required_columns - set(result.columns))
+        if missing_columns:
+            raise ValueError(f"{output_file} is missing columns: {', '.join(missing_columns)}")
+        result["locus"] = output_file.stem.removesuffix("_susie")
+        frames.append(result)
+
+    variants = pd.concat(frames, ignore_index=True)
+    variants["PIP"] = pd.to_numeric(variants["PIP"], errors="coerce")
+    variants["CS"] = pd.to_numeric(variants["CS"], errors="coerce")
+
+    in_credible_set = variants["CS"].notna()
+    credible = variants.loc[in_credible_set].copy()
+    credible["variant_role"] = "credible_set"
+
+    loci_with_cs = set(credible["locus"])
+    no_cs = variants.loc[~variants["locus"].isin(loci_with_cs)]
+    top_no_cs = no_cs.loc[no_cs.groupby("locus")["PIP"].idxmax()].copy()
+    top_no_cs["variant_role"] = "top_pip_no_cs"
+
+    selected = pd.concat([credible, top_no_cs], ignore_index=True)
+    selected = selected.sort_values(["locus", "PIP"], ascending=[True, False]).reset_index(drop=True)
+    print(
+        f"Selected {len(selected):,} fine-mapped variants "
+        f"({len(credible):,} credible-set, {len(top_no_cs):,} top-PIP fallback)"
+    )
+    return selected
+
+
+def map_variant_to_gene(genes: pd.DataFrame, chrom: str, pos: int) -> pd.DataFrame:
+    on_chrom = genes.loc[genes["CHR"] == chrom]
+    if on_chrom.empty:
+        raise ValueError(f"No genes annotated on chromosome {chrom}")
+
+    overlapping = on_chrom.loc[(on_chrom["start"] <= pos) & (on_chrom["end"] >= pos)]
+    if not overlapping.empty:
+        mapped = overlapping.copy()
+        mapped["distance_bp"] = 0
+        mapped["relation"] = "overlapping"
+        return mapped
+
+    distance = np.maximum(pos - on_chrom["end"], on_chrom["start"] - pos)
+    nearest_index = distance.idxmin()
+    mapped = on_chrom.loc[[nearest_index]].copy()
+    mapped["distance_bp"] = int(distance.loc[nearest_index])
+    mapped["relation"] = "nearest"
+    return mapped
+
+
+def map_finemap_genes(output_files: list[Path]) -> pd.DataFrame:
+    genes = load_gene_annotations()
+    variants = select_finemap_variants(output_files)
+
+    rows = []
+    for variant in variants.itertuples(index=False):
+        chrom = str(variant.SNP).split("_", maxsplit=1)[0]
+        pos = int(variant.POS_x)
+        for gene in map_variant_to_gene(genes, chrom, pos).itertuples(index=False):
+            rows.append(
+                {
+                    "locus": variant.locus,
+                    "SNP": variant.SNP,
+                    "CHR": chrom,
+                    "POS": pos,
+                    "PIP": variant.PIP,
+                    "CS": variant.CS,
+                    "variant_role": variant.variant_role,
+                    "gene_id": gene.gene_id,
+                    "gene_name": gene.gene_name,
+                    "gene_biotype": gene.gene_biotype,
+                    "relation": gene.relation,
+                    "distance_bp": gene.distance_bp,
+                }
+            )
+
+    mapping = pd.DataFrame(rows, columns=GENE_MAPPING_COLUMNS)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    temporary_file = GENE_MAPPING_FILE.with_suffix(".tsv.tmp")
+    try:
+        mapping.to_csv(temporary_file, sep="\t", index=False)
+        temporary_file.replace(GENE_MAPPING_FILE)
+    finally:
+        temporary_file.unlink(missing_ok=True)
+
+    print("\nFine-mapped variant -> gene mapping")
+    print(mapping.to_string(index=False))
+    print(f"Saved gene mapping: {GENE_MAPPING_FILE}")
+    return mapping
+
+
+def run_gene_mapping_stage() -> pd.DataFrame:
+    output_files = sorted(
+        path for path in SUSIE_RESULTS_DIR.glob("*_susie.tsv") if path.is_file()
+    )
+    if not output_files:
+        raise FileNotFoundError(f"No SuSiE result files found in {SUSIE_RESULTS_DIR}")
+    return map_finemap_genes(output_files)
+
+
+# %% [markdown]
+# ## Stage 4 — Enhancer Mapping
+
+# %%
+ENHANCER_ATLAS_DIR = Path("/mnt/hdd_2/biocypher-kg/input/enhancer_atlas/dm")
+ENHANCER_LOCAL_DIR = BASE_DIR / "data" / "enhancers" / "dm"
+ENHANCER_MAPPING_FILE = OUT_DIR / "female_finemap_enhancer_overlap.tsv"
+ENHANCER_MAPPING_COLUMNS = [
+    "locus", "SNP", "CHR", "POS", "PIP", "CS", "variant_role",
+    "enhancer_tissue", "enh_start", "enh_end", "enh_score",
+]
+
+
+def resolve_enhancer_dir() -> Path | None:
+    for candidate in (ENHANCER_LOCAL_DIR, ENHANCER_ATLAS_DIR):
+        if candidate.is_dir() and any(candidate.glob("*.bed")):
+            return candidate
+    return None
+
+
+def load_enhancer_atlas(enhancer_dir: Path) -> dict[str, pd.DataFrame]:
+    atlas = {}
+    for bed_file in sorted(enhancer_dir.glob("*.bed")):
+        enhancers = pd.read_csv(
+            bed_file,
+            sep="\t",
+            header=None,
+            names=["chrom", "start", "end", "score"],
+            low_memory=False,
+        )
+        enhancers["start"] = pd.to_numeric(enhancers["start"], errors="coerce")
+        enhancers["end"] = pd.to_numeric(enhancers["end"], errors="coerce")
+        enhancers = enhancers.dropna(subset=["start", "end"])
+        enhancers[["start", "end"]] = enhancers[["start", "end"]].astype(int)
+        atlas[bed_file.stem] = enhancers
+    if not atlas:
+        raise ValueError(f"No enhancer BED files parsed from {enhancer_dir}")
+    print(f"Loaded {len(atlas)} enhancer tissue tracks from {enhancer_dir}")
+    return atlas
+
+
+def map_variant_to_enhancers(
+    atlas: dict[str, pd.DataFrame], chrom: str, pos: int
+) -> list[dict]:
+    ucsc_chrom = chrom if chrom.startswith("chr") else f"chr{chrom}"
+    hits = []
+    for tissue, enhancers in atlas.items():
+        overlapping = enhancers.loc[
+            (enhancers["chrom"] == ucsc_chrom)
+            & (enhancers["start"] <= pos)
+            & (enhancers["end"] >= pos)
+        ]
+        for enhancer in overlapping.itertuples(index=False):
+            hits.append(
+                {
+                    "enhancer_tissue": tissue,
+                    "enh_start": int(enhancer.start),
+                    "enh_end": int(enhancer.end),
+                    "enh_score": round(float(enhancer.score), 4),
+                }
+            )
+    return hits
+
+
+def map_finemap_enhancers(output_files: list[Path], enhancer_dir: Path) -> pd.DataFrame:
+    atlas = load_enhancer_atlas(enhancer_dir)
+    variants = select_finemap_variants(output_files)
+
+    rows = []
+    for variant in variants.itertuples(index=False):
+        chrom = str(variant.SNP).split("_", maxsplit=1)[0]
+        pos = int(variant.POS_x)
+        hits = map_variant_to_enhancers(atlas, chrom, pos)
+        base = {
+            "locus": variant.locus,
+            "SNP": variant.SNP,
+            "CHR": chrom,
+            "POS": pos,
+            "PIP": variant.PIP,
+            "CS": variant.CS,
+            "variant_role": variant.variant_role,
+        }
+        if hits:
+            for hit in hits:
+                rows.append({**base, **hit})
+        else:
+            rows.append(
+                {
+                    **base,
+                    "enhancer_tissue": "-NONE-",
+                    "enh_start": pd.NA,
+                    "enh_end": pd.NA,
+                    "enh_score": pd.NA,
+                }
+            )
+
+    mapping = pd.DataFrame(rows, columns=ENHANCER_MAPPING_COLUMNS)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    temporary_file = ENHANCER_MAPPING_FILE.with_suffix(".tsv.tmp")
+    try:
+        mapping.to_csv(temporary_file, sep="\t", index=False)
+        temporary_file.replace(ENHANCER_MAPPING_FILE)
+    finally:
+        temporary_file.unlink(missing_ok=True)
+
+    overlap_count = int((mapping["enhancer_tissue"] != "-NONE-").sum())
+    variants_in_enhancers = mapping.loc[
+        mapping["enhancer_tissue"] != "-NONE-", "SNP"
+    ].nunique()
+    print("\nFine-mapped variant -> enhancer overlap")
+    print(mapping.to_string(index=False))
+    print(
+        f"{variants_in_enhancers} of {len(variants)} variants overlap an enhancer "
+        f"({overlap_count} variant-tissue overlaps)"
+    )
+    print(f"Saved enhancer overlap: {ENHANCER_MAPPING_FILE}")
+    return mapping
+
+
+def run_enhancer_mapping_stage() -> pd.DataFrame | None:
+    output_files = sorted(
+        path for path in SUSIE_RESULTS_DIR.glob("*_susie.tsv") if path.is_file()
+    )
+    if not output_files:
+        raise FileNotFoundError(f"No SuSiE result files found in {SUSIE_RESULTS_DIR}")
+
+    enhancer_dir = resolve_enhancer_dir()
+    if enhancer_dir is None:
+        print(
+            "Skipping enhancer mapping: no EnhancerAtlas BED files found in "
+            f"{ENHANCER_LOCAL_DIR} or {ENHANCER_ATLAS_DIR}"
+        )
+        return None
+    return map_finemap_enhancers(output_files, enhancer_dir)
+
+
+# %% [markdown]
 # ## Pipeline Command-Line Interface
 
 # %%
@@ -890,7 +1185,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--stage",
-        choices=("cojo", "susie", "all"),
+        choices=("cojo", "susie", "genes", "enhancers", "all"),
         default="all",
         help="Pipeline stage to run (default: all)",
     )
@@ -918,6 +1213,10 @@ def main(argv: list[str] | None = None) -> None:
         run_cojo_stage(gcta_bin=args.gcta_bin, force=args.force)
     if args.stage in ("susie", "all"):
         run_susie_finemapping(plink_bin=args.plink_bin, force=args.force)
+    if args.stage in ("genes", "all"):
+        run_gene_mapping_stage()
+    if args.stage in ("enhancers", "all"):
+        run_enhancer_mapping_stage()
 
 
 if __name__ == "__main__":
