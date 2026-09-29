@@ -36,6 +36,7 @@ N_PCS = 4
 
 CHROM_MAP = {"2L": "1", "2R": "2", "3L": "3", "3R": "4", "4": "5", "X": "23", "23": "23"}
 COJO_CHROM_MAP = {1: "2L", 2: "2R", 3: "3L", 4: "3R", 5: "4", 23: "X"}
+SOURCE_CHROM_MAP = {"2L": "chr2L", "2R": "chr2R", "3L": "chr3L", "3R": "chr3R", "4": "4", "X": "23"}
 
 # Public, versioned inputs. The DGRPool table is curated from Ivanov et al. 2015.
 PHENOTYPE_URL = "https://dgrpool.epfl.ch/studies/18/get_file?name=summary.tsv"
@@ -1290,10 +1291,23 @@ def prepare_genotypes(plink2_bin: str, force: bool = False) -> None:
         prefix = REFERENCE_DIR / f"DGRP.{chrom}"
         if _plink_trio_exists(prefix) and not force:
             continue
-        _run_checked([plink2_bin, "--bfile", str(RAW_GENOTYPE_PREFIX), "--chr", chrom,
+        source_chrom = SOURCE_CHROM_MAP[chrom]
+        _run_checked([plink2_bin, "--bfile", str(RAW_GENOTYPE_PREFIX), "--chr", source_chrom,
                       "--allow-extra-chr", "--make-bed", "--out", str(prefix)])
         if not _plink_trio_exists(prefix):
             raise RuntimeError(f"PLINK did not create genotype files for {chrom}: {prefix}")
+        bim = Path(f"{prefix}.bim")
+        temporary_bim = Path(f"{bim}.tmp")
+        try:
+            with bim.open() as source, temporary_bim.open("w") as destination:
+                for line in source:
+                    source_label, rest = line.split("\t", 1)
+                    if source_label not in (source_chrom, chrom):
+                        raise ValueError(f"Unexpected chromosome {source_label} in {bim}")
+                    destination.write(f"{chrom}\t{rest}")
+            temporary_bim.replace(bim)
+        finally:
+            temporary_bim.unlink(missing_ok=True)
 
 
 def prepare_qc_and_pca(plink_bin: str, plink2_bin: str, force: bool = False) -> None:
