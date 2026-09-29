@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
+"""DGRP female lifespan GWAS and fine-mapping pipeline.
 
+Run ``python3 notebooks/drosophila_female_lifespan_finemapping_pipeline.py
+--stage all --enhancer-dir /path/to/fly/enhancer_beds`` from the repository root.
+The prepare stage downloads Ivanov et al. (2015) female lifespan values via
+DGRPool Study 18, dm6 DGRP2 PLINK genotypes from Zenodo record 837947, and
+the Ensembl Metazoa release 62 GTF. It matches the 197 lines, applies PLINK
+QC, merges chromosome arms, prunes for PCA, and computes 10 PCs. GWAS uses
+PC1 through PC4. EnhancerAtlas BED tracks must be supplied for the enhancer stage.
+"""
 
 import argparse
 import gzip
@@ -19,30 +28,73 @@ import numpy as np
 import pandas as pd
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_BASE_DIR = Path(__file__).resolve().parents[1]
 FLY_CHROMS = ("2L", "2R", "3L", "3R", "4", "X")
 
 PHENO_NAME = "S18_1537_F"
-GLM_DIR = BASE_DIR / "data" / "gwas" / "tmp"
-
-PHENO_FILE = BASE_DIR / "data" / "gwas" / "lifespan_female.pheno"
-QC_GENOTYPE_DIR = GLM_DIR / "qc"
-EIGENVEC_FILE = GLM_DIR / "dgrp_pca.eigenvec"
 N_PCS = 4
-
-MERGED_QC_SOURCE = GLM_DIR / "merged_qc"
-
-OUT_DIR = BASE_DIR / "data" / "finemap" / "female"
-SIG_SNP_FILE = OUT_DIR / "female_significant_snps.tsv"
-COJO_INPUT_FILE = OUT_DIR / "female_cojo_input.txt"
-COJO_OUT_PREFIX = OUT_DIR / "cojo" / "female_lifespan_cojo"
-REGIONS_DIR = OUT_DIR / "regions"
-SUSIE_WORK_DIR = OUT_DIR / "susie"
-SUSIE_RESULTS_DIR = OUT_DIR / "susie_results"
 
 CHROM_MAP = {"2L": "1", "2R": "2", "3L": "3", "3R": "4", "4": "5", "X": "23", "23": "23"}
 COJO_CHROM_MAP = {1: "2L", 2: "2R", 3: "3L", 4: "3R", 5: "4", 23: "X"}
-LD_REF_BFILE = OUT_DIR / "bfile" / "merged_qc_numeric"
+
+# Public, versioned inputs. The DGRPool table is curated from Ivanov et al. 2015.
+PHENOTYPE_URL = "https://dgrpool.epfl.ch/studies/18/get_file?name=summary.tsv"
+PHENOTYPE_SHA256 = "efb9a7f2dcd46ab24a01ff41876b4340a1450de90cb35d211b3f0c07bd68e9aa"
+GENOTYPE_URL_PREFIX = "https://zenodo.org/records/837947/files/dgrp2_dm6_dbSNP.vcf"
+GENOTYPE_MD5 = {
+    ".bed": "6e3b0c5b2c186c3a6dec99c20c24e3f4",
+    ".bim": "18ba9e60111dd6398d160f9bba89023c",
+    ".fam": "d5cbeec02da5e40a89f3c3a9ab8f15cf",
+}
+GTF_URL = (
+    "https://ftp.ebi.ac.uk/ensemblgenomes/pub/metazoa/release-62/gtf/"
+    "drosophila_melanogaster/Drosophila_melanogaster.BDGP6.54.62.chr.gtf.gz"
+)
+GTF_SHA256 = "39e943ea25fbe46a6ec3fc28742e7bbf5f6c5e6de470785597bee3662e80730e"
+
+# Optional secondary directory for callers such as the isolated platform runner.
+ENHANCER_ATLAS_DIR: Path | None = None
+
+
+def configure_paths(base_dir=None, glm_dir=None, pheno=None, qc_dir=None,
+                    eigenvec=None, bfile=None, out_dir=None, gtf=None,
+                    enhancer_dir=None):
+    """Set every input/output path global, deriving defaults from base_dir.
+    Called once at import with defaults, and again from main() with any CLI
+    overrides so the pipeline can run against inputs in any directory."""
+    global BASE_DIR, GLM_DIR, PHENO_FILE, QC_GENOTYPE_DIR, EIGENVEC_FILE
+    global MERGED_QC_SOURCE, OUT_DIR, SIG_SNP_FILE, COJO_INPUT_FILE, COJO_OUT_PREFIX
+    global REGIONS_DIR, SUSIE_WORK_DIR, SUSIE_RESULTS_DIR, LD_REF_BFILE
+    global GTF_FILE, GENE_MAPPING_FILE, ENHANCER_LOCAL_DIR, ENHANCER_MAPPING_FILE
+    global REFERENCE_DIR, RAW_GENOTYPE_PREFIX, RAW_PHENO_FILE, ANALYSIS_LINES_FILE
+
+    BASE_DIR = Path(base_dir).expanduser() if base_dir else DEFAULT_BASE_DIR
+    REFERENCE_DIR = BASE_DIR / "data" / "reference"
+    RAW_GENOTYPE_PREFIX = REFERENCE_DIR / "dgrp2_dm6_dbSNP.vcf"
+    RAW_PHENO_FILE = BASE_DIR / "data" / "gwas" / "lifespan_female_raw.tsv.gz"
+    GLM_DIR = Path(glm_dir).expanduser() if glm_dir else BASE_DIR / "data" / "gwas" / "tmp"
+    PHENO_FILE = Path(pheno).expanduser() if pheno else BASE_DIR / "data" / "gwas" / "lifespan_female.pheno"
+    QC_GENOTYPE_DIR = Path(qc_dir).expanduser() if qc_dir else GLM_DIR / "qc"
+    EIGENVEC_FILE = Path(eigenvec).expanduser() if eigenvec else GLM_DIR / "dgrp_pca.eigenvec"
+    MERGED_QC_SOURCE = Path(bfile).expanduser() if bfile else GLM_DIR / "merged_qc"
+    ANALYSIS_LINES_FILE = GLM_DIR / "analysis_lines.keep"
+
+    OUT_DIR = Path(out_dir).expanduser() if out_dir else BASE_DIR / "data" / "finemap" / "female"
+    SIG_SNP_FILE = OUT_DIR / "female_significant_snps.tsv"
+    COJO_INPUT_FILE = OUT_DIR / "female_cojo_input.txt"
+    COJO_OUT_PREFIX = OUT_DIR / "cojo" / "female_lifespan_cojo"
+    REGIONS_DIR = OUT_DIR / "regions"
+    SUSIE_WORK_DIR = OUT_DIR / "susie"
+    SUSIE_RESULTS_DIR = OUT_DIR / "susie_results"
+    LD_REF_BFILE = OUT_DIR / "bfile" / "merged_qc_numeric"
+
+    GTF_FILE = Path(gtf).expanduser() if gtf else BASE_DIR / "data" / "genes" / "Drosophila_melanogaster.BDGP6.54.62.chr.gtf.gz"
+    GENE_MAPPING_FILE = OUT_DIR / "female_finemap_gene_mapping.tsv"
+    ENHANCER_LOCAL_DIR = Path(enhancer_dir).expanduser() if enhancer_dir else BASE_DIR / "data" / "enhancers" / "dm"
+    ENHANCER_MAPPING_FILE = OUT_DIR / "female_finemap_enhancer_overlap.tsv"
+
+
+configure_paths()
 
 WINDOW_BP = 100_000
 
@@ -842,9 +894,6 @@ def run_susie_finemapping(
     return output_files
 
 
-GTF_FILE = BASE_DIR / "data" / "genes" / "Drosophila_melanogaster.BDGP6.54.62.chr.gtf.gz"
-GENE_MAPPING_FILE = OUT_DIR / "female_finemap_gene_mapping.tsv"
-
 GENE_ID_PATTERN = re.compile(r'gene_id "([^"]+)"')
 GENE_NAME_PATTERN = re.compile(r'gene_name "([^"]+)"')
 GENE_BIOTYPE_PATTERN = re.compile(r'gene_biotype "([^"]+)"')
@@ -859,7 +908,8 @@ def _extract_gtf_attribute(pattern: re.Pattern, attributes: str, default: str = 
     return match.group(1) if match else default
 
 
-def load_gene_annotations(gtf_file: Path = GTF_FILE) -> pd.DataFrame:
+def load_gene_annotations(gtf_file: Path | None = None) -> pd.DataFrame:
+    gtf_file = gtf_file or GTF_FILE
     if not gtf_file.is_file():
         raise FileNotFoundError(f"Missing gene annotation GTF: {gtf_file}")
 
@@ -991,9 +1041,6 @@ def run_gene_mapping_stage() -> pd.DataFrame:
     return map_finemap_genes(output_files)
 
 
-ENHANCER_ATLAS_DIR = Path("/mnt/hdd_2/biocypher-kg/input/enhancer_atlas/dm")
-ENHANCER_LOCAL_DIR = BASE_DIR / "data" / "enhancers" / "dm"
-ENHANCER_MAPPING_FILE = OUT_DIR / "female_finemap_enhancer_overlap.tsv"
 ENHANCER_MAPPING_COLUMNS = [
     "locus", "SNP", "CHR", "POS", "PIP", "CS",
     "enhancer_tissue", "enh_start", "enh_end", "enh_score",
@@ -1002,7 +1049,7 @@ ENHANCER_MAPPING_COLUMNS = [
 
 def resolve_enhancer_dir() -> Path | None:
     for candidate in (ENHANCER_LOCAL_DIR, ENHANCER_ATLAS_DIR):
-        if candidate.is_dir() and any(candidate.glob("*.bed")):
+        if candidate is not None and candidate.is_dir() and any(candidate.glob("*.bed")):
             return candidate
     return None
 
@@ -1117,12 +1164,193 @@ def run_enhancer_mapping_stage() -> pd.DataFrame | None:
 
     enhancer_dir = resolve_enhancer_dir()
     if enhancer_dir is None:
-        print(
-            "Skipping enhancer mapping: no EnhancerAtlas BED files found in "
-            f"{ENHANCER_LOCAL_DIR} or {ENHANCER_ATLAS_DIR}"
+        raise FileNotFoundError(
+            f"No EnhancerAtlas BED files found in {ENHANCER_LOCAL_DIR}; "
+            "download the fly tracks there or pass --enhancer-dir"
         )
-        return None
     return map_finemap_enhancers(output_files, enhancer_dir)
+
+
+def _file_digest(path: Path, algorithm: str) -> str:
+    digest = hashlib.new(algorithm)
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_verified(url: str, destination: Path, digest: str, algorithm: str) -> None:
+    """Cache a source file only after its published/local checksum matches."""
+    if destination.is_file():
+        if _file_digest(destination, algorithm) != digest:
+            raise ValueError(f"Cached source has the wrong {algorithm} checksum: {destination}")
+        print(f"Using verified source: {destination}")
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix=destination.name + ".", suffix=".tmp",
+                                     dir=destination.parent, delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+        try:
+            print(f"Downloading {url} -> {destination}", flush=True)
+            with urllib.request.urlopen(url, timeout=120) as response:
+                shutil.copyfileobj(response, temporary, length=1024 * 1024)
+        except BaseException:
+            temporary_path.unlink(missing_ok=True)
+            raise
+    try:
+        actual = _file_digest(temporary_path, algorithm)
+        if actual != digest:
+            raise ValueError(f"{algorithm} mismatch for {url}: expected {digest}, got {actual}")
+        temporary_path.replace(destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _verify_phenotype_source(path: Path) -> None:
+    digest = hashlib.sha256()
+    with gzip.open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != PHENOTYPE_SHA256:
+        raise ValueError(f"Female lifespan source changed or is corrupt: {path}")
+
+
+def _plink_trio_exists(prefix: Path) -> bool:
+    return all(Path(f"{prefix}{extension}").is_file() for extension in (".bed", ".bim", ".fam"))
+
+
+def _run_checked(command: list[str]) -> None:
+    print("Running:", shlex.join(command), flush=True)
+    subprocess.run(command, check=True)
+
+
+def prepare_phenotype(force: bool = False) -> None:
+    """Convert Ivanov female mean lifespan to PLINK phenotype and keep files."""
+    if PHENO_FILE.is_file() and ANALYSIS_LINES_FILE.is_file() and not force:
+        print(f"Using prepared phenotype: {PHENO_FILE}")
+        return
+    if not RAW_PHENO_FILE.is_file():
+        RAW_PHENO_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix="female_lifespan.", suffix=".tmp",
+                                         dir=RAW_PHENO_FILE.parent, delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            try:
+                with urllib.request.urlopen(PHENOTYPE_URL, timeout=120) as response:
+                    shutil.copyfileobj(response, temporary)
+            except BaseException:
+                temporary_path.unlink(missing_ok=True)
+                raise
+        try:
+            _verify_phenotype_source(temporary_path)
+            temporary_path.replace(RAW_PHENO_FILE)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+    _verify_phenotype_source(RAW_PHENO_FILE)
+    source = pd.read_csv(RAW_PHENO_FILE, sep="\t", compression="gzip")
+    required = {"DGRP", "sex", "mn_Lifespan"}
+    if not required.issubset(source.columns):
+        raise ValueError(f"Phenotype source lacks columns: {required - set(source.columns)}")
+    female = source.loc[source["sex"].eq("F"), ["DGRP", "mn_Lifespan"]].copy()
+    female["IID"] = female["DGRP"].str.extract(r"^DGRP_(\d+)$", expand=False)
+    female[PHENO_NAME] = pd.to_numeric(female["mn_Lifespan"], errors="coerce")
+    if female["IID"].isna().any() or female[PHENO_NAME].isna().any():
+        raise ValueError("Malformed female lifespan line IDs or missing mean lifespan")
+    female["IID"] = female["IID"].astype(int).astype(str)
+    if female["IID"].duplicated().any():
+        raise ValueError("Duplicate DGRP female line IDs")
+    fam = pd.read_csv(Path(f"{RAW_GENOTYPE_PREFIX}.fam"), sep=r"\s+", header=None,
+                      usecols=[0, 1], names=["FID", "IID"], dtype=str)
+    available = set(zip(fam["FID"], fam["IID"]))
+    female.insert(1, "FID", "line")
+    female = female.loc[[key in available for key in zip(female["FID"], female["IID"])]]
+    if len(female) != 197:
+        raise ValueError(f"Expected 197 female lines with genotypes; found {len(female)}")
+    PHENO_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ANALYSIS_LINES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    phenotype = female[["FID", "IID", PHENO_NAME]]
+    for destination, frame, header in (
+        (PHENO_FILE, phenotype, True),
+        (ANALYSIS_LINES_FILE, phenotype[["FID", "IID"]], False),
+    ):
+        temporary = destination.with_name(destination.name + ".tmp")
+        frame.to_csv(temporary, sep="\t", header=header, index=False)
+        temporary.replace(destination)
+    print(f"Prepared {len(phenotype)} female lines: {PHENO_FILE}")
+
+
+def prepare_genotypes(plink2_bin: str, force: bool = False) -> None:
+    """Split the Zenodo dm6 PLINK panel into chromosome arms."""
+    if all(_plink_trio_exists(REFERENCE_DIR / f"DGRP.{chrom}") for chrom in FLY_CHROMS) and not force:
+        print(f"Using chromosome-arm genotypes in {REFERENCE_DIR}")
+        return
+    for extension, digest in GENOTYPE_MD5.items():
+        _download_verified(GENOTYPE_URL_PREFIX + extension + "?download=1",
+                           Path(f"{RAW_GENOTYPE_PREFIX}{extension}"), digest, "md5")
+    for chrom in FLY_CHROMS:
+        prefix = REFERENCE_DIR / f"DGRP.{chrom}"
+        if _plink_trio_exists(prefix) and not force:
+            continue
+        _run_checked([plink2_bin, "--bfile", str(RAW_GENOTYPE_PREFIX), "--chr", chrom,
+                      "--allow-extra-chr", "--make-bed", "--out", str(prefix)])
+        if not _plink_trio_exists(prefix):
+            raise RuntimeError(f"PLINK did not create genotype files for {chrom}: {prefix}")
+
+
+def prepare_qc_and_pca(plink_bin: str, plink2_bin: str, force: bool = False) -> None:
+    """Match 197 lines, QC each arm, merge, prune LD, and calculate 10 PCs."""
+    QC_GENOTYPE_DIR.mkdir(parents=True, exist_ok=True)
+    for chrom in FLY_CHROMS:
+        output = QC_GENOTYPE_DIR / chrom
+        if _plink_trio_exists(output) and not force:
+            continue
+        _run_checked([plink2_bin, "--bfile", str(REFERENCE_DIR / f"DGRP.{chrom}"),
+                      "--keep", str(ANALYSIS_LINES_FILE), "--maf", "0.01",
+                      "--geno", "0.05", "--allow-extra-chr", "--make-bed",
+                      "--out", str(output)])
+        if not _plink_trio_exists(output):
+            raise RuntimeError(f"PLINK did not create QC files for {chrom}: {output}")
+    if not _plink_trio_exists(MERGED_QC_SOURCE) or force:
+        merge_list = GLM_DIR / "pca_merge_list.txt"
+        merge_list.parent.mkdir(parents=True, exist_ok=True)
+        merge_list.write_text("".join(
+            f"{QC_GENOTYPE_DIR / chrom}.bed {QC_GENOTYPE_DIR / chrom}.bim "
+            f"{QC_GENOTYPE_DIR / chrom}.fam\n" for chrom in FLY_CHROMS[1:]
+        ))
+        _run_checked([plink_bin, "--bfile", str(QC_GENOTYPE_DIR / FLY_CHROMS[0]),
+                      "--merge-list", str(merge_list), "--allow-extra-chr", "--make-bed",
+                      "--out", str(MERGED_QC_SOURCE)])
+        if not _plink_trio_exists(MERGED_QC_SOURCE):
+            raise RuntimeError(f"PLINK did not create merged reference: {MERGED_QC_SOURCE}")
+    prune_prefix = GLM_DIR / "pca_prune"
+    prune_file = prune_prefix.with_suffix(".prune.in")
+    if not prune_file.is_file() or force:
+        _run_checked([plink2_bin, "--bfile", str(MERGED_QC_SOURCE), "--allow-extra-chr",
+                      "--indep-pairwise", "200kb", "1", "0.2", "--out", str(prune_prefix)])
+    if not EIGENVEC_FILE.is_file() or force:
+        pca_prefix = GLM_DIR / "dgrp_pca"
+        _run_checked([plink2_bin, "--bfile", str(MERGED_QC_SOURCE),
+                      "--extract", str(prune_file), "--pca", "10",
+                      "--out", str(pca_prefix)])
+        generated = pca_prefix.with_suffix(".eigenvec")
+        if generated != EIGENVEC_FILE:
+            shutil.copy2(generated, EIGENVEC_FILE)
+    if not EIGENVEC_FILE.is_file():
+        raise RuntimeError(f"PLINK did not create PCA covariates: {EIGENVEC_FILE}")
+    print(f"QC and PCA complete: {EIGENVEC_FILE}")
+
+
+def run_prepare_stage(plink_bin: str = PLINK_BIN, plink2_bin: str = PLINK2_BIN,
+                      force: bool = False) -> None:
+    plink = shutil.which(str(Path(plink_bin).expanduser()))
+    plink2 = shutil.which(str(Path(plink2_bin).expanduser()))
+    if not plink or not plink2:
+        raise FileNotFoundError("Preparation requires PLINK 1.9 and PLINK 2.0; "
+                                "pass --plink-bin and --plink2-bin if needed")
+    prepare_genotypes(plink2, force=force)
+    prepare_phenotype(force=force)
+    prepare_qc_and_pca(plink, plink2, force=force)
+    if not GTF_FILE.is_file():
+        _download_verified(GTF_URL, GTF_FILE, GTF_SHA256, "sha256")
 
 
 def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
@@ -1208,7 +1436,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--stage",
-        choices=("gwas", "cojo", "susie", "genes", "enhancers", "all"),
+        choices=("prepare", "gwas", "cojo", "susie", "genes", "enhancers", "all"),
         default="all",
         help="Pipeline stage to run (default: all)",
     )
@@ -1232,11 +1460,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Regenerate cached outputs for the selected stage or stages",
     )
+    parser.add_argument("--base-dir", help="Project root; all default input/output paths derive from it")
+    parser.add_argument("--glm-dir", help="Directory holding GWAS/PLINK working files (default: <base>/data/gwas/tmp)")
+    parser.add_argument("--pheno", help="Phenotype file (default: <base>/data/gwas/lifespan_female.pheno)")
+    parser.add_argument("--qc-dir", help="Directory of per-chromosome QC'd PLINK genotypes (default: <glm-dir>/qc)")
+    parser.add_argument("--eigenvec", help="PCA eigenvector file (default: <glm-dir>/dgrp_pca.eigenvec)")
+    parser.add_argument("--bfile", help="Merged QC'd PLINK prefix for the LD reference (default: <glm-dir>/merged_qc)")
+    parser.add_argument("--gtf", help="Gene annotation GTF (default: <base>/data/genes/...BDGP6.54.62.chr.gtf.gz)")
+    parser.add_argument("--enhancer-dir", help="EnhancerAtlas BED directory (default: <base>/data/enhancers/dm)")
+    parser.add_argument("--out-dir", help="Output directory for results (default: <base>/data/finemap/female)")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    configure_paths(
+        base_dir=args.base_dir,
+        glm_dir=args.glm_dir,
+        pheno=args.pheno,
+        qc_dir=args.qc_dir,
+        eigenvec=args.eigenvec,
+        bfile=args.bfile,
+        out_dir=args.out_dir,
+        gtf=args.gtf,
+        enhancer_dir=args.enhancer_dir,
+    )
+    if args.stage in ("prepare", "gwas", "all"):
+        run_prepare_stage(plink_bin=args.plink_bin, plink2_bin=args.plink2_bin,
+                          force=args.force)
     if args.stage in ("gwas", "all"):
         run_gwas_stage(plink2_bin=args.plink2_bin, force=args.force)
     if args.stage in ("cojo", "all"):
