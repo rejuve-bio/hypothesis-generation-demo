@@ -7,7 +7,7 @@ The prepare stage downloads Ivanov et al. (2015) female lifespan values via
 DGRPool Study 18, dm6 DGRP2 PLINK genotypes from Zenodo record 837947, and
 the Ensembl Metazoa release 62 GTF. It matches the 197 lines, applies PLINK
 QC, merges chromosome arms, prunes for PCA, and computes 10 PCs. GWAS uses
-PC1 through PC4. EnhancerAtlas BED tracks must be supplied for the enhancer stage.
+PC1 through PC4. Enhancer mapping uses local BED tracks or the BioCypher default path.
 """
 
 import argparse
@@ -53,8 +53,8 @@ GTF_URL = (
 )
 GTF_SHA256 = "39e943ea25fbe46a6ec3fc28742e7bbf5f6c5e6de470785597bee3662e80730e"
 
-# Optional secondary directory for callers such as the isolated platform runner.
-ENHANCER_ATLAS_DIR: Path | None = None
+# Default BioCypher fly tracks; --enhancer-dir can override this on another server.
+ENHANCER_ATLAS_DIR = Path("/mnt/hdd_2/biocypher-kg/input/enhancer_atlas/dm")
 
 
 def configure_paths(base_dir=None, glm_dir=None, pheno=None, qc_dir=None,
@@ -1166,8 +1166,8 @@ def run_enhancer_mapping_stage() -> pd.DataFrame | None:
     enhancer_dir = resolve_enhancer_dir()
     if enhancer_dir is None:
         raise FileNotFoundError(
-            f"No EnhancerAtlas BED files found in {ENHANCER_LOCAL_DIR}; "
-            "download the fly tracks there or pass --enhancer-dir"
+            f"No EnhancerAtlas BED files found in {ENHANCER_LOCAL_DIR} or "
+            f"{ENHANCER_ATLAS_DIR}; pass --enhancer-dir on another server"
         )
     return map_finemap_enhancers(output_files, enhancer_dir)
 
@@ -1481,7 +1481,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eigenvec", help="PCA eigenvector file (default: <glm-dir>/dgrp_pca.eigenvec)")
     parser.add_argument("--bfile", help="Merged QC'd PLINK prefix for the LD reference (default: <glm-dir>/merged_qc)")
     parser.add_argument("--gtf", help="Gene annotation GTF (default: <base>/data/genes/...BDGP6.54.62.chr.gtf.gz)")
-    parser.add_argument("--enhancer-dir", help="EnhancerAtlas BED directory (default: <base>/data/enhancers/dm)")
+    parser.add_argument("--enhancer-dir", help="EnhancerAtlas BED directory (default: <base>/data/enhancers/dm, then BioCypher fly tracks)")
     parser.add_argument("--out-dir", help="Output directory for results (default: <base>/data/finemap/female)")
     return parser.parse_args(argv)
 
