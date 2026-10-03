@@ -1367,6 +1367,93 @@ def run_prepare_stage(plink_bin: str = PLINK_BIN, plink2_bin: str = PLINK2_BIN,
         _download_verified(GTF_URL, GTF_FILE, GTF_SHA256, "sha256")
 
 
+def run_phenotype_plots_stage() -> list[Path]:
+    """Plot the prepared line means and reported per-line fly summaries."""
+    if not PHENO_FILE.is_file() or not RAW_PHENO_FILE.is_file():
+        raise FileNotFoundError("Phenotype inputs are missing; run --stage prepare first")
+
+    from matplotlib.figure import Figure
+
+    phenotype = pd.read_csv(PHENO_FILE, sep=r"\s+")
+    if not {"IID", PHENO_NAME}.issubset(phenotype.columns):
+        raise ValueError(f"Missing IID or {PHENO_NAME} in {PHENO_FILE}")
+    line_ids = pd.to_numeric(phenotype["IID"], errors="raise").astype(int)
+    lifespan = pd.to_numeric(phenotype[PHENO_NAME], errors="raise").to_numpy()
+    if len(lifespan) < 2 or not np.isfinite(lifespan).all():
+        raise ValueError("At least two finite line-level lifespan values are required")
+    if line_ids.duplicated().any():
+        raise ValueError("Duplicate DGRP line IDs in prepared phenotype")
+
+    plot_dir = OUT_DIR / "phenotype_plots"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    distribution_file = plot_dir / "lifespan_distribution.png"
+    figure = Figure(figsize=(8, 5), dpi=180)
+    ax = figure.subplots()
+    ax.hist(lifespan, bins="auto", color="#4978a5", edgecolor="white")
+    ax.axvline(np.mean(lifespan), color="#a84332", linewidth=2,
+               label=f"Mean: {np.mean(lifespan):.1f} days")
+    ax.axvline(np.median(lifespan), color="#345a35", linestyle="--", linewidth=2,
+               label=f"Median: {np.median(lifespan):.1f} days")
+    ax.set(title=f"Female lifespan across {len(lifespan)} DGRP lines",
+           xlabel="Mean lifespan per line (days)", ylabel="Number of lines")
+    ax.text(0.98, 0.96,
+            f"Between-line sample variance: {np.var(lifespan, ddof=1):.1f} days²",
+            transform=ax.transAxes, ha="right", va="top",
+            bbox={"facecolor": "white", "alpha": 0.9, "edgecolor": "none"})
+    ax.legend(loc="upper left")
+    figure.tight_layout()
+    figure.savefig(distribution_file)
+
+    source = pd.read_csv(RAW_PHENO_FILE, sep="\t", compression="gzip")
+    required = {"DGRP", "sex", "NumberOfFlies", "sd_Lifespan"}
+    if not required.issubset(source.columns):
+        raise ValueError(f"Missing source columns: {required - set(source.columns)}")
+    source = source.loc[source["sex"].eq("F")].copy()
+    source["IID"] = pd.to_numeric(
+        source["DGRP"].str.extract(r"^DGRP_(\d+)$", expand=False), errors="raise"
+    ).astype(int)
+    if source["IID"].duplicated().any():
+        raise ValueError("Duplicate DGRP line IDs in source phenotype")
+    source = source.set_index("IID").reindex(line_ids)
+    if source["DGRP"].isna().any():
+        raise ValueError("Prepared phenotype contains lines absent from the source table")
+
+    counts = pd.to_numeric(source["NumberOfFlies"], errors="coerce").dropna()
+    standard_deviation = pd.to_numeric(source["sd_Lifespan"], errors="coerce").dropna()
+    if counts.empty or standard_deviation.empty:
+        raise ValueError("No reported fly counts or lifespan standard deviations")
+    if (counts <= 0).any() or (standard_deviation < 0).any():
+        raise ValueError("Invalid fly count or lifespan standard deviation")
+    variance = standard_deviation.pow(2)
+
+    sample_file = plot_dir / "fly_counts_and_variance.png"
+    figure = Figure(figsize=(11, 4.8), dpi=180)
+    count_ax, variance_ax = figure.subplots(1, 2)
+    bins = np.arange(int(counts.min()), int(counts.max()) + 2) - 0.5
+    count_ax.hist(counts, bins=bins, color="#4978a5", edgecolor="white")
+    count_ax.axvline(counts.median(), color="#a84332", linestyle="--",
+                     label=f"Median: {counts.median():.0f} flies")
+    count_ax.set(title=f"Fly counts reported for {len(counts)}/{len(line_ids)} lines",
+                 xlabel="Flies measured per line", ylabel="Number of lines")
+    count_ax.legend()
+    variance_ax.hist(variance, bins="auto", color="#6d9a75", edgecolor="white")
+    variance_ax.axvline(variance.median(), color="#a84332", linestyle="--",
+                        label=f"Median: {variance.median():.1f} days²")
+    variance_ax.set(title=f"Within-line variance reported for {len(variance)}/{len(line_ids)} lines",
+                    xlabel="Within-line lifespan variance (days²)", ylabel="Number of lines")
+    variance_ax.legend()
+    figure.text(0.5, 0.01,
+                "The source reports summaries per line; individual fly ages are unavailable.",
+                ha="center", fontsize=9)
+    figure.tight_layout(rect=(0, 0.04, 1, 1))
+    figure.savefig(sample_file)
+
+    outputs = [distribution_file, sample_file]
+    for output in outputs:
+        print(f"Saved phenotype plot: {output}")
+    return outputs
+
+
 def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
     plink2_command = str(Path(plink2_bin).expanduser())
     plink2_executable = shutil.which(plink2_command)
@@ -1450,7 +1537,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--stage",
-        choices=("prepare", "gwas", "cojo", "susie", "genes", "enhancers", "all"),
+        choices=("prepare", "plots", "gwas", "cojo", "susie", "genes", "enhancers", "all"),
         default="all",
         help="Pipeline stage to run (default: all)",
     )
@@ -1502,6 +1589,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.stage in ("prepare", "gwas", "all"):
         run_prepare_stage(plink_bin=args.plink_bin, plink2_bin=args.plink2_bin,
                           force=args.force)
+    if args.stage in ("plots", "all"):
+        run_phenotype_plots_stage()
     if args.stage in ("gwas", "all"):
         run_gwas_stage(plink2_bin=args.plink2_bin, force=args.force)
     if args.stage in ("cojo", "all"):
