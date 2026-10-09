@@ -183,11 +183,24 @@ jobs:
         echo "=== Checking every service Compose actually started ==="
         $COMPOSE ps --all
 
+        # One-shot services (label com.hypgen.one-shot=true, e.g. ot-db-bootstrap)
+        # are expected to exit; they pass if they exited with code 0.
+        ONE_SHOT=$($COMPOSE config --format json | python3 -c "
+        import sys, json
+        c = json.load(sys.stdin)
+        print(' '.join(n for n, s in c['services'].items() if (s.get('labels') or {}).get('com.hypgen.one-shot') == 'true'))
+        ")
+        echo "One-shot services: ${ONE_SHOT:-none}"
+
         FAILED_SERVICES=""
         for service in $($COMPOSE ps --all --services); do
           STATE=$($COMPOSE ps --all --format '{{.Service}} {{.State}}' | awk -v s="$service" '$1==s{print $2}')
+          EXIT_CODE=$($COMPOSE ps --all --format '{{.Service}} {{.ExitCode}}' | awk -v s="$service" '$1==s{print $2}')
           if [ "$STATE" = "running" ]; then
             echo "[SUCCESS] $service is running"
+            $COMPOSE logs "$service" --tail=5
+          elif [ "$STATE" = "exited" ] && [ "$EXIT_CODE" = "0" ] && echo " $ONE_SHOT " | grep -q " $service "; then
+            echo "[SUCCESS] $service (one-shot) exited 0"
             $COMPOSE logs "$service" --tail=5
           else
             echo "[ERROR] $service is not running (state: ${STATE:-unknown}) — full logs below:"
@@ -203,7 +216,8 @@ jobs:
 
         echo "[SUCCESS] VALIDATION PASSED - ALL services are running and healthy!"
 
-    # Services with build: and no profile get pushed as hypothesis-generation-<service>.
+    # Services with build:, no profile and not one-shot get pushed as hypothesis-generation-<service>.
+    # (ot-db-bootstrap runs from the same image as dask-worker, so it is not pushed separately.)
     - name: Determine pushable services
       if: steps.validate.outcome == 'success'
       id: services
@@ -211,7 +225,11 @@ jobs:
         LIST=$($COMPOSE config --format json --no-interpolate | python3 -c "
         import sys, json
         c = json.load(sys.stdin)
-        names = sorted(n for n, s in c['services'].items() if 'build' in s and not s.get('profiles'))
+        names = sorted(
+            n for n, s in c['services'].items()
+            if 'build' in s and not s.get('profiles')
+            and (s.get('labels') or {}).get('com.hypgen.one-shot') != 'true'
+        )
         print(' '.join(names))
         ")
         echo "list=$LIST" >> $GITHUB_OUTPUT
