@@ -46,3 +46,34 @@ This project is designed to generate hypotheses for the causal relationship betw
     ```
 
 5. Once the containers are running, the Flask app, Prolog service, and MongoDB service will be accessible on ports 5000, 4242, and 27017, respectively.
+
+### OpenTargets credible-sets database
+
+The pipeline reuses OpenTargets' precomputed credible sets (Postgres service `credible-sets-postgres`) when a study is in OpenTargets, skipping local COJO/SuSiE fine-mapping. On every `docker compose up`, the one-shot `ot-db-bootstrap` service makes sure that database holds a complete copy of the pinned release, and `dask-worker` / `prefect-deployment` start only after it exits 0:
+
+1. If `ot_load_state` records the pinned release + schema version and the live row counts match the counts recorded at load time, it exits in seconds.
+2. Otherwise it restores a `pg_dump` snapshot from MinIO (`<prefix>/<release>/schema-v<N>/{manifest.json,ot.dump}`, sha256- and row-count-verified).
+3. If there is no snapshot, it loads the release from the EBI FTP (slow — can take hours).
+
+Loads go into an `ot_staging` schema and are swapped into place in one transaction, so a crashed or partial load never replaces good data and is retried on the next run.
+
+| Variable | Meaning |
+|---|---|
+| `OT_RELEASE` | **Required.** Pinned OpenTargets release, e.g. `25.09` (`latest` is rejected). Must include FinnGen R12 studies. |
+| `OT_DB_BOOTSTRAP` | `auto` (default), `minio-only`, `ebi-only`, or `skip` (CI). |
+| `OT_DB_SNAPSHOT_MINIO_PREFIX` | Snapshot prefix in the MinIO bucket (default `pg-releases/opentargets`). |
+| `OT_DB_SNAPSHOT_CACHE_DIR` | Local download dir for snapshots (default `data/pg_releases`). |
+
+After a server has loaded a new release from EBI, publish it so other deployments restore it from MinIO:
+
+```sh
+uv run python scripts/pg_releases.py publish   # --force to overwrite
+uv run python scripts/pg_releases.py list
+```
+
+To force a reload (e.g. to repair the DB by hand), clear the marker and re-run the bootstrap:
+
+```sh
+docker compose exec credible-sets-postgres psql -U $CREDIBLE_SETS_DB_USER -d $CREDIBLE_SETS_DB_NAME -c "DELETE FROM ot_load_state"
+docker compose up ot-db-bootstrap
+```
