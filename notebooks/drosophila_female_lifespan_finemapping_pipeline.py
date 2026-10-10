@@ -1514,6 +1514,27 @@ def validate_gwas_sample_alignment() -> int:
     return len(phenotype)
 
 
+def validate_gwas_genotype_samples(bfile: Path, chrom: str) -> None:
+    phenotype = pd.read_csv(PHENO_FILE, sep=r"\s+", usecols=["FID", "IID"], dtype=str)
+    genotype = pd.read_csv(
+        bfile.with_suffix(".fam"), sep=r"\s+", header=None,
+        usecols=[0, 1], names=["FID", "IID"], dtype=str,
+    )
+    if genotype.empty or genotype[["FID", "IID"]].isna().any().any():
+        raise ValueError(f"{chrom} genotype sample identifiers are missing")
+    if genotype.duplicated(["FID", "IID"]).any():
+        raise ValueError(f"{chrom} genotype sample identifiers are duplicated")
+    phenotype_ids = pd.MultiIndex.from_frame(phenotype)
+    genotype_ids = pd.MultiIndex.from_frame(genotype)
+    missing = phenotype_ids.difference(genotype_ids)
+    extra = genotype_ids.difference(phenotype_ids)
+    if len(missing) or len(extra):
+        raise ValueError(
+            f"{chrom} QC genotypes do not match phenotype lines: "
+            f"{len(missing)} missing, {len(extra)} extra"
+        )
+
+
 def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
     plink2_command = str(Path(plink2_bin).expanduser())
     plink2_executable = shutil.which(plink2_command)
@@ -1537,15 +1558,15 @@ def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
         bfile = QC_GENOTYPE_DIR / chrom
         output_prefix = GLM_DIR / f"lifespan_female_{chrom}"
         output_file = GLM_DIR / f"lifespan_female_{chrom}.{PHENO_NAME}.glm.linear"
-        if output_file.is_file() and not force:
-            print(f"  {chrom}: using existing GWAS output")
-            continue
-
         missing = [bfile.with_suffix(ext) for ext in (".bed", ".bim", ".fam")
                    if not bfile.with_suffix(ext).is_file()]
         if missing:
             missing_list = "\n".join(f"    {path}" for path in missing)
             raise FileNotFoundError(f"Missing QC'd genotype files for {chrom}:\n{missing_list}")
+        validate_gwas_genotype_samples(bfile, chrom)
+        if output_file.is_file() and not force:
+            print(f"  {chrom}: using existing GWAS output")
+            continue
 
         command = [
             plink2_executable,
