@@ -1607,6 +1607,7 @@ def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
             "--no-psam-pheno",
             "--allow-extra-chr",
         ]
+        print("Running:", shlex.join(command), flush=True)
         subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
 
         if not output_file.is_file():
