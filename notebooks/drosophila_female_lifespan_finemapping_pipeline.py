@@ -222,6 +222,12 @@ def merge_gwas_sumstats() -> pd.DataFrame:
         chromosome_gwas = chromosome_gwas.loc[chromosome_gwas["TEST"].eq("ADD")]
         if chromosome_gwas.empty:
             raise ValueError(f"No additive association results found in {input_file}")
+        observed_chromosomes = set(chromosome_gwas["#CHROM"].astype(str))
+        if observed_chromosomes != {chrom}:
+            raise ValueError(
+                f"Unexpected chromosome labels in {input_file}: "
+                f"expected {chrom}, found {sorted(observed_chromosomes)}"
+            )
         chromosome_gwas = chromosome_gwas.rename(columns=GWAS_COLUMN_MAP)
         frames.append(chromosome_gwas[GWAS_COLUMNS])
 
