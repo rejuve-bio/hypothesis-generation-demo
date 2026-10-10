@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
 """DGRP female lifespan GWAS and fine-mapping pipeline.
-
-Run ``python3 notebooks/drosophila_female_lifespan_finemapping_pipeline.py
---stage all --enhancer-dir /path/to/fly/enhancer_beds`` from the repository root.
-The prepare stage downloads Ivanov et al. (2015) female lifespan values via
-DGRPool Study 18, dm6 DGRP2 PLINK genotypes from Zenodo record 837947, and
-the Ensembl Metazoa release 62 GTF. It matches the 197 lines, applies PLINK
-QC, merges chromosome arms, prunes for PCA, and computes 10 PCs. GWAS uses
-PC1 through PC4. Enhancer mapping uses local BED tracks or the BioCypher default path.
 """
 
 import argparse
@@ -38,7 +30,7 @@ CHROM_MAP = {"2L": "1", "2R": "2", "3L": "3", "3R": "4", "4": "5", "X": "23", "2
 COJO_CHROM_MAP = {1: "2L", 2: "2R", 3: "3L", 4: "3R", 5: "4", 23: "X"}
 SOURCE_CHROM_MAP = {"2L": "chr2L", "2R": "chr2R", "3L": "chr3L", "3R": "chr3R", "4": "4", "X": "23"}
 
-# Public, versioned inputs. The DGRPool table is curated from Ivanov et al. 2015.
+
 PHENOTYPE_URL = "https://dgrpool.epfl.ch/studies/18/get_file?name=summary.tsv"
 PHENOTYPE_SHA256 = "efb9a7f2dcd46ab24a01ff41876b4340a1450de90cb35d211b3f0c07bd68e9aa"
 GENOTYPE_URL_PREFIX = "https://zenodo.org/records/837947/files/dgrp2_dm6_dbSNP.vcf"
@@ -53,7 +45,7 @@ GTF_URL = (
 )
 GTF_SHA256 = "39e943ea25fbe46a6ec3fc28742e7bbf5f6c5e6de470785597bee3662e80730e"
 
-# Default BioCypher fly tracks; --enhancer-dir can override this on another server.
+
 ENHANCER_ATLAS_DIR = Path("/mnt/hdd_2/biocypher-kg/input/enhancer_atlas/dm")
 
 
