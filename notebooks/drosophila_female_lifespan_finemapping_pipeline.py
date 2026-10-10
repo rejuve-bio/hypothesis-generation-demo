@@ -239,11 +239,27 @@ def save_gwas_sumstats() -> Path:
     output_file = GLM_DIR / "lifespan_female_gwas_sumstats.tsv"
     temporary_file = output_file.with_suffix(".tsv.tmp")
     gwas = merge_gwas_sumstats()
+    valid = (
+        np.isfinite(gwas[NUMERIC_COLUMNS].to_numpy(dtype=float)).all(axis=1)
+        & gwas[["SNP", "A1", "A2"]].notna().all(axis=1).to_numpy()
+        & (gwas["A1"] != gwas["A2"]).to_numpy()
+        & gwas["freq"].between(0, 1).to_numpy()
+        & gwas["p"].between(0, 1).to_numpy()
+        & (gwas["POS"] > 0).to_numpy()
+        & (gwas["se"] > 0).to_numpy()
+        & (gwas["N"] > 0).to_numpy()
+    )
+    invalid_count = int((~valid).sum())
+    gwas = gwas.loc[valid]
+    if gwas.empty:
+        raise ValueError("No valid female GWAS summary statistics remain after quality checks")
     try:
         gwas.to_csv(temporary_file, sep="\t", index=False)
         temporary_file.replace(output_file)
     finally:
         temporary_file.unlink(missing_ok=True)
+    if invalid_count:
+        print(f"Excluded {invalid_count:,} invalid GWAS row{'s' if invalid_count != 1 else ''}")
     print(f"Saved {len(gwas):,} female GWAS summary statistics: {output_file}")
     return output_file
 
