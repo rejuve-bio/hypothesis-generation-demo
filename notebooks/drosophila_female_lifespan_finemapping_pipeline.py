@@ -1481,6 +1481,39 @@ def run_phenotype_plots_stage() -> list[Path]:
     return outputs
 
 
+def validate_gwas_sample_alignment() -> int:
+    phenotype = pd.read_csv(PHENO_FILE, sep=r"\s+", dtype=str)
+    covariates = pd.read_csv(EIGENVEC_FILE, sep=r"\s+", dtype=str)
+    covariates = covariates.rename(columns={"#FID": "FID"})
+    pc_names = [f"PC{index}" for index in range(1, N_PCS + 1)]
+    for label, frame, required in (
+        ("phenotype", phenotype, {"FID", "IID", PHENO_NAME}),
+        ("PCA covariates", covariates, {"FID", "IID", *pc_names}),
+    ):
+        missing = required - set(frame.columns)
+        if missing:
+            raise ValueError(f"{label} is missing columns: {sorted(missing)}")
+        if frame.empty or frame[["FID", "IID"]].isna().any().any():
+            raise ValueError(f"{label} has missing sample identifiers")
+        if frame.duplicated(["FID", "IID"]).any():
+            raise ValueError(f"{label} has duplicate sample identifiers")
+
+    phenotype_values = pd.to_numeric(phenotype[PHENO_NAME], errors="coerce")
+    pc_values = covariates[pc_names].apply(pd.to_numeric, errors="coerce")
+    if not np.isfinite(phenotype_values.to_numpy(dtype=float)).all():
+        raise ValueError("Female lifespan phenotype has nonfinite values")
+    if not np.isfinite(pc_values.to_numpy(dtype=float)).all():
+        raise ValueError("PCA covariates have nonfinite PC1-PC4 values")
+
+    phenotype_ids = pd.MultiIndex.from_frame(phenotype[["FID", "IID"]])
+    covariate_ids = pd.MultiIndex.from_frame(covariates[["FID", "IID"]])
+    missing_ids = phenotype_ids.difference(covariate_ids)
+    if len(missing_ids):
+        raise ValueError(f"{len(missing_ids)} phenotype lines are missing PCA covariates")
+    print(f"Validated phenotype and PC1-PC{N_PCS} for {len(phenotype)} matching lines")
+    return len(phenotype)
+
+
 def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
     plink2_command = str(Path(plink2_bin).expanduser())
     plink2_executable = shutil.which(plink2_command)
@@ -1493,6 +1526,7 @@ def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
     if not EIGENVEC_FILE.is_file():
         raise FileNotFoundError(f"Missing PCA eigenvector file: {EIGENVEC_FILE}")
 
+    validate_gwas_sample_alignment()
     covar_names = f"PC1-PC{N_PCS}"
     print(
         f"Running per-chromosome GWAS with the first {N_PCS} principal components "
