@@ -235,6 +235,19 @@ def merge_gwas_sumstats() -> pd.DataFrame:
     return gwas
 
 
+def save_gwas_sumstats() -> Path:
+    output_file = GLM_DIR / "lifespan_female_gwas_sumstats.tsv"
+    temporary_file = output_file.with_suffix(".tsv.tmp")
+    gwas = merge_gwas_sumstats()
+    try:
+        gwas.to_csv(temporary_file, sep="\t", index=False)
+        temporary_file.replace(output_file)
+    finally:
+        temporary_file.unlink(missing_ok=True)
+    print(f"Saved {len(gwas):,} female GWAS summary statistics: {output_file}")
+    return output_file
+
+
 def filter_significant_snps(gwas: pd.DataFrame) -> pd.DataFrame:
     maf = np.minimum(gwas["freq"], 1 - gwas["freq"])
     valid = (
@@ -1497,6 +1510,7 @@ def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
         n_snps = sum(1 for _ in open(output_file)) - 1
         print(f"  {chrom}: {n_snps:,} SNPs tested")
 
+    save_gwas_sumstats()
     print(f"GWAS complete: {N_PCS}-PC association results in {GLM_DIR}")
 
 
