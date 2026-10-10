@@ -187,15 +187,14 @@ def install_gcta(destination: Path = GCTA_LOCAL_BIN) -> Path:
 
 
 def resolve_gcta_binary(gcta_bin: str = GCTA_BIN) -> str:
-    requested = str(Path(gcta_bin).expanduser())
-    executable = shutil.which(requested)
-    if executable is not None:
-        return executable
-
     if gcta_bin != GCTA_BIN:
-        raise FileNotFoundError(
-            f"Could not execute the requested GCTA binary: {gcta_bin}"
-        )
+        requested = str(Path(gcta_bin).expanduser())
+        executable = shutil.which(requested)
+        if executable is None:
+            raise FileNotFoundError(
+                f"Could not execute the requested GCTA binary: {gcta_bin}"
+            )
+        return executable
 
     local_executable = shutil.which(str(GCTA_LOCAL_BIN))
     if local_executable is not None:
@@ -1535,6 +1534,13 @@ def validate_gwas_genotype_samples(bfile: Path, chrom: str) -> None:
         )
 
 
+def gwas_output_is_current(output_file: Path, bfile: Path) -> bool:
+    if not output_file.is_file():
+        return False
+    inputs = (PHENO_FILE, EIGENVEC_FILE, *(bfile.with_suffix(ext) for ext in (".bed", ".bim", ".fam")))
+    return output_file.stat().st_mtime_ns >= max(path.stat().st_mtime_ns for path in inputs)
+
+
 def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
     plink2_command = str(Path(plink2_bin).expanduser())
     plink2_executable = shutil.which(plink2_command)
@@ -1564,9 +1570,11 @@ def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
             missing_list = "\n".join(f"    {path}" for path in missing)
             raise FileNotFoundError(f"Missing QC'd genotype files for {chrom}:\n{missing_list}")
         validate_gwas_genotype_samples(bfile, chrom)
-        if output_file.is_file() and not force:
+        if gwas_output_is_current(output_file, bfile) and not force:
             print(f"  {chrom}: using existing GWAS output")
             continue
+        if output_file.is_file() and not force:
+            print(f"  {chrom}: rerunning GWAS because an input is newer than the output")
 
         command = [
             plink2_executable,
