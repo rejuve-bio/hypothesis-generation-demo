@@ -212,11 +212,17 @@ def merge_gwas_sumstats() -> pd.DataFrame:
             raise FileNotFoundError(f"Missing female GWAS output for {chrom}: {input_file}")
 
         chromosome_gwas = pd.read_csv(input_file, sep="\t", low_memory=False)
-        required_columns = set(GWAS_COLUMN_MAP) | {"POS", "A1"}
+        required_columns = set(GWAS_COLUMN_MAP) | {"POS", "A1", "TEST"}
         missing_columns = sorted(required_columns - set(chromosome_gwas.columns))
         if missing_columns:
             raise ValueError(f"{input_file} is missing columns: {', '.join(missing_columns)}")
 
+        non_additive_count = int(chromosome_gwas["TEST"].ne("ADD").sum())
+        if non_additive_count:
+            print(f"Excluded {non_additive_count:,} non-additive tests from {input_file}")
+        chromosome_gwas = chromosome_gwas.loc[chromosome_gwas["TEST"].eq("ADD")]
+        if chromosome_gwas.empty:
+            raise ValueError(f"No additive association results found in {input_file}")
         chromosome_gwas = chromosome_gwas.rename(columns=GWAS_COLUMN_MAP)
         frames.append(chromosome_gwas[GWAS_COLUMNS])
 
