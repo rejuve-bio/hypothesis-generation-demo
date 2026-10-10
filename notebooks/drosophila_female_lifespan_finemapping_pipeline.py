@@ -3,6 +3,7 @@
 """
 
 import argparse
+import filecmp
 import gzip
 import hashlib
 import platform
@@ -319,7 +320,15 @@ def write_cojo_input(significant_snps: pd.DataFrame) -> None:
 
     cojo["N"] = rounded_sample_size.astype(int)
     COJO_INPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    cojo.to_csv(COJO_INPUT_FILE, sep=" ", index=False)
+    temporary_file = COJO_INPUT_FILE.with_name(COJO_INPUT_FILE.name + ".tmp")
+    try:
+        cojo.to_csv(temporary_file, sep=" ", index=False)
+        if not COJO_INPUT_FILE.is_file() or not filecmp.cmp(
+            temporary_file, COJO_INPUT_FILE, shallow=False
+        ):
+            temporary_file.replace(COJO_INPUT_FILE)
+    finally:
+        temporary_file.unlink(missing_ok=True)
     print(f"Saved COJO input: {COJO_INPUT_FILE} ({len(cojo):,} SNPs)")
 
 
@@ -367,7 +376,10 @@ def prepare_cojo_bfile() -> None:
                 )
                 variant_count += 1
 
-        temporary_bim.replace(target_bim)
+        if not target_bim.is_file() or not filecmp.cmp(
+            temporary_bim, target_bim, shallow=False
+        ):
+            temporary_bim.replace(target_bim)
     finally:
         temporary_bim.unlink(missing_ok=True)
 
@@ -376,12 +388,6 @@ def prepare_cojo_bfile() -> None:
 
 def run_cojo(gcta_bin: str = GCTA_BIN, force: bool = False) -> None:
     jma_file = COJO_OUT_PREFIX.with_suffix(".jma.cojo")
-    if jma_file.is_file() and not force:
-        print(f"Using existing COJO result: {jma_file}")
-        return
-
-    gcta_executable = resolve_gcta_binary(gcta_bin)
-
     required_inputs = [
         COJO_INPUT_FILE,
         LD_REF_BFILE.with_suffix(".bed"),
@@ -392,7 +398,14 @@ def run_cojo(gcta_bin: str = GCTA_BIN, force: bool = False) -> None:
     if missing_inputs:
         missing_list = "\n".join(f"  {path}" for path in missing_inputs)
         raise FileNotFoundError(f"Missing COJO input files:\n{missing_list}")
+    if jma_file.is_file() and not force:
+        latest_input = max(path.stat().st_mtime_ns for path in required_inputs)
+        if jma_file.stat().st_mtime_ns > latest_input:
+            print(f"Using existing COJO result: {jma_file}")
+            return
+        print(f"Rerunning COJO because an input is newer than {jma_file}")
 
+    gcta_executable = resolve_gcta_binary(gcta_bin)
     COJO_OUT_PREFIX.parent.mkdir(parents=True, exist_ok=True)
     command = [
         gcta_executable,
