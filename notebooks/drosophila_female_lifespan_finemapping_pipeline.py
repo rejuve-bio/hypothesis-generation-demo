@@ -1466,7 +1466,7 @@ def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
     if not EIGENVEC_FILE.is_file():
         raise FileNotFoundError(f"Missing PCA eigenvector file: {EIGENVEC_FILE}")
 
-    covar_columns = f"3-{2 + N_PCS}"
+    covar_names = f"PC1-PC{N_PCS}"
     print(
         f"Running per-chromosome GWAS with the first {N_PCS} principal components "
         f"(PC1-PC{N_PCS}) as covariates"
@@ -1492,8 +1492,8 @@ def run_gwas_stage(plink2_bin: str = PLINK2_BIN, force: bool = False) -> None:
             "--pheno", str(PHENO_FILE),
             "--pheno-name", PHENO_NAME,
             "--covar", str(EIGENVEC_FILE),
-            "--covar-col-nums", covar_columns,
-            "--linear", "hide-covar",
+            "--covar-name", covar_names,
+            "--glm", "hide-covar",
             "--out", str(output_prefix),
             "--no-psam-pheno",
             "--allow-extra-chr",
