@@ -23,6 +23,20 @@ from src.tasks import (
 from src.utils import emit_task_update
 
 
+def _skipped_graphs_warnings(skipped_graphs, total_graphs, variant):
+    """Warning listing skipped causal graphs and why, if any."""
+    if not skipped_graphs:
+        return []
+    return [{
+        "code": "causal_graphs_skipped",
+        "message": (
+            f"{len(skipped_graphs)} of {total_graphs} causal graphs for {variant} "
+            "were skipped and have no hypothesis. See 'skipped' for why."
+        ),
+        "skipped": skipped_graphs,
+    }]
+
+
 ### Enrichment Flow
 @flow(
     log_prints=True,
@@ -88,6 +102,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         # the degraded result remains visible without scheduling hypotheses for it.
         processable_graphs = []
         skipped_enrich_ids = []
+        skipped_graphs = []
         for idx, (original_i, graph, prob) in enumerate(graphs_with_prob):
             # Extract variant nodes from the graph
             variant_nodes = [n for n in graph.get("nodes", []) if n.get("type") == "snp"]
@@ -116,6 +131,12 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                     skip_reason,
                 ).result()
                 skipped_enrich_ids.append(skipped_id)
+                skipped_graphs.append({
+                    "graph_index": original_i,
+                    "causal_gene": None,
+                    "reason": "no_direct_snp_gene_edge",
+                    "message": skip_reason,
+                })
                 continue
 
             this_causal_gene = enrichr.to_symbol(gene_name or gene_id)
@@ -223,6 +244,12 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                         str(exc),
                     ).result()
                     skipped_enrich_ids.append(skipped_id)
+                    skipped_graphs.append({
+                        "graph_index": original_i,
+                        "causal_gene": this_causal_gene,
+                        "reason": exc.reason,
+                        "message": str(exc),
+                    })
                     continue
                 except EnrichrAPIUnavailableError as exc:
                     enrichr_failed = True
@@ -251,6 +278,12 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                         skip_reason,
                     ).result()
                     skipped_enrich_ids.append(skipped_id)
+                    skipped_graphs.append({
+                        "graph_index": original_i,
+                        "causal_gene": this_causal_gene,
+                        "reason": "enrichr_unavailable",
+                        "message": skip_reason,
+                    })
                     continue
 
                 relevant_gos = llm.get_relevant_go(phenotype, enrich_tbl)
@@ -335,6 +368,9 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
             "enrich_id": main_enrichment_id,
             "child_enrich_ids": all_enrich_ids[1:],
             "skipped_enrich_ids": skipped_enrich_ids,
+            "enrichment_warnings": _skipped_graphs_warnings(
+                skipped_graphs, len(graphs_list), variant
+            ),
             "status": "pending",
         }
         if primary_enrichment_meta:

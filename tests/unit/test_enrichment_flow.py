@@ -84,6 +84,7 @@ def test_happy_path_runs_enrichr_filters_go_and_saves(
                     "enrich_id": "enrich-1",
                     "child_enrich_ids": [],
                     "skipped_enrich_ids": [],
+                    "enrichment_warnings": [],
                     "status": "pending",
                     "attempted_ldsc_cell_type": "Liver",
                 },
@@ -173,7 +174,19 @@ def test_no_enrichment_for_one_graph_is_skipped_with_reason_while_other_proceeds
     )
     assert successful[4] == "GENE2"
     final_patch = deps["hypotheses"].update_hypothesis.call_args.args[1]
-    assert final_patch["skipped_enrich_ids"] == ["enrich-1"]
+    assert final_patch["enrichment_warnings"] == [{
+        "code": "causal_graphs_skipped",
+        "message": (
+            "1 of 2 causal graphs for rs16940186 were skipped and have no "
+            "hypothesis. See 'skipped' for why."
+        ),
+        "skipped": [{
+            "graph_index": 0,
+            "causal_gene": "IRF8",
+            "reason": "no_coexpressed_genes",
+            "message": "No genes are significantly co-expressed with IRF8 in 'Liver'.",
+        }],
+    }]
 
 
 def test_no_enrichment_for_every_graph_fails_with_clear_reason(
