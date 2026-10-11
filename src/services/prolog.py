@@ -31,10 +31,19 @@ class PrologNoEvidenceError(ValueError):
 
 class PrologQuery:
 
-    def __init__(self, host: str, port: int):
+    SUPPORTED_SCHEMES = ("http", "https")
+
+    def __init__(self, host: str, port: int, scheme: str = "http"):
+        scheme = scheme.lower()
+        if scheme not in self.SUPPORTED_SCHEMES:
+            raise ValueError(
+                f"Unsupported Prolog server scheme {scheme!r}; "
+                f"expected one of {self.SUPPORTED_SCHEMES}"
+            )
         self.host = host
         self.port = port
-        self.server = f"http://{self.host}:{self.port}"
+        self.scheme = scheme
+        self.server = f"{self.scheme}://{self.host}:{self.port}"
 
     def _get(self, path: str, params: dict, *, action: str):
         """GET against the Prolog server, converting connection-level

@@ -37,6 +37,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
     parser.add_argument("--swipl-host", type=str, default="localhost")
     parser.add_argument("--swipl-port", type=int, default=4242)
+    parser.add_argument("--swipl-scheme", type=str, choices=["http", "https"], default=None)
     parser.add_argument("--ensembl-hgnc-map", type=str, required=True)
     parser.add_argument("--hgnc-ensembl-map", type=str, required=True)
     parser.add_argument("--go-map", type=str, required=True)

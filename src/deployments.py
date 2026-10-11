@@ -24,6 +24,7 @@ def parse_deployment_arguments():
     parser.add_argument("--go-map", type=str, required=True)
     parser.add_argument("--swipl-host", type=str, default="localhost")
     parser.add_argument("--swipl-port", type=int, default=4242)
+    parser.add_argument("--swipl-scheme", type=str, choices=["http", "https"], default=None)
     parser.add_argument("--embedding-model", type=str, default="w601sxs/b1ade-embed-kd")
     return parser.parse_args()
 
@@ -36,6 +37,7 @@ def setup_deployments(config):
         "GO_MAP": config.go_map,
         "SWIPL_HOST": config.swipl_host,
         "SWIPL_PORT": str(config.swipl_port),
+        "SWIPL_SCHEME": config.swipl_scheme,
     })
     
     job_vars = {"working_dir": "/app"}
@@ -98,7 +100,7 @@ def main():
         raise ValueError("Missing required configuration: ensembl_hgnc_map, hgnc_ensembl_map, go_map")
     
     print(f" Starting Prefect deployment service...")
-    logger.info(f"- SWIPL Host: {config.swipl_host}:{config.swipl_port}")
+    logger.info(f"- SWIPL Host: {config.swipl_scheme}://{config.swipl_host}:{config.swipl_port}")
     logger.info(f"- Data files: {config.ensembl_hgnc_map}")
     
     deployments = setup_deployments(config)

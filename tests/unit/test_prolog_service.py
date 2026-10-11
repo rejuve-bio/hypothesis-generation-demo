@@ -103,3 +103,33 @@ def test_get_gene_ids_falls_back_to_gene_name_on_empty_result(monkeypatch, prolo
     result = prolog.get_gene_ids(["IRF8"])
 
     assert result == ["IRF8"]
+
+
+def test_server_url_defaults_to_http():
+    assert PrologQuery(host="prolog-service", port=4242).server == "http://prolog-service:4242"
+
+
+def test_server_url_uses_https_when_configured(monkeypatch):
+    prolog = PrologQuery(host="prolog.example.org", port=443, scheme="HTTPS")
+    get = MagicMock(return_value=_FakeResponse(json_data={"candidate_genes": []}))
+    monkeypatch.setattr("src.services.prolog.requests.get", get)
+
+    prolog.get_candidate_genes("rs16940186")
+
+    assert prolog.server == "https://prolog.example.org:443"
+    assert get.call_args.args[0] == "https://prolog.example.org:443/api/hypgen/candidate_genes"
+
+
+def test_unsupported_scheme_is_rejected():
+    with pytest.raises(ValueError, match="Unsupported Prolog server scheme"):
+        PrologQuery(host="prolog-service", port=4242, scheme="ftp")
+
+
+def test_config_reads_scheme_from_env(monkeypatch):
+    from src.config import Config
+
+    monkeypatch.setenv("SWIPL_SCHEME", "https")
+    assert Config.from_env().swipl_scheme == "https"
+
+    monkeypatch.delenv("SWIPL_SCHEME")
+    assert Config.from_env().swipl_scheme == "http"
