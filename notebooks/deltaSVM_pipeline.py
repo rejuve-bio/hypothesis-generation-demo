@@ -1538,5 +1538,82 @@ def __(export_top_variants_per_tf, mo, top_variants_button, top_variants_input):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 18. Check Combined Results Are Current
+    Checks the combined Parquet checksum, selected chromosome list, and source file
+    checksums against the provenance manifest. Results are written to
+    `results/deltasvm_combined_validation.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    combined_validation_button = mo.ui.run_button(label='Check combined result provenance')
+    combined_validation_button
+    return (combined_validation_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def validate_combined_provenance():
+        from pathlib import Path
+
+        workspace = settings["workspace"]
+        manifest_path = workspace / "provenance.json"
+        combined_path = workspace / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not manifest_path.is_file():
+            raise FileNotFoundError("The provenance manifest is missing. Run the combine section first.")
+        manifest = json.loads(manifest_path.read_text())
+        record = manifest.get("sources", {}).get("combined_deltasvm_results")
+        findings = []
+        if not isinstance(record, dict):
+            findings.append("combined result provenance record is missing")
+        else:
+            if record.get("chromosomes") != list(settings["chromosomes"]):
+                findings.append("selected chromosome list differs from the combined result")
+            expected_output_digest = record.get("sha256")
+            if not combined_path.is_file() or not combined_path.stat().st_size:
+                findings.append("combined Parquet file is missing or empty")
+            elif not expected_output_digest or file_digest(combined_path) != expected_output_digest:
+                findings.append("combined Parquet checksum differs from provenance")
+            for source_path, expected_digest in record.get("source_sha256", {}).items():
+                source = Path(source_path)
+                if not source.is_file() or not source.stat().st_size:
+                    findings.append(f"source export is missing: {source_path}")
+                elif file_digest(source) != expected_digest:
+                    findings.append(f"source export changed: {source_path}")
+        status = "current" if not findings else "stale"
+        report = workspace / "results" / "deltasvm_combined_validation.tsv"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        temporary = report.with_suffix(".tsv.part")
+        with temporary.open("w") as stream:
+            stream.write("status\tdetail\n")
+            if findings:
+                for finding in findings:
+                    stream.write(f"{status}\t{finding}\n")
+            else:
+                stream.write("current\tCombined results match the selected chromosomes and recorded source checksums.\n")
+        temporary.replace(report)
+        record_source("combined_results_validation", report, status=status, findings=findings,
+                      combined_results=str(combined_path), report_sha256=file_digest(report))
+        if findings:
+            print("Combined results are stale: " + "; ".join(findings))
+        else:
+            print(f"Combined results are current: {combined_path}")
+        print(f"Validation report saved to {report}")
+
+    return (validate_combined_provenance,)
+
+
+@app.cell
+def __(combined_validation_button, mo, validate_combined_provenance):
+    mo.stop(not combined_validation_button.value, mo.md("Press the button above to check the combined output."))
+    validate_combined_provenance()
+    return
+
+
 if __name__ == "__main__":
     app.run()
