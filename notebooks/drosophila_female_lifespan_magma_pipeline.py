@@ -2,6 +2,7 @@
 
 import argparse
 from collections import defaultdict
+import csv
 import errno
 import gzip
 import hashlib
@@ -9,10 +10,15 @@ import json
 import math
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
+import urllib.error
 import urllib.request
+import zipfile
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -21,12 +27,71 @@ DEFAULT_GTF = BASE_DIR / "data" / "genes" / "Drosophila_melanogaster.BDGP6.54.62
 DEFAULT_BFILE = BASE_DIR / "data" / "gwas" / "tmp" / "merged_qc"
 DEFAULT_MAGMA_BIN = BASE_DIR / "tools" / "magma" / "magma"
 DEFAULT_OUT_DIR = BASE_DIR / "results" / "magma_female"
+MAGMA_VERSION = "1.10"
+MAGMA_ARCHIVE_URL = "https://vu.data.surf.nl/index.php/s/lxDgt2dNdNr6DYt/download"
+MAGMA_ARCHIVE_SHA256 = "d8b20778b773f47b4fb0f1020baefebc92b11ee65946e708a618d494d6819e39"
 GO_GAF_URL = "https://current.geneontology.org/annotations/gaf/DROME-mod.gaf.gz"
 GO_OBO_URL = "https://current.geneontology.org/ontology/go-basic.obo"
 CHROM_MAP = {"2L": "1", "2R": "2", "3L": "3", "3R": "4", "4": "5", "X": "X", "23": "X"}
+BFILE_EXTENSIONS = (".bed", ".bim", ".fam")
 GENE_ID_PATTERN = re.compile(r'gene_id "([^"]+)"')
 GENE_NAME_PATTERN = re.compile(r'gene_name "([^"]+)"')
 GENE_BIOTYPE_PATTERN = re.compile(r'gene_biotype "([^"]+)"')
+
+
+def default_magma_bin() -> Path:
+    if DEFAULT_MAGMA_BIN.is_file() and os.access(DEFAULT_MAGMA_BIN, os.X_OK):
+        return DEFAULT_MAGMA_BIN
+    path_binary = shutil.which("magma")
+    return Path(path_binary) if path_binary is not None else DEFAULT_MAGMA_BIN
+
+
+def install_magma(destination: Path = DEFAULT_MAGMA_BIN) -> Path:
+    if platform.system() != "Linux" or platform.machine().lower() not in {"x86_64", "amd64"}:
+        raise RuntimeError(
+            "Automatic MAGMA installation supports Linux x86_64 only; "
+            "pass a compatible executable with --magma-bin"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix="magma-download-", dir=destination.parent) as temp:
+            archive = Path(temp) / "magma.zip"
+            digest = hashlib.sha256()
+            with urllib.request.urlopen(MAGMA_ARCHIVE_URL, timeout=120) as response, archive.open(
+                "wb"
+            ) as output:
+                for chunk in iter(lambda: response.read(1024 * 1024), b""):
+                    output.write(chunk)
+                    digest.update(chunk)
+            if digest.hexdigest() != MAGMA_ARCHIVE_SHA256:
+                raise RuntimeError(
+                    "Downloaded MAGMA archive failed SHA-256 verification: "
+                    f"expected {MAGMA_ARCHIVE_SHA256}, found {digest.hexdigest()}"
+                )
+            with zipfile.ZipFile(archive) as package, package.open("magma") as executable:
+                temporary_binary = Path(temp) / "magma"
+                with temporary_binary.open("wb") as output:
+                    shutil.copyfileobj(executable, output)
+            with temporary_binary.open("rb") as executable:
+                if executable.read(4) != b"\x7fELF":
+                    raise RuntimeError("Downloaded MAGMA executable is not a Linux ELF binary")
+            temporary_binary.chmod(0o755)
+            temporary_binary.replace(destination)
+    except (OSError, urllib.error.URLError, zipfile.BadZipFile, KeyError) as error:
+        raise RuntimeError(
+            f"Could not install MAGMA {MAGMA_VERSION}; pass a local executable with --magma-bin: "
+            f"{error}"
+        ) from error
+    print(f"Installed MAGMA {MAGMA_VERSION}: {destination}")
+    return destination
+
+
+def resolve_magma_binary(requested: Path) -> Path:
+    if requested.is_file() and os.access(requested, os.X_OK):
+        return requested
+    if requested == DEFAULT_MAGMA_BIN and not requested.exists():
+        return install_magma(requested)
+    raise FileNotFoundError(f"MAGMA executable is missing or not executable: {requested}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -36,10 +101,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sumstats", type=Path, default=DEFAULT_SUMSTATS)
     parser.add_argument("--gtf", type=Path, default=DEFAULT_GTF)
     parser.add_argument("--bfile", type=Path, default=DEFAULT_BFILE)
-    parser.add_argument("--magma-bin", type=Path, default=DEFAULT_MAGMA_BIN)
+    parser.add_argument("--magma-bin", type=Path, default=default_magma_bin())
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
-        "--stage", choices=("all", "prepare", "annotate", "genes", "sets", "report"), default="all"
+        "--force", action="store_true", help="Rebuild MAGMA outputs regardless of file timestamps"
+    )
+    parser.add_argument(
+        "--stage",
+        choices=(
+            "all", "inputs", "install", "validate", "prepare", "annotate", "genes", "sets", "report"
+        ),
+        default="all",
     )
     gene_set_source = parser.add_mutually_exclusive_group()
     gene_set_source.add_argument("--gene-sets", type=Path)
@@ -58,17 +130,15 @@ def validate_inputs(args: argparse.Namespace) -> None:
     required_files = [
         args.sumstats,
         args.gtf,
-        *(Path(f"{args.bfile}{extension}") for extension in (".bed", ".bim", ".fam")),
+        *bfile_files(args.bfile),
     ]
-    if args.stage != "prepare":
-        required_files.append(args.magma_bin)
     if args.gene_sets is not None:
         required_files.append(args.gene_sets)
     if args.go_gaf is not None:
         required_files.extend((args.go_gaf, args.go_obo))
     require_files(required_files)
-    if args.stage != "prepare" and not os.access(args.magma_bin, os.X_OK):
-        raise PermissionError(f"MAGMA binary is not executable: {args.magma_bin}")
+    if args.stage != "prepare":
+        args.magma_bin = resolve_magma_binary(args.magma_bin)
 
     opener = gzip.open if args.sumstats.suffix == ".gz" else open
     with opener(args.sumstats, "rt", encoding="utf-8") as source:
@@ -93,7 +163,47 @@ def require_files(paths: list[Path]) -> None:
         )
 
 
-def write_gene_locations(gtf_path: Path, output_path: Path) -> Path:
+def bfile_files(prefix: Path) -> list[Path]:
+    return [Path(f"{prefix}{extension}") for extension in BFILE_EXTENSIONS]
+
+
+def outputs_current(outputs: list[Path], inputs: list[Path], log: Path | None = None) -> bool:
+    if any(not path.is_file() or path.stat().st_size == 0 for path in (*outputs, *inputs)):
+        return False
+    if log is not None:
+        if not log.is_file() or "End time is" not in log.read_text(encoding="utf-8"):
+            return False
+        outputs = [*outputs, log]
+    return min(path.stat().st_mtime_ns for path in outputs) >= max(
+        path.stat().st_mtime_ns for path in inputs
+    )
+
+
+def ensure_gwas_inputs(args: argparse.Namespace) -> None:
+    required = [
+        args.sumstats,
+        args.gtf,
+        *bfile_files(args.bfile),
+    ]
+    if all(path.is_file() and path.stat().st_size > 0 for path in required):
+        return
+    if (args.sumstats, args.gtf, args.bfile) != (
+        DEFAULT_SUMSTATS,
+        DEFAULT_GTF,
+        DEFAULT_BFILE,
+    ):
+        require_files(required)
+    female_pipeline = BASE_DIR / "notebooks" / "drosophila_female_lifespan_finemapping_pipeline.py"
+    require_files([female_pipeline])
+    print("Generating female lifespan GWAS inputs for MAGMA", flush=True)
+    subprocess.run([sys.executable, str(female_pipeline), "--stage", "gwas"], check=True)
+    require_files(required)
+
+
+def write_gene_locations(gtf_path: Path, output_path: Path, force: bool = False) -> Path:
+    if not force and outputs_current([output_path], [gtf_path]):
+        print(f"Using existing gene locations: {output_path}")
+        return output_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = output_path.with_name(f"{output_path.name}.tmp")
     count = 0
@@ -153,8 +263,11 @@ def load_gene_metadata(gtf_path: Path) -> dict[str, tuple[str, str]]:
     return metadata
 
 
-def write_snp_locations(bfile: Path, output_path: Path) -> Path:
+def write_snp_locations(bfile: Path, output_path: Path, force: bool = False) -> Path:
     bim_path = Path(f"{bfile}.bim")
+    if not force and outputs_current([output_path], [bim_path]):
+        print(f"Using existing SNP locations: {output_path}")
+        return output_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = output_path.with_name(f"{output_path.name}.tmp")
     count = 0
@@ -184,7 +297,10 @@ def write_snp_locations(bfile: Path, output_path: Path) -> Path:
     return output_path
 
 
-def write_magma_pvalues(sumstats_path: Path, output_path: Path) -> Path:
+def write_magma_pvalues(sumstats_path: Path, output_path: Path, force: bool = False) -> Path:
+    if not force and outputs_current([output_path], [sumstats_path]):
+        print(f"Using existing MAGMA p-values: {output_path}")
+        return output_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = output_path.with_name(f"{output_path.name}.tmp")
     count = 0
@@ -251,7 +367,16 @@ def run_annotation(
     return output_path
 
 
-def prepare_magma_bfile(source_prefix: Path, output_prefix: Path) -> Path:
+def prepare_magma_bfile(source_prefix: Path, output_prefix: Path, force: bool = False) -> Path:
+    if not force and all(
+        outputs_current(
+            [Path(f"{output_prefix}{extension}")],
+            [Path(f"{source_prefix}{extension}")],
+        )
+        for extension in BFILE_EXTENSIONS
+    ):
+        print(f"Using existing MAGMA PLINK reference: {output_prefix}")
+        return output_prefix
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
     for extension in (".bed", ".fam"):
         source = Path(f"{source_prefix}{extension}")
@@ -499,7 +624,11 @@ def download_go_inputs(output_dir: Path) -> tuple[Path, Path]:
         if not cached:
             temporary = destination.with_name(f"{destination.name}.tmp")
             try:
-                with urllib.request.urlopen(url, timeout=120) as response, temporary.open(
+                print(f"Downloading GO input: {url}", flush=True)
+                request = urllib.request.Request(
+                    url, headers={"User-Agent": "DrosophilaLifespanMAGMA/1.0"}
+                )
+                with urllib.request.urlopen(request, timeout=120) as response, temporary.open(
                     "wb"
                 ) as output:
                     shutil.copyfileobj(response, output)
@@ -627,8 +756,78 @@ def summarize_magma_results(
     return output_path
 
 
+def count_summary_results(summary_path: Path) -> dict[str, int]:
+    tested = 0
+    significant = 0
+    with summary_path.open("r", encoding="utf-8", newline="") as source:
+        reader = csv.DictReader(source, delimiter="\t")
+        if reader.fieldnames is None or "SIGNIFICANT" not in reader.fieldnames:
+            raise ValueError(f"Invalid MAGMA summary header: {summary_path}")
+        for row in reader:
+            value = row["SIGNIFICANT"]
+            if value not in {"true", "false"}:
+                raise ValueError(f"Invalid significance value in {summary_path}: {value}")
+            tested += 1
+            significant += value == "true"
+    if tested == 0:
+        raise ValueError(f"No MAGMA results found in {summary_path}")
+    return {"tested": tested, "significant": significant}
+
+
+def write_run_manifest(args: argparse.Namespace, set_file: Path | None) -> Path:
+    output_path = args.out_dir / "run_manifest.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    binary_hash = hashlib.sha256()
+    with args.magma_bin.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            binary_hash.update(chunk)
+    gene_summary = count_summary_results(args.out_dir / "gene_results_bonferroni.tsv")
+    gene_set_summary = (
+        count_summary_results(args.out_dir / "gene_set_results_bonferroni.tsv")
+        if set_file is not None
+        else None
+    )
+    manifest = {
+        "stage": args.stage,
+        "sumstats": str(args.sumstats.resolve()),
+        "gtf": str(args.gtf.resolve()),
+        "bfile": str(args.bfile.resolve()),
+        "magma_bin": str(args.magma_bin.resolve()),
+        "magma_sha256": binary_hash.hexdigest(),
+        "gene_sets": str(set_file.resolve()) if set_file is not None else None,
+        "sample_size_column": "N",
+        "multiple_testing": "Bonferroni",
+        "alpha": 0.05,
+        "gene_results": str((args.out_dir / "gene_results_bonferroni.tsv").resolve()),
+        "gene_summary": gene_summary,
+        "gene_set_results": (
+            str((args.out_dir / "gene_set_results_bonferroni.tsv").resolve())
+            if set_file is not None
+            else None
+        ),
+        "gene_set_summary": gene_set_summary,
+    }
+    temporary_path = output_path.with_name(f"{output_path.name}.tmp")
+    try:
+        temporary_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        temporary_path.replace(output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    print(f"Saved MAGMA run manifest: {output_path}")
+    return output_path
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.stage == "inputs":
+        ensure_gwas_inputs(args)
+        return
+    if args.stage == "install":
+        print(f"MAGMA executable: {resolve_magma_binary(args.magma_bin)}")
+        return
+    if args.stage == "validate":
+        validate_inputs(args)
+        return
     out_dir = args.out_dir
     gene_locations = out_dir / "gene_loc.txt"
     snp_locations = out_dir / "snp_loc.txt"
@@ -665,12 +864,16 @@ def main(argv: list[str] | None = None) -> None:
             )
         return
 
+    if args.stage in {"annotate", "genes", "sets"}:
+        args.magma_bin = resolve_magma_binary(args.magma_bin)
+
     if args.stage in {"all", "prepare"}:
+        ensure_gwas_inputs(args)
         validate_inputs(args)
-        gene_locations = write_gene_locations(args.gtf, gene_locations)
-        snp_locations = write_snp_locations(args.bfile, snp_locations)
-        pvalues = write_magma_pvalues(args.sumstats, pvalues)
-        bfile = prepare_magma_bfile(args.bfile, bfile)
+        gene_locations = write_gene_locations(args.gtf, gene_locations, force=args.force)
+        snp_locations = write_snp_locations(args.bfile, snp_locations, force=args.force)
+        pvalues = write_magma_pvalues(args.sumstats, pvalues, force=args.force)
+        bfile = prepare_magma_bfile(args.bfile, bfile, force=args.force)
 
     if args.stage in {"all", "prepare", "sets"}:
         if args.stage == "sets":
@@ -719,7 +922,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.gtf,
                 pvalues,
                 annotation,
-                *(Path(f"{bfile}{extension}") for extension in (".bed", ".bim", ".fam")),
+                *bfile_files(bfile),
             ])
             if not os.access(args.magma_bin, os.X_OK):
                 raise PermissionError(f"MAGMA binary is not executable: {args.magma_bin}")
@@ -754,6 +957,8 @@ def main(argv: list[str] | None = None) -> None:
             go_names=load_go_names(obo_path) if obo_path is not None else None,
             significant_output_path=out_dir / "gene_set_results_significant.tsv",
         )
+    if args.stage == "all":
+        write_run_manifest(args, set_file)
 
 
 if __name__ == "__main__":

@@ -207,6 +207,7 @@ coordinatesUsed.bed
 *.db
 
 # Data
+tools/magma/
 data/susie
 data/uploads
 data/metadata
