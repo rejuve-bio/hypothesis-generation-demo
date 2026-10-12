@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.7.0"
+__generated_with = "0.17.8"
 app = marimo.App(width="medium")
 
 
@@ -14,493 +14,952 @@ def __():
 def __(mo):
     mo.md(r"""
     # deltaSVM Pipeline
-    End-to-end pipeline for scoring SNP allelic effects on TF binding using deltaSVM.
+    Human autosomal SNP allelic effects on transcription-factor binding, using the
+    94 high-confidence human TF models from [ren-lab/deltaSVM](https://github.com/ren-lab/deltaSVM).
+    The models were trained on [Yin et al., 2017](https://pubmed.ncbi.nlm.nih.gov/28473536/)
+    and evaluated with [Yan et al., 2021](https://doi.org/10.1038/s41586-021-03211-0).
+    This notebook does not supply fly TF models.
+
+    Use Linux or WSL with Python 3.10 or later, Git, Make, GCC and G++.
+    Install the notebook runner with `python -m pip install marimo`, then open it with
+    `python -m marimo edit notebooks/deltaSVM_pipeline.py`.
+    Run setup and input preparation first. Sections 4 and 5 are alternative scoring
+    paths; sections 6–8 resume prepared runs. Opening this notebook starts no downloads or jobs.
     """)
     return
 
 
 @app.cell
 def __(mo):
-    mo.md(r"""## 0. Environment Setup""")
-    return
+    mo.md(r"""
+    ## Configuration and Sources
+    The default workspace is `~/deltaSVM-work`. Set `DELTASVM_WORK_DIR` before opening
+    the notebook to choose another location. All generated data stay in that workspace.
 
+    | Input | Public source | Local override |
+    |---|---|---|
+    | GRCh38 reference | [NCBI GRCh38 no-alt analysis set](https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz) | `DELTASVM_REFERENCE` (uncompressed FASTA) |
+    | Human dbSNP variants | [NCBI dbSNP build 156, GRCh38 VCF](https://ftp.ncbi.nih.gov/snp/archive/b156/VCF/GCF_000001405.40.gz) | `DELTASVM_VCF` (gzip-compressed VCF) |
+    | Models and code | [Ren lab repository](https://github.com/ren-lab/deltaSVM) | `DELTASVM_MODELS_DIR` |
+    | Weights and thresholds | [Ren lab resource links](https://github.com/ren-lab/deltaSVM#models) | `DELTASVM_WEIGHTS`, `DELTASVM_OBS_THRESHOLDS`, `DELTASVM_PBS_THRESHOLDS` |
+    | Optional variant intersection | [Open Targets 25.03 GRCh38 variants](https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/25.03/output/variant/) | `DELTASVM_OT_DIR` |
+    | gkmpredict | [Dongwon-Lee/lsgkm](https://github.com/Dongwon-Lee/lsgkm) | built in the workspace |
 
-@app.cell
-def __():
-    import subprocess
+    Each download URL can be overridden with the corresponding `DELTASVM_*_URL`
+    variable shown in the configuration below. The historical Ren lab resource server
+    may be unavailable: supply existing weights and threshold files or working mirror
+    URLs. Download errors stop the step; they never silently produce placeholder models.
 
+    The default NCBI input is the fixed dbSNP build 156 GRCh38 VCF. The default
+    filter retains variants marked `COMMON=1`, matching the common-variant intent of
+    the original `00-common_all.vcf.gz` input. Set `DELTASVM_COMMON_ONLY=0` to include
+    all biallelic SNVs. Set `DELTASVM_MAX_SNPS=1000` for a small first run; `0` processes the
+    entire VCF. The full VCF is about 28 GB compressed and the reference is
+    about 3 GB uncompressed; Open Targets adds several GB. The notebook records source
+    URLs, software revisions, checksums and run settings in `provenance.json`.
 
-    def run_bash(script, label="step"):
-        """Run a bash script, echo its output, and surface a non-zero exit."""
-        proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
-        if proc.stdout:
-            print(proc.stdout, end="")
-        if proc.stderr:
-            print(proc.stderr, end="")
-        if proc.returncode != 0:
-            print(f"\n!! {label} FAILED with exit code {proc.returncode}")
-        return proc
-    return run_bash, subprocess
-
-
-@app.cell
-def __(run_bash):
-    result = run_bash("""
-set -euo pipefail
-BASE_DIR="/mnt/hdd_1/rediet/deltaSVM"
-mkdir -p $BASE_DIR/scripts
-
-if [ ! -f "$BASE_DIR/scripts/gkmpredict" ]; then
-    rm -rf /tmp/lsgkm
-    git clone https://github.com/Dongwon-Lee/lsgkm.git /tmp/lsgkm
-    cd /tmp/lsgkm/src && make
-    cp /tmp/lsgkm/bin/gkmpredict $BASE_DIR/scripts/
-    cp /tmp/lsgkm/bin/gkmtrain $BASE_DIR/scripts/
-fi
-
-if [ ! -f "$BASE_DIR/scripts/deltasvm_subset_multi" ]; then
-    g++ -O3 -o $BASE_DIR/scripts/deltasvm_subset_multi $BASE_DIR/scripts/deltasvm_subset_multi.cpp
-fi
-
-mkdir -p $BASE_DIR/resources/hs38
-mkdir -p $BASE_DIR/gkmsvm_models
-mkdir -p $BASE_DIR/snp_batches
-
-echo "Setup complete. Make sure the following are in place:"
-echo "  - resources/hs38/hs38.fa"
-echo "  - resources/models.weights.txt"
-echo "  - resources/thresholds.pbs.tsv"
-echo "  - resources/thresholds.obs.tsv"
-echo "  - gkmsvm_models/*.model.txt"
-echo "  - snp_batches/chrN.tsv"
-    """, label="section 0 environment setup")
-    return result,
-
-
-@app.cell
-def __(mo):
-    mo.md(r"""### Shared Run Steps""")
-    return
-
-
-@app.cell
-def __():
-    # Bash fragments shared by sections 6, 7 and 8, so the gkmpredict sweep and
-    # the summary/parquet steps are defined in exactly one place. Each fragment
-    # assumes the CWD is a run directory (runs/$CHR) and that $CHR is set.
-    GKM_PREDICT_MISSING = r"""
-awk '{print $1" "$3}' resources/thresholds.obs.tsv | while read -r tf model; do
-    if [ ! -f "tmp/${tf}.merge.gkm.tsv" ]; then echo "$tf $model"; fi
-done > missing_tfs.txt
-echo "[$CHR] $(wc -l < missing_tfs.txt) TFs to process"
-
-parallel -j4 --colsep ' ' '
-    tf={1}; model={2}
-    scripts/gkmpredict -T 16 data/selex_allelic_oligos.ref.fa gkmsvm_models/${model}.model.txt tmp/${tf}.ref.gkm.tsv
-    sort -k1,1 -o tmp/${tf}.ref.gkm.tsv tmp/${tf}.ref.gkm.tsv
-    scripts/gkmpredict -T 16 data/selex_allelic_oligos.alt.fa gkmsvm_models/${model}.model.txt tmp/${tf}.alt.gkm.tsv
-    sort -k1,1 -o tmp/${tf}.alt.gkm.tsv tmp/${tf}.alt.gkm.tsv
-    paste tmp/${tf}.ref.gkm.tsv tmp/${tf}.alt.gkm.tsv | cut -f1,2,4 > tmp/${tf}.merge.gkm.tsv
-    echo "Done: $tf"
-' < missing_tfs.txt
-"""
-
-    SUMMARIZE = r"""
-python scripts/obs_pred.py -s resources/thresholds.obs.tsv -o out/obs.pred.tsv
-sort -k1,1 -k2,2 -o out/obs.pred.tsv out/obs.pred.tsv
-paste out/obs.pred.tsv out/pbs.pred.tsv | cut -f1-5,7,9 | sort -k7,7 -k5,5r | sed '1i snp\ttf\tallele1_bind\tallele2_bind\tseq_binding\tdeltaSVM_score\tpreferred_allele' > out/summary.pred.tsv
-"""
-
-    WRITE_PARQUET = r"""
-python3 - "$CHR" <<'PYEOF'
-import sys
-
-import pandas as pd
-
-chrom = sys.argv[1]
-df = pd.read_csv("out/summary.pred.tsv", sep="\t", low_memory=False)
-df = df.rename(columns={"snp": "variant", "tf": "TfName",
-                        "preferred_allele": "Effect", "deltaSVM_score": "Score"})
-df["rsId"] = "."
-df["TfId"] = "."
-df = df[df["Effect"].isin(["Gain", "Loss"])]
-df = df[["variant", "rsId", "TfId", "TfName", "Effect", "Score"]]
-df.to_parquet(f"out/{chrom}_deltasvm.parquet", index=False)
-print(f"{chrom} parquet done! rows: {len(df)}")
-PYEOF
-"""
-
-    RESTART_CHR = (
-        'cd "$BASE_DIR/runs/$CHR"\n'
-        + GKM_PREDICT_MISSING
-        + SUMMARIZE
-        + WRITE_PARQUET
-        + 'echo "=== $CHR FULLY DONE ==="\n'
-    )
-    return GKM_PREDICT_MISSING, RESTART_CHR, SUMMARIZE, WRITE_PARQUET
-
-
-@app.cell
-def __(mo):
-    mo.md(r"""## 1. Prepare SNPs from dbSNP VCF""")
-    return
-
-
-@app.cell
-def __():
-    import gzip
-
-    input_vcf = "/mnt/hdd_1/abdu_md/biocypher_data_bizon/dbsnp/00-common_all.vcf.gz"
-    output_snp = "input_snp_common.tsv"
-    output_rsid_map = "rsid_map.tsv"
-
-    AUTOSOMES = {str(i) for i in range(1, 23)}
-
-    count = 0
-    written = 0
-
-    with gzip.open(input_vcf, "rt") as _f, \
-         open(output_snp, "w") as out_snp, \
-         open(output_rsid_map, "w") as out_map:
-
-        out_map.write("variant\trsId\n")
-
-        for line in _f:
-            if line.startswith("#"):
-                continue
-
-            cols = line.strip().split("\t")
-            chrom, pos, rsid, ref, alt, info = cols[0], cols[1], cols[2], cols[3], cols[4], cols[7]
-
-            count += 1
-            if "VC=SNV" not in info:
-                continue
-            if chrom not in AUTOSOMES:
-                continue
-            if len(ref) != 1 or len(alt) != 1:
-                continue
-
-            variant = f"chr{chrom}_{pos}_{ref}_{alt}"
-            out_snp.write(variant + "\n")
-            out_map.write(f"{variant}\t{rsid}\n")
-            written += 1
-
-            if written % 1000000 == 0:
-                print(f"Processed {count:,} lines, written {written:,} SNPs...")
-
-    print(f"Done! Total lines: {count:,}, SNPs written: {written:,}")
-    return count, written
-
-
-@app.cell
-def __(mo):
-    mo.md(r"""## 2. Filter SNPs Using OpenTargets Variants""")
+    Set `DELTASVM_USE_OT=1` to restrict dbSNP variants to those represented in the
+    Open Targets variant dataset. This is a selective phenotype-associated subset,
+    not a comprehensive variant catalog, and its download is optional.
+    `DELTASVM_CHROMOSOMES=1,2,3` selects chromosomes; the default is all 22 autosomes.
+    `DELTASVM_CHROMOSOME=1` chooses the single-chromosome sections.
+    `DELTASVM_TF_JOBS`, `DELTASVM_THREADS` and `DELTASVM_CHROM_JOBS` default to 1, 2 and 1.
+    """)
     return
 
 
 @app.cell
 def __():
     import os
-    import pandas as pd
-    import glob
+    import sys
+    from pathlib import Path
 
-    SNP_DIR = '/mnt/hdd_1/rediet/deltaSVM/snp_batches'
-    CHROMS = [f'chr{i}' for i in range(1, 23)]
+    def configured_path(name, default):
+        return Path(os.environ.get(name, str(default))).expanduser().resolve()
 
-    print("Loading OpenTargets variants...")
-    files = glob.glob('/mnt/hdd_1/rediet/opentargets_variants/variant/part-*.parquet')
-    ot_variants = set()
-    for _f in files:
-        df = pd.read_parquet(_f, columns=['variantId'])
-        df['variantId'] = 'chr' + df['variantId']
-        ot_variants.update(df['variantId'].tolist())
-        print(f"Loaded {_f.split('/')[-1]}: {len(ot_variants):,} variants so far")
+    workspace = configured_path("DELTASVM_WORK_DIR", Path.home() / "deltaSVM-work")
+    chromosomes = tuple("chr" + c.removeprefix("chr") for c in os.environ.get(
+        "DELTASVM_CHROMOSOMES", ",".join(map(str, range(1, 23)))
+    ).split(","))
+    if not chromosomes or any(c not in {f"chr{i}" for i in range(1, 23)} for c in chromosomes):
+        raise ValueError("Select human autosomes 1 through 22.")
+    if len(set(chromosomes)) != len(chromosomes):
+        raise ValueError("Chromosomes must not be repeated.")
+    single_chromosome = "chr" + os.environ.get("DELTASVM_CHROMOSOME", "1").removeprefix("chr")
+    if single_chromosome not in chromosomes:
+        raise ValueError("DELTASVM_CHROMOSOME must be in DELTASVM_CHROMOSOMES.")
+    settings = {
+        "workspace": workspace,
+        "reference": configured_path("DELTASVM_REFERENCE", workspace / "resources/hs38/hs38.fa"),
+        "vcf": configured_path("DELTASVM_VCF", workspace / "downloads/dbsnp-grch38.vcf.gz"),
+        "models": configured_path("DELTASVM_MODELS_DIR", workspace / "vendor/deltaSVM/gkmsvm_models"),
+        "weights": configured_path("DELTASVM_WEIGHTS", workspace / "resources/models.weights.txt"),
+        "obs": configured_path("DELTASVM_OBS_THRESHOLDS", workspace / "resources/thresholds.obs.tsv"),
+        "pbs": configured_path("DELTASVM_PBS_THRESHOLDS", workspace / "resources/thresholds.pbs.tsv"),
+        "ot_dir": configured_path("DELTASVM_OT_DIR", workspace / "downloads/opentargets-25.03/variant"),
+        "reference_url": os.environ.get("DELTASVM_REFERENCE_URL", "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz"),
+        "vcf_url": os.environ.get("DELTASVM_VCF_URL", "https://ftp.ncbi.nih.gov/snp/archive/b156/VCF/GCF_000001405.40.gz"),
+        "weights_url": os.environ.get("DELTASVM_WEIGHTS_URL", "https://renlab.sdsc.edu/yunjiang/deltaSVM/resources/models.weights.txt"),
+        "obs_url": os.environ.get("DELTASVM_OBS_THRESHOLDS_URL", "https://renlab.sdsc.edu/yunjiang/deltaSVM/resources/threhsolds.obs.tsv"),
+        "pbs_url": os.environ.get("DELTASVM_PBS_THRESHOLDS_URL", "https://renlab.sdsc.edu/yunjiang/deltaSVM/resources/threhsolds.pbs.tsv"),
+        "ot_url": os.environ.get("DELTASVM_OT_URL", "https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/25.03/output/variant/"),
+        "ren_revision": os.environ.get("DELTASVM_REN_REVISION", "566b29557fa7fc37d24a94057a1bcdf08cdae000"),
+        "lsgkm_revision": os.environ.get("DELTASVM_LSGKM_REVISION", "d7ef90f7cb326b190619c51a13843da48c99e239"),
+        "ot_local": "DELTASVM_OT_DIR" in os.environ,
+        "chromosomes": chromosomes,
+        "single": single_chromosome,
+        "use_ot": os.environ.get("DELTASVM_USE_OT", "0") == "1",
+        "common_only": os.environ.get("DELTASVM_COMMON_ONLY", "1") == "1",
+        "max_snps": int(os.environ.get("DELTASVM_MAX_SNPS", "0")),
+        "tf_jobs": int(os.environ.get("DELTASVM_TF_JOBS", "1")),
+        "threads": int(os.environ.get("DELTASVM_THREADS", "2")),
+        "chrom_jobs": int(os.environ.get("DELTASVM_CHROM_JOBS", "1")),
+    }
+    if settings["max_snps"] < 0 or any(settings[k] < 1 for k in ("tf_jobs", "threads", "chrom_jobs")):
+        raise ValueError("Worker counts must be positive and MAX_SNPS must be nonnegative.")
+    return Path, settings, sys
 
-    print(f"\nTotal OT variants: {len(ot_variants):,}")
 
-    def filter_chrom_snps(chrom):
-        """Filter one chromosome's SNP batch against the OpenTargets variant set."""
-        snp_file = f'{SNP_DIR}/{chrom}.tsv'
-        out_file = f'{SNP_DIR}/{chrom}_ot.tsv'
+@app.cell
+def __(Path, settings):
+    import hashlib
+    import json
+    import shutil
+    import subprocess
+    import urllib.request
+    import urllib.parse
+    import gzip
+    import tempfile
+    from concurrent.futures import ThreadPoolExecutor
+    from functools import lru_cache
 
-        if not os.path.exists(snp_file):
-            print(f"{chrom}: SKIPPED, missing {snp_file}")
-            return 0, 0
+    def file_digest(path, algorithm="sha256"):
+        path = Path(path)
+        stat = path.stat()
+        return digest_cached(str(path), stat.st_size, stat.st_mtime_ns, algorithm)
 
-        with open(snp_file) as _f:
-            snps = [line.strip() for line in _f if line.strip()]
+    @lru_cache(maxsize=512)
+    def digest_cached(path, size, modified, algorithm):
+        digest = hashlib.new(algorithm)
+        with Path(path).open("rb") as stream:
+            for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
-        filtered = [s for s in snps if s in ot_variants]
+    @lru_cache(maxsize=2)
+    def supported_kmers(path, size, modified):
+        supported = set()
+        complement = str.maketrans("ACGT", "TGCA")
+        with Path(path).open() as stream:
+            for line in stream:
+                row = line.split()
+                if len(row) != 95 or len(row[0]) != 10 or set(row[0]) - set("ACGT"):
+                    raise ValueError("Invalid or incomplete deltaSVM weight row; expected a 10-mer and 94 scores.")
+                for value in row[1:]:
+                    float(value)
+                supported.add(row[0])
+                supported.add(row[0].translate(complement)[::-1])
+        if not supported:
+            raise ValueError("The deltaSVM weight table is empty.")
+        return supported
 
-        with open(out_file, 'w') as _f:
-            for snp in filtered:
-                _f.write(snp + '\n')
+    def record_source(name, path, **details):
+        destination = settings["workspace"] / "provenance.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        manifest = json.loads(destination.read_text()) if destination.exists() else {}
+        manifest["settings"] = {k: str(v) if isinstance(v, Path) else v for k, v in settings.items()}
+        manifest.setdefault("sources", {})[name] = {"path": str(path), **details}
+        temporary = destination.with_suffix(".json.part")
+        temporary.write_text(json.dumps(manifest, indent=2) + "\n")
+        temporary.replace(destination)
 
-        kept = 100 * len(filtered) / len(snps) if snps else 0.0
-        print(f"{chrom}: {len(snps):,} -> {len(filtered):,} SNPs after filtering ({kept:.1f}% kept)")
-        return len(snps), len(filtered)
+    def download_file(url, destination, expected_md5=None):
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.is_file() or destination.stat().st_size == 0:
+            temporary = destination.with_name(destination.name + ".part")
+            request = urllib.request.Request(url, headers={"User-Agent": "deltaSVM-notebook"})
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response, temporary.open("wb") as output:
+                    length = response.headers.get("Content-Length")
+                    shutil.copyfileobj(response, output, length=8 * 1024 * 1024)
+                if not temporary.stat().st_size or (length and temporary.stat().st_size != int(length)):
+                    raise ValueError(f"Incomplete download: {url}")
+                if expected_md5 and file_digest(temporary, "md5") != expected_md5:
+                    raise ValueError(f"Checksum mismatch: {url}")
+                temporary.replace(destination)
+            except Exception as error:
+                raise RuntimeError(f"Cannot download {url}. Supply a local file or a working URL override.") from error
+        if expected_md5 and file_digest(destination, "md5") != expected_md5:
+            raise ValueError(f"Checksum mismatch for cached file: {destination}")
+        return destination
 
-    total_in = 0
-    total_out = 0
-    for CHR in CHROMS:
-        n_in, n_out = filter_chrom_snps(CHR)
-        total_in += n_in
-        total_out += n_out
+    def fetch_input(name, path, url):
+        existed = path.is_file() and path.stat().st_size > 0
+        download_file(url, path)
+        record_source(name, path, status="existing local file" if existed else "downloaded",
+                      configured_url=url, sha256=file_digest(path))
+        return path
 
-    missing = [c for c in CHROMS if not os.path.exists(f'{SNP_DIR}/{c}_ot.tsv')]
-    print(f"\nAll chromosomes filtered: {total_in:,} -> {total_out:,} SNPs")
-    if missing:
-        print(f"WARNING: no OT-filtered SNP batch for: {', '.join(missing)}")
+    def execute(command, cwd=None, log=None):
+        print(" ".join(map(str, command)), flush=True)
+        if log is None:
+            subprocess.run(list(map(str, command)), cwd=cwd, check=True)
+        else:
+            Path(log).parent.mkdir(parents=True, exist_ok=True)
+            with Path(log).open("w") as stream:
+                subprocess.run(list(map(str, command)), cwd=cwd, stdout=stream, stderr=subprocess.STDOUT, check=True)
+
+    def clone_source(name, url, revision):
+        directory = settings["workspace"] / "vendor" / name
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        if not directory.exists():
+            execute(["git", "clone", url, directory])
+            execute(["git", "checkout", revision], cwd=directory)
+        actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=directory, text=True).strip()
+        record_source(name, directory, url=url, requested_revision=revision, commit=actual)
+        return directory
+
+    return ThreadPoolExecutor, clone_source, download_file, execute, fetch_input, file_digest, gzip, json, record_source, shutil, supported_kmers, tempfile, urllib
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 0a. Download and Build Software
+    This step installs missing Python libraries in the notebook's interpreter, clones
+    the two upstream repositories at pinned commits and compiles Linux binaries.
+    Software revision overrides are supported; the resolved commits are recorded.
+    It leaves existing source checkouts in place.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    software_button = mo.ui.run_button(label='Install and build software')
+    software_button
+    return (software_button,)
+
+
+@app.cell
+def __(mo, software_button, clone_source, execute, settings, shutil, sys):
+    mo.stop(not software_button.value, mo.md("Press the button above to run this step."))
+    import importlib.util
+    import platform
+
+    if platform.system() != "Linux":
+        raise RuntimeError("The supplied gkm-SVM tools require Linux; use Linux or WSL.")
+    _missing_tools = [name for name in ("git", "make", "gcc", "g++") if not shutil.which(name)]
+    if _missing_tools:
+        raise RuntimeError("Install these system tools first: " + ", ".join(_missing_tools))
+    _packages = {"pysam": "pysam>=0.23,<0.24", "pandas": "pandas>=2.2,<3", "pyarrow": "pyarrow>=17,<22"}
+    _missing_packages = [package for module, package in _packages.items() if importlib.util.find_spec(module) is None]
+    if _missing_packages:
+        execute([sys.executable, "-m", "pip", "install", *_missing_packages])
+    _ren = clone_source("deltaSVM", "https://github.com/ren-lab/deltaSVM.git", settings["ren_revision"])
+    _lsgkm = clone_source("lsgkm", "https://github.com/Dongwon-Lee/lsgkm.git", settings["lsgkm_revision"])
+    _scripts = settings["workspace"] / "scripts"
+    _scripts.mkdir(parents=True, exist_ok=True)
+    execute(["make"], cwd=_lsgkm / "src")
+    shutil.copy2(_lsgkm / "bin/gkmpredict", _scripts / "gkmpredict")
+    execute(["g++", "-std=c++11", "-O3", "-o", _scripts / "deltasvm_subset_multi", _ren / "scripts/deltasvm_subset_multi.cpp"])
+    print("Software ready.")
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 0b. Download Reference, Weights and Thresholds
+    The reference is GRCh38 with UCSC chromosome names. Downloaded gzip data are
+    expanded once and indexed with pysam. Existing files supplied in Configuration
+    are reused. The model and threshold checks require 94 matching human TFs.
+    The order of the PBS thresholds defines the columns of the deltaSVM weight table.
+    """)
+    return
+
+
+@app.cell
+def __(settings):
+    def load_thresholds():
+        obs = [line.split() for line in settings["obs"].read_text().splitlines() if line.strip()]
+        pbs = [line.split() for line in settings["pbs"].read_text().splitlines() if line.strip()]
+        if len(obs) != 94 or len(pbs) != 94 or any(len(row) != 3 for row in obs) or any(len(row) != 2 for row in pbs):
+            raise ValueError("Expected 94 OBS rows (TF, threshold, model) and 94 PBS rows (TF, threshold).")
+        if len({r[0] for r in obs}) != 94 or {r[0] for r in obs} != {r[0] for r in pbs}:
+            raise ValueError("OBS and PBS files must contain the same 94 unique TFs.")
+        for row in obs:
+            float(row[1])
+            if not (settings["models"] / (row[2] + ".model.txt")).is_file():
+                raise FileNotFoundError(f"Missing gkm-SVM model: {row[2]}")
+        for row in pbs:
+            float(row[1])
+        return obs, pbs
+
+    return (load_thresholds,)
+
+
+@app.cell
+def __(mo):
+    resources_button = mo.ui.run_button(label='Download and validate reference and models')
+    resources_button
+    return (resources_button,)
+
+
+@app.cell
+def __(mo, resources_button, download_file, fetch_input, file_digest, gzip, load_thresholds, record_source, settings, shutil):
+    mo.stop(not resources_button.value, mo.md("Press the button above to run this step."))
+    import pysam
+
+    _reference = settings["reference"]
+    if not _reference.is_file() or _reference.stat().st_size == 0:
+        _compressed = download_file(settings["reference_url"], settings["workspace"] / "downloads/grch38.fa.gz")
+        _reference.parent.mkdir(parents=True, exist_ok=True)
+        _temporary = _reference.with_name(_reference.name + ".part")
+        with gzip.open(_compressed, "rb") as _source, _temporary.open("wb") as _destination:
+            shutil.copyfileobj(_source, _destination, length=8 * 1024 * 1024)
+        _temporary.replace(_reference)
+        record_source("reference", _reference, url=settings["reference_url"], sha256=file_digest(_reference))
     else:
-        print("Every chromosome has an OT-filtered SNP batch.")
-    return CHROMS, SNP_DIR, filter_chrom_snps, glob, os, ot_variants, pd
-
-
-@app.cell
-def __(mo):
-    mo.md(r"""## 3. Set Up Per-Chromosome Working Directory""")
+        record_source("reference", _reference, status="existing local file", sha256=file_digest(_reference))
+    pysam.faidx(str(_reference))
+    with pysam.FastaFile(str(_reference)) as _genome:
+        if _genome.get_reference_length("chr1") != 248956422:
+            raise ValueError("The supplied reference is not the expected human GRCh38 reference.")
+    for _name in ("weights", "obs", "pbs"):
+        fetch_input(_name, settings[_name], settings[_name + "_url"])
+    _obs, _pbs = load_thresholds()
+    with settings["weights"].open() as _weights:
+        _first = _weights.readline().split()
+    if len(_first) != 95 or len(_first[0]) != 10 or set(_first[0]) - set("ACGT"):
+        raise ValueError("Expected a 10-mer and 94 scores in the weight table.")
+    for _score in _first[1:]:
+        float(_score)
+    print("Reference, 94 models, thresholds and weights ready.")
     return
 
 
 @app.cell
-def __(run_bash):
-    CHR_SETUP = "chr1"
-    result_setup = run_bash(f"""
-set -euo pipefail
-BASE_DIR="/mnt/hdd_1/rediet/deltaSVM"
-CHR={CHR_SETUP}
-
-SNP_FILE="$BASE_DIR/snp_batches/${{CHR}}_ot.tsv"
-
-if [ ! -s "$SNP_FILE" ]; then
-    echo "ERROR: $SNP_FILE missing or empty - run section 2 (OpenTargets filtering) first"
-    exit 1
-fi
-
-echo "Setting up $CHR with $(wc -l < $SNP_FILE) OT-filtered SNPs..."
-mkdir -p $BASE_DIR/runs/$CHR/{{data,tmp,out,log}}
-cp -r $BASE_DIR/scripts $BASE_DIR/runs/$CHR/
-cp -r $BASE_DIR/resources $BASE_DIR/runs/$CHR/
-cp -r $BASE_DIR/gkmsvm_models $BASE_DIR/runs/$CHR/
-cp "$SNP_FILE" $BASE_DIR/runs/$CHR/input_snp.tsv
-
-cd $BASE_DIR/runs/$CHR
-python scripts/generate_allelic_seqs.py -f resources/hs38/hs38.fa -s input_snp.tsv -o data/selex_allelic_oligos
-scripts/deltasvm_subset_multi data/selex_allelic_oligos.ref.fa data/selex_allelic_oligos.alt.fa resources/models.weights.txt out/pbs.pred.tsv resources/thresholds.pbs.tsv
-echo "$CHR setup done!"
-    """, label="section 3 chromosome setup")
-    return CHR_SETUP, result_setup
-
-
-@app.cell
 def __(mo):
-    mo.md(r"""## 4. Run All Chromosomes in Parallel""")
+    mo.md(r"""
+    ## 1. Download dbSNP and Prepare Chromosome Batches
+    Downloads the GRCh38 dbSNP VCF when no local VCF is supplied. For the default NCBI
+    source, its published MD5 is verified. RefSeq accession names are converted to
+    `chr1`–`chr22`. Only biallelic A/C/G/T SNVs on selected autosomes are kept.
+    The VCF header must identify GRCh38. SNP batches and rsID mappings are generated
+    together; outputs are published only after successful extraction.
+    """)
     return
 
 
 @app.cell
-def __(run_bash):
-    result_parallel = run_bash("""
-set -euo pipefail
-CHROMS="chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22"
-BASE_DIR="/mnt/hdd_1/rediet/deltaSVM"
+def __(Path, download_file, file_digest, gzip, json, record_source, settings, tempfile, urllib):
+    def prepare_snps():
+        source = settings["vcf"]
+        existed = source.is_file() and source.stat().st_size > 0
+        expected_md5 = None
+        if not existed and settings["vcf_url"].startswith("https://ftp.ncbi.nih.gov/snp/"):
+            with urllib.request.urlopen(settings["vcf_url"] + ".md5", timeout=60) as response:
+                expected_md5 = response.read().decode().split()[0]
+        download_file(settings["vcf_url"], source, expected_md5)
+        record_source("dbsnp", source, status="existing local file" if existed else "downloaded",
+                      configured_url=settings["vcf_url"], sha256=file_digest(source), md5=expected_md5)
+        root = settings["workspace"]
+        batches = root / "snp_batches"
+        batches.mkdir(parents=True, exist_ok=True)
+        selected = set(settings["chromosomes"])
+        counts = {chrom: 0 for chrom in selected}
+        written = 0
+        build_ok = False
+        with tempfile.TemporaryDirectory(dir=root, prefix="prepare-") as temporary:
+            temporary = Path(temporary)
+            outputs = {chrom: (temporary / f"{chrom}.tsv").open("w") for chrom in selected}
+            try:
+                with gzip.open(source, "rt") as vcf, (temporary / "rsid_map.tsv").open("w") as mapping:
+                    mapping.write("variant\trsId\n")
+                    for line in vcf:
+                        if line.startswith("##"):
+                            if "GRCh38" in line or "GCF_000001405.40" in line:
+                                build_ok = True
+                            continue
+                        if line.startswith("#"):
+                            continue
+                        if not build_ok:
+                            raise ValueError("VCF header does not identify GRCh38; do not mix genome builds.")
+                        fields = line.rstrip().split("\t")
+                        contig, pos, rsid, ref, alt = fields[:5]
+                        if contig.startswith("NC_"):
+                            number = contig.split(".")[0].removeprefix("NC_")
+                            chrom = f"chr{int(number)}" if number.isdigit() else contig
+                        else:
+                            chrom = "chr" + contig.removeprefix("chr")
+                        if chrom not in selected or ref not in "ACGT" or alt not in "ACGT" or len(ref) != 1 or len(alt) != 1 or ref == alt:
+                            continue
+                        if settings["common_only"] and "COMMON=1" not in fields[7].split(";"):
+                            continue
+                        variant = f"{chrom}_{pos}_{ref}_{alt}"
+                        outputs[chrom].write(variant + "\n")
+                        mapping.write(f"{variant}\t{rsid}\n")
+                        counts[chrom] += 1
+                        written += 1
+                        if settings["max_snps"] and written >= settings["max_snps"]:
+                            break
+            finally:
+                for output in outputs.values():
+                    output.close()
+            if not build_ok or not written:
+                raise ValueError("No GRCh38 SNVs matched the selected chromosomes and filters.")
+            for chrom in selected:
+                (temporary / f"{chrom}.tsv").replace(batches / f"{chrom}.tsv")
+            (temporary / "rsid_map.tsv").replace(root / "rsid_map.tsv")
+        record_source("snp_batches", batches, counts=counts, common_only=settings["common_only"], max_snps=settings["max_snps"])
+        print(f"Prepared {written:,} SNPs: {counts}")
 
-for CHROM in $CHROMS; do
-    SNP_FILE="$BASE_DIR/snp_batches/${CHROM}_ot.tsv"
-    if [ ! -s "$SNP_FILE" ]; then
-        echo "Skipping $CHROM: $SNP_FILE missing or empty"
-        continue
-    fi
-    WORK_DIR="$BASE_DIR/runs/$CHROM"
-    mkdir -p "$WORK_DIR"
-    cp -r "$BASE_DIR/scripts" "$WORK_DIR/"
-    cp -r "$BASE_DIR/resources" "$WORK_DIR/"
-    cp -r "$BASE_DIR/gkmsvm_models" "$WORK_DIR/"
-    cp "$BASE_DIR/run.sh" "$WORK_DIR/"
-    cp "$SNP_FILE" "$WORK_DIR/input_snp.tsv"
-    echo "Starting $CHROM ($(wc -l < $SNP_FILE) OT-filtered SNPs)..."
-    cd "$WORK_DIR"
-    bash run.sh > "$WORK_DIR/run.log" 2>&1 &
-    cd "$BASE_DIR"
-done
-
-echo "All chromosomes started in parallel!"
-wait
-echo "All done!"
-    """, label="section 4 parallel run")
-    return result_parallel,
-
-
-@app.cell
-def __(mo):
-    mo.md(r"""## 5. Single Chromosome Full Run""")
-    return
-
-
-@app.cell
-def __(run_bash):
-    CHR_RUN = "chr1"
-    # The bash body stays a plain string: it contains ${tf}/${model}, which an
-    # f-string would try to interpolate. Only the $CHR line is built in Python.
-    result_run = run_bash(
-        "set -euo pipefail\n"
-        'BASE_DIR="/mnt/hdd_1/rediet/deltaSVM"\n'
-        f"CHR={CHR_RUN}\n"
-        + """RUN_DIR="$BASE_DIR/runs/$CHR"
-
-# This section wipes data/ tmp/ out/ log/, so refuse to touch anything that
-# is not a prepared run directory rather than trusting the current CWD.
-if [ ! -f "$RUN_DIR/input_snp.tsv" ]; then
-    echo "ERROR: $RUN_DIR is not a prepared run directory (no input_snp.tsv) - run section 3 first"
-    exit 1
-fi
-cd "$RUN_DIR"
-echo "Running $CHR in $RUN_DIR"
-
-rm -rf data tmp out log
-mkdir data tmp out log
-python scripts/generate_allelic_seqs.py -f resources/hs38/hs38.fa -s input_snp.tsv -o data/selex_allelic_oligos 2>log/selex_allelic_oligos.log
-scripts/deltasvm_subset_multi data/selex_allelic_oligos.ref.fa data/selex_allelic_oligos.alt.fa resources/models.weights.txt out/pbs.pred.tsv resources/thresholds.pbs.tsv 2>log/deltasvm.log
-sort -k1,1 -k3,3 -o out/pbs.pred.tsv out/pbs.pred.tsv
-cat resources/thresholds.obs.tsv | while read tf score model; do
-  scripts/gkmpredict -T 1 data/selex_allelic_oligos.ref.fa gkmsvm_models/${model}.model.txt tmp/${tf}.ref.gkm.tsv &>log/${model}.ref.gkm.log
-  sort -k1,1 -o tmp/${tf}.ref.gkm.tsv tmp/${tf}.ref.gkm.tsv
-  scripts/gkmpredict -T 1 data/selex_allelic_oligos.alt.fa gkmsvm_models/${model}.model.txt tmp/${tf}.alt.gkm.tsv &>log/${model}.alt.gkm.log
-  sort -k1,1 -o tmp/${tf}.alt.gkm.tsv tmp/${tf}.alt.gkm.tsv
-  paste tmp/${tf}.ref.gkm.tsv tmp/${tf}.alt.gkm.tsv | cut -f1,2,4 >tmp/${tf}.merge.gkm.tsv
-done
-python scripts/obs_pred.py -s resources/thresholds.obs.tsv -o out/obs.pred.tsv
-sort -k1,1 -k2,2 -o out/obs.pred.tsv out/obs.pred.tsv
-paste out/obs.pred.tsv out/pbs.pred.tsv | cut -f1-5,7,9 | sort -k7,7 -k5,5r | sed '1i snp\ttf\tallele1_bind\tallele2_bind\tseq_binding\tdeltaSVM_score\tpreferred_allele' >out/summary.pred.tsv
-""", label="section 5 single chromosome run")
-    return CHR_RUN, result_run
+    return (prepare_snps,)
 
 
 @app.cell
 def __(mo):
-    mo.md(r"""## 6. Run gkmpredict Across Multiple Chromosomes""")
-    return
+    snps_button = mo.ui.run_button(label='Download and prepare SNPs')
+    snps_button
+    return (snps_button,)
 
 
 @app.cell
-def __(GKM_PREDICT_MISSING, run_bash):
-    CHROMS_GKM = "chr15 chr16 chr17 chr18 chr19 chr20"
-    result_gkm = run_bash(
-        'set -euo pipefail\n'
-        'BASE_DIR="/mnt/hdd_1/rediet/deltaSVM"\n'
-        'run_gkm_for_chr() {\n'
-        '    CHR=$1\n'
-        '    cd "$BASE_DIR/runs/$CHR"\n'
-        '    echo "[$CHR] Starting gkmpredict..."\n'
-        '    while [ ! -s out/pbs.pred.tsv ]; do sleep 60; done\n'
-        '    sort -k1,1 -k3,3 -o out/pbs.pred.tsv out/pbs.pred.tsv\n'
-        + GKM_PREDICT_MISSING
-        + '    echo "[$CHR] gkmpredict done!"\n'
-        '}\n'
-        'export -f run_gkm_for_chr\n'
-        'export BASE_DIR\n'
-        f'for CHR in {CHROMS_GKM}; do\n'
-        '    run_gkm_for_chr $CHR &\n'
-        'done\n'
-        'wait\n'
-        'echo "All chromosomes done!"\n',
-        label="section 6 gkmpredict sweep",
-    )
-    return CHROMS_GKM, result_gkm
+def __(mo, snps_button, prepare_snps):
+    mo.stop(not snps_button.value, mo.md("Press the button above to run this step."))
+    prepare_snps()
+    return
 
 
 @app.cell
 def __(mo):
-    mo.md(r"""## 7. Restart and Complete a Chromosome Run""")
+    mo.md(r"""
+    ## 2. Download and Filter Against Open Targets
+    Downloads all Parquet partitions from the pinned 25.03 variant directory, or
+    uses `DELTASVM_OT_DIR`. Only the `variantId` column is read. A disk-backed SQLite
+    index avoids loading the whole dataset into memory. Variant IDs are converted
+    from `1_position_ref_alt` to `chr1_position_ref_alt` before intersection.
+    With `DELTASVM_USE_OT=0`, this step is skipped and raw dbSNP batches are used.
+    """)
     return
 
 
 @app.cell
-def __(RESTART_CHR, run_bash):
-    CHR_RESTART = "chr1"
-    result_restart = run_bash(
-        'set -euo pipefail\n'
-        'BASE_DIR="/mnt/hdd_1/rediet/deltaSVM"\n'
-        f'CHR={CHR_RESTART}\n'
-        + RESTART_CHR,
-        label="section 7 restart",
-    )
-    return CHR_RESTART, result_restart
+def __(Path, download_file, file_digest, json, record_source, settings, urllib):
+    import sqlite3
+    from html.parser import HTMLParser
+
+    class ParquetLinks(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.links = []
+
+        def handle_starttag(self, tag, attrs):
+            href = dict(attrs).get("href", "")
+            if tag == "a" and href.endswith(".parquet"):
+                self.links.append(href)
+
+    def filter_opentargets():
+        import pyarrow.parquet as pq
+
+        if not settings["use_ot"]:
+            print("Open Targets filtering disabled; scoring raw dbSNP batches.")
+            return
+        directory = settings["ot_dir"]
+        directory.mkdir(parents=True, exist_ok=True)
+        files = sorted(directory.glob("*.parquet"))
+        if not settings["ot_local"] or not files:
+            parser = ParquetLinks()
+            with urllib.request.urlopen(settings["ot_url"], timeout=120) as response:
+                parser.feed(response.read().decode())
+            urls = sorted({urllib.parse.urljoin(settings["ot_url"], link) for link in parser.links})
+            if not urls:
+                raise ValueError("No Parquet partitions found at the configured Open Targets URL.")
+            for url in urls:
+                download_file(url, directory / Path(urllib.parse.urlparse(url).path).name)
+            files = sorted(directory.glob("*.parquet"))
+        record_source("opentargets", directory, configured_url=settings["ot_url"],
+                      files={f.name: file_digest(f) for f in files}, assembly="GRCh38")
+        index = settings["workspace"] / "opentargets.sqlite"
+        temporary = index.with_suffix(".sqlite.part")
+        if temporary.exists():
+            temporary.unlink()
+        with sqlite3.connect(temporary) as connection:
+            connection.execute("CREATE TABLE variants (id TEXT PRIMARY KEY) WITHOUT ROWID")
+            for source in files:
+                for batch in pq.ParquetFile(source).iter_batches(columns=["variantId"], batch_size=65536):
+                    values = [("chr" + str(v).removeprefix("chr"),) for v in batch.column(0).to_pylist() if v is not None]
+                    connection.executemany("INSERT OR IGNORE INTO variants VALUES (?)", values)
+                connection.commit()
+                print(f"Indexed {source.name}", flush=True)
+            for chrom in settings["chromosomes"]:
+                source = settings["workspace"] / "snp_batches" / f"{chrom}.tsv"
+                destination = source.with_name(f"{chrom}_ot.tsv")
+                temporary_output = destination.with_suffix(".tsv.part")
+                kept = 0
+                with source.open() as input_stream, temporary_output.open("w") as output:
+                    for line in input_stream:
+                        if connection.execute("SELECT 1 FROM variants WHERE id=?", (line.strip(),)).fetchone():
+                            output.write(line)
+                            kept += 1
+                temporary_output.replace(destination)
+                destination.with_suffix(".inputs.json").write_text(json.dumps({"source_sha256": file_digest(source)}) + "\n")
+                print(f"{chrom}: {kept:,} SNPs retained")
+        temporary.replace(index)
+
+    return filter_opentargets, sqlite3
 
 
 @app.cell
 def __(mo):
-    mo.md(r"""## 8. Orchestrate Full Pipeline Across Chromosomes""")
-    return
+    ot_button = mo.ui.run_button(label='Download and filter Open Targets variants')
+    ot_button
+    return (ot_button,)
 
 
 @app.cell
-def __(RESTART_CHR, run_bash):
-    CHROMS_RUN = "chr1 chr2 chr3"
-    result_pipeline = run_bash(
-        'set -euo pipefail\n'
-        'BASE_DIR="/mnt/hdd_1/rediet/deltaSVM"\n'
-        f'for CHR in {CHROMS_RUN}; do\n'
-        '    echo "=== Starting $CHR ==="\n'
-        '    ( ' + RESTART_CHR + ' )\n'
-        'done\n'
-        'echo "ALL DONE!"\n',
-        label="section 8 orchestration",
-    )
-    return CHROMS_RUN, result_pipeline
+def __(mo, ot_button, filter_opentargets):
+    mo.stop(not ot_button.value, mo.md("Press the button above to run this step."))
+    filter_opentargets()
+    return
 
 
 @app.cell
 def __(mo):
-    mo.md(r"""## 9. Check Pipeline Progress""")
+    mo.md(r"""
+    ## 3. Prepare a Chromosome and Compute deltaSVM Scores
+    Select the chromosome with `DELTASVM_CHROMOSOME`. Resources are read from the
+    shared workspace, avoiding a full genome copy per run. REF alleles must match
+    GRCh38. Boundary variants and sequences containing ambiguous bases are reported
+    in `data/skipped.tsv` and excluded before scoring. Inputs and settings are hashed
+    so changing them cannot silently reuse an old run.
+    """)
     return
 
 
 @app.cell
-def __(run_bash):
-    result_progress = run_bash("""
-set -u
-for CHR in chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22; do
-    COUNT=$(ls /mnt/hdd_1/rediet/deltaSVM/runs/$CHR/tmp/*.merge.gkm.tsv 2>/dev/null | wc -l)
-    if [ -f /mnt/hdd_1/rediet/deltaSVM/runs/$CHR/out/${CHR}_deltasvm.parquet ]; then PARQUET="done"; else PARQUET="not done"; fi
-    OT=$(wc -l < /mnt/hdd_1/rediet/deltaSVM/snp_batches/${CHR}_ot.tsv 2>/dev/null || echo 0)
-    USED=$(wc -l < /mnt/hdd_1/rediet/deltaSVM/runs/$CHR/input_snp.tsv 2>/dev/null || echo 0)
-    if [ "$USED" -ne "$OT" ]; then FILTER="NOT OT-filtered ($USED vs $OT)"; else FILTER="OT-filtered ($USED SNPs)"; fi
-    echo "$CHR: $COUNT/94 TFs | $PARQUET | $FILTER"
-done
-    """, label="section 9 progress check")
-    return result_progress,
+def __(Path, execute, file_digest, json, load_thresholds, settings, shutil, supported_kmers):
+    def batch_path(chrom):
+        if chrom not in settings["chromosomes"]:
+            raise ValueError(f"Chromosome not selected: {chrom}")
+        suffix = "_ot" if settings["use_ot"] else ""
+        source = settings["workspace"] / "snp_batches" / f"{chrom}{suffix}.tsv"
+        if settings["use_ot"]:
+            metadata = source.with_suffix(".inputs.json")
+            raw = source.with_name(f"{chrom}.tsv")
+            if not metadata.is_file() or json.loads(metadata.read_text())["source_sha256"] != file_digest(raw):
+                raise RuntimeError(f"{chrom}: Open Targets intersection is missing or stale; run section 2 again.")
+        return source
+
+    def run_signature(chrom):
+        paths = [batch_path(chrom), settings["reference"], settings["weights"], settings["obs"], settings["pbs"]]
+        obs, _ = load_thresholds()
+        paths += [settings["models"] / (row[2] + ".model.txt") for row in obs]
+        return {str(path): file_digest(path) for path in paths}
+
+    def validate_run(chrom):
+        directory = settings["workspace"] / "runs" / chrom
+        metadata = directory / "inputs.json"
+        if not metadata.is_file() or json.loads(metadata.read_text()) != run_signature(chrom):
+            raise RuntimeError(f"{chrom}: run inputs changed or were not prepared; run section 3 again.")
+        if not (directory / "out/pbs.pred.tsv").is_file() or not (directory / "out/pbs.pred.tsv").stat().st_size:
+            raise RuntimeError(f"{chrom}: missing deltaSVM scores; run section 3 again.")
+        return directory
+
+    def setup_chromosome(chrom):
+        import pysam
+
+        batch = batch_path(chrom)
+        if not batch.is_file() or not batch.stat().st_size:
+            raise ValueError(f"Missing or empty SNP batch: {batch}")
+        directory = settings["workspace"] / "runs" / chrom
+        signature = run_signature(chrom)
+        metadata = directory / "inputs.json"
+        if metadata.exists() and json.loads(metadata.read_text()) != signature:
+            raise RuntimeError(f"{chrom}: existing run uses different inputs. Move that run directory aside or use a new workspace.")
+        for name in ("data", "tmp", "out", "log"):
+            (directory / name).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(batch, directory / "input_snp.tsv")
+        if not metadata.exists():
+            weight_stat = settings["weights"].stat()
+            supported = supported_kmers(str(settings["weights"]), weight_stat.st_size, weight_stat.st_mtime_ns)
+            with pysam.FastaFile(str(settings["reference"])) as genome, batch.open() as variants, \
+                 (directory / "data/selex_allelic_oligos.ref.fa").open("w") as reference, \
+                 (directory / "data/selex_allelic_oligos.alt.fa").open("w") as alternate, \
+                 (directory / "data/skipped.tsv").open("w") as skipped:
+                skipped.write("variant\treason\n")
+                accepted = 0
+                for line in variants:
+                    variant = line.strip()
+                    contig, position, ref, alt = variant.split("_")
+                    position = int(position)
+                    if contig != chrom or len(ref) != 1 or len(alt) != 1 or ref not in "ACGT" or alt not in "ACGT":
+                        raise ValueError(f"Invalid SNP in {chrom} batch: {variant}")
+                    if position < 20 or position + 20 > genome.get_reference_length(contig):
+                        skipped.write(f"{variant}\tchromosome boundary\n")
+                        continue
+                    sequence = genome.fetch(contig, position - 20, position + 20).upper()
+                    if sequence[19] != ref:
+                        skipped.write(f"{variant}\tREF does not match GRCh38\n")
+                        continue
+                    if set(sequence) - set("ACGT"):
+                        skipped.write(f"{variant}\tambiguous reference bases\n")
+                        continue
+                    alt_sequence = sequence[:19] + alt + sequence[20:]
+                    if any(seq[i:i + 10] not in supported for seq in (sequence, alt_sequence) for i in range(31)):
+                        raise ValueError(f"{variant}: weights missing for a required 10-mer; supply the complete weight table.")
+                    reference.write(f">{variant}\n{sequence}\n")
+                    alternate.write(f">{variant}\n{alt_sequence}\n")
+                    accepted += 1
+            if not accepted:
+                raise ValueError(f"{chrom}: no scoreable SNP sequences; see data/skipped.tsv")
+            metadata.write_text(json.dumps(signature, indent=2) + "\n")
+        output = directory / "out/pbs.pred.tsv"
+        if not output.exists() or not output.stat().st_size:
+            temporary = output.with_suffix(".tsv.part")
+            execute([settings["workspace"] / "scripts/deltasvm_subset_multi",
+                     directory / "data/selex_allelic_oligos.ref.fa", directory / "data/selex_allelic_oligos.alt.fa",
+                     settings["weights"], temporary, settings["pbs"]], log=directory / "log/deltasvm.log")
+            if not temporary.stat().st_size:
+                raise ValueError(f"{chrom}: scoring produced no output.")
+            execute(["sort", "-k1,1", "-k3,3", "-o", temporary, temporary])
+            temporary.replace(output)
+        print(f"{chrom}: sequences and deltaSVM scores ready.")
+        return directory
+
+    return batch_path, run_signature, setup_chromosome, validate_run
 
 
 @app.cell
 def __(mo):
-    mo.md(r"""## 10. Convert Results to Parquet""")
+    setup_button = mo.ui.run_button(label='Prepare selected chromosome')
+    setup_button
+    return (setup_button,)
+
+
+@app.cell
+def __(mo, setup_button, settings, setup_chromosome):
+    mo.stop(not setup_button.value, mo.md("Press the button above to run this step."))
+    setup_chromosome(settings["single"])
     return
 
 
 @app.cell
-def __(pd):
-    df_result = pd.read_csv("out/summary.pred.tsv", sep="\t")
+def __(mo):
+    mo.md(r"""
+    ## 4. Run Selected Chromosomes in Parallel
+    Prepares, scores and exports each nonempty selected SNP batch. Chromosome jobs
+    and TF jobs are bounded by Configuration. Every worker failure is propagated.
+    Completed runs are reused only when their input fingerprints match.
+    """)
+    return
 
-    df_result = df_result.rename(columns={
-        "snp": "variant",
-        "tf": "TfName",
-        "preferred_allele": "Effect",
-        "deltaSVM_score": "Score"
-    })
 
-    df_result["rsId"] = "."
-    df_result["TfId"] = "."
+@app.cell
+def __(ThreadPoolExecutor, execute, load_thresholds, settings, validate_run):
+    def predict_chromosome(chrom):
+        directory = validate_run(chrom)
+        obs, _ = load_thresholds()
 
-    df_result = df_result[df_result["Effect"].isin(["Gain", "Loss"])]
-    df_result = df_result[["variant", "rsId", "TfId", "TfName", "Effect", "Score"]]
+        def predict_tf(row):
+            tf, threshold, model = row
+            merged = directory / "tmp" / f"{tf}.merge.gkm.tsv"
+            if merged.is_file() and merged.stat().st_size:
+                return
+            outputs = []
+            for allele in ("ref", "alt"):
+                output = directory / "tmp" / f"{tf}.{allele}.gkm.tsv"
+                temporary = output.with_suffix(".tsv.part")
+                execute([settings["workspace"] / "scripts/gkmpredict", "-T", settings["threads"],
+                         directory / "data" / f"selex_allelic_oligos.{allele}.fa",
+                         settings["models"] / f"{model}.model.txt", temporary],
+                        log=directory / "log" / f"{model}.{allele}.log")
+                execute(["sort", "-k1,1", "-o", temporary, temporary])
+                temporary.replace(output)
+                outputs.append(output)
+            temporary = merged.with_suffix(".tsv.part")
+            with outputs[0].open() as reference, outputs[1].open() as alternate, temporary.open("w") as output:
+                from itertools import zip_longest
+                for ref_line, alt_line in zip_longest(reference, alternate):
+                    if ref_line is None or alt_line is None:
+                        raise ValueError(f"{tf}: allele prediction lengths differ.")
+                    ref_id, ref_score = ref_line.rstrip().split("\t")
+                    alt_id, alt_score = alt_line.rstrip().split("\t")
+                    if ref_id != alt_id:
+                        raise ValueError(f"{tf}: allele SNP identifiers differ.")
+                    output.write(f"{ref_id}\t{ref_score}\t{alt_score}\n")
+            if not temporary.stat().st_size:
+                raise ValueError(f"{tf}: empty gkm-SVM predictions.")
+            temporary.replace(merged)
+        with ThreadPoolExecutor(max_workers=settings["tf_jobs"]) as pool:
+            list(pool.map(predict_tf, obs))
+        print(f"{chrom}: all TF predictions complete.")
 
-    print(df_result)
-    print(f"\nTotal rows after filtering: {len(df_result)}")
+    return (predict_chromosome,)
 
-    df_result.to_parquet("out/deltasvm_results.parquet", index=False)
-    print("Saved to out/deltasvm_results.parquet")
-    return df_result,
+
+@app.cell
+def __(Path, execute, load_thresholds, settings, validate_run):
+    def summarize_chromosome(chrom):
+        from itertools import zip_longest
+
+        directory = validate_run(chrom)
+        obs, _ = load_thresholds()
+        observed = directory / "out/obs.pred.tsv"
+        temporary_obs = observed.with_suffix(".tsv.part")
+        with temporary_obs.open("w") as output:
+            for tf, threshold, model in obs:
+                with (directory / "tmp" / f"{tf}.merge.gkm.tsv").open() as predictions:
+                    for line in predictions:
+                        snp, ref, alt = line.rstrip().split("\t")
+                        bound = "Y" if max(float(ref), float(alt)) >= float(threshold) else "N"
+                        output.write(f"{snp}\t{tf}\t{ref}\t{alt}\t{bound}\n")
+        execute(["sort", "-k1,1", "-k2,2", "-o", temporary_obs, temporary_obs])
+        temporary_obs.replace(observed)
+        summary = directory / "out/summary.pred.tsv"
+        temporary = summary.with_suffix(".tsv.part")
+        with observed.open() as obs_stream, (directory / "out/pbs.pred.tsv").open() as pbs_stream, temporary.open("w") as output:
+            output.write("snp\ttf\tallele1_bind\tallele2_bind\tseq_binding\tdeltaSVM_score\tpreferred_allele\n")
+            for obs_line, pbs_line in zip_longest(obs_stream, pbs_stream):
+                if obs_line is None or pbs_line is None:
+                    raise ValueError("OBS and PBS prediction counts differ.")
+                snp, tf, ref, alt, bound = obs_line.rstrip().split("\t")
+                pbs_snp, score, pbs_tf, effect = pbs_line.rstrip().split("\t")
+                if (snp, tf) != (pbs_snp, pbs_tf):
+                    raise ValueError("OBS and PBS SNP/TF identifiers differ.")
+                output.write(f"{snp}\t{tf}\t{ref}\t{alt}\t{bound}\t{score}\t{effect}\n")
+        temporary.replace(summary)
+        return summary
+
+    def export_chromosome(chrom):
+        import pandas as pd
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        directory = validate_run(chrom)
+        summary = directory / "out/summary.pred.tsv"
+        destination = directory / "out" / f"{chrom}_deltasvm.parquet"
+        temporary = destination.with_suffix(".parquet.part")
+        schema = pa.schema([(name, pa.float64() if name == "Score" else pa.string()) for name in
+                            ("variant", "rsId", "TfId", "TfName", "Effect", "Score")])
+        rows = 0
+        with pq.ParquetWriter(temporary, schema) as writer:
+            for chunk in pd.read_csv(summary, sep="\t", chunksize=100000):
+                chunk = chunk.rename(columns={"snp": "variant", "tf": "TfName", "preferred_allele": "Effect", "deltaSVM_score": "Score"})
+                chunk = chunk.loc[chunk["Effect"].isin(["Gain", "Loss"])].copy()
+                chunk["rsId"] = "."
+                chunk["TfId"] = "."
+                chunk = chunk[["variant", "rsId", "TfId", "TfName", "Effect", "Score"]]
+                writer.write_table(pa.Table.from_pandas(chunk, schema=schema, preserve_index=False))
+                rows += len(chunk)
+        temporary.replace(destination)
+        print(f"{chrom}: wrote {rows:,} Gain/Loss rows to {destination}")
+        return destination
+
+    return export_chromosome, summarize_chromosome
+
+
+@app.cell
+def __(ThreadPoolExecutor, batch_path, export_chromosome, predict_chromosome, settings, setup_chromosome, summarize_chromosome):
+    def complete_chromosome(chrom):
+        setup_chromosome(chrom)
+        predict_chromosome(chrom)
+        summarize_chromosome(chrom)
+        return export_chromosome(chrom)
+
+    def selected_nonempty():
+        selected = []
+        for chrom in settings["chromosomes"]:
+            source = batch_path(chrom)
+            if not source.is_file():
+                raise FileNotFoundError(f"Run SNP preparation/filtering first: {source}")
+            if source.stat().st_size:
+                selected.append(chrom)
+        if not selected:
+            raise ValueError("No nonempty SNP batches to score.")
+        return selected
+
+    def run_parallel():
+        with ThreadPoolExecutor(max_workers=settings["chrom_jobs"]) as pool:
+            return list(pool.map(complete_chromosome, selected_nonempty()))
+
+    return complete_chromosome, run_parallel, selected_nonempty
+
+
+@app.cell
+def __(mo):
+    parallel_button = mo.ui.run_button(label='Run selected chromosomes')
+    parallel_button
+    return (parallel_button,)
+
+
+@app.cell
+def __(mo, parallel_button, run_parallel):
+    mo.stop(not parallel_button.value, mo.md("Press the button above to run this step."))
+    run_parallel()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 5. Single Chromosome Full Run
+    Runs preparation, deltaSVM, all 94 gkm-SVM models, summary and Parquet export
+    for the configured chromosome. No existing run directories are deleted.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    single_button = mo.ui.run_button(label='Run one chromosome')
+    single_button
+    return (single_button,)
+
+
+@app.cell
+def __(mo, single_button, complete_chromosome, settings):
+    mo.stop(not single_button.value, mo.md("Press the button above to run this step."))
+    complete_chromosome(settings["single"])
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 6. Resume gkmpredict Across Selected Chromosomes
+    Requires completed deltaSVM scoring from section 3. Missing or failed score files
+    produce an error immediately. Completed nonempty TF prediction files are reused.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    gkm_button = mo.ui.run_button(label='Resume gkm-SVM predictions')
+    gkm_button
+    return (gkm_button,)
+
+
+@app.cell
+def __(mo, gkm_button, ThreadPoolExecutor, predict_chromosome, selected_nonempty, settings):
+    mo.stop(not gkm_button.value, mo.md("Press the button above to run this step."))
+    with ThreadPoolExecutor(max_workers=settings["chrom_jobs"]) as _pool:
+        list(_pool.map(predict_chromosome, selected_nonempty()))
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 7. Restart and Complete a Chromosome Run
+    Validates the prepared run, fills missing TF predictions, then rebuilds its
+    summary and Parquet output. Source inputs must still match the prepared run.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    restart_button = mo.ui.run_button(label='Complete selected prepared run')
+    restart_button
+    return (restart_button,)
+
+
+@app.cell
+def __(mo, restart_button, export_chromosome, predict_chromosome, settings, summarize_chromosome):
+    mo.stop(not restart_button.value, mo.md("Press the button above to run this step."))
+    predict_chromosome(settings["single"])
+    summarize_chromosome(settings["single"])
+    export_chromosome(settings["single"])
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 8. Orchestrate Full Pipeline Sequentially
+    Completes every selected nonempty chromosome batch in order. Each chromosome
+    is prepared if necessary; failures stop the pipeline before starting the next one.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    pipeline_button = mo.ui.run_button(label='Run selected chromosomes sequentially')
+    pipeline_button
+    return (pipeline_button,)
+
+
+@app.cell
+def __(mo, pipeline_button, complete_chromosome, selected_nonempty):
+    mo.stop(not pipeline_button.value, mo.md("Press the button above to run this step."))
+    for _chrom in selected_nonempty():
+        complete_chromosome(_chrom)
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 9. Check Pipeline Progress
+    Shows prepared score files, TF prediction counts, exported results and whether
+    the run's input fingerprint still matches the selected source data.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    progress_button = mo.ui.run_button(label='Check progress')
+    progress_button
+    return (progress_button,)
+
+
+@app.cell
+def __(mo, progress_button, json, run_signature, settings):
+    mo.stop(not progress_button.value, mo.md("Press the button above to run this step."))
+    for _chrom in settings["chromosomes"]:
+        _directory = settings["workspace"] / "runs" / _chrom
+        _count = sum(p.stat().st_size > 0 for p in (_directory / "tmp").glob("*.merge.gkm.tsv"))
+        _pbs = _directory / "out/pbs.pred.tsv"
+        _parquet = _directory / "out" / f"{_chrom}_deltasvm.parquet"
+        _metadata = _directory / "inputs.json"
+        try:
+            _matches = _metadata.is_file() and json.loads(_metadata.read_text()) == run_signature(_chrom)
+        except (FileNotFoundError, ValueError):
+            _matches = False
+        print(f"{_chrom}: {_count}/94 TFs | PBS={_pbs.is_file() and _pbs.stat().st_size > 0} | Parquet={_parquet.is_file()} | inputs match={_matches}")
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 10. Convert the Selected Chromosome Results to Parquet
+    Exports Gain/Loss predictions from `runs/chrN/out/summary.pred.tsv` in bounded
+    chunks. `rsId` and `TfId` remain `.` in this export; the extracted rsID mapping is
+    available separately at `rsid_map.tsv`. Predictions describe the supplied human
+    TF models and do not provide fly-specific biological validation.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    export_button = mo.ui.run_button(label='Export selected chromosome')
+    export_button
+    return (export_button,)
+
+
+@app.cell
+def __(mo, export_button, export_chromosome, settings):
+    mo.stop(not export_button.value, mo.md("Press the button above to run this step."))
+    export_chromosome(settings["single"])
+    return
 
 
 if __name__ == "__main__":
