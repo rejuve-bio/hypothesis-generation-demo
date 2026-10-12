@@ -34,7 +34,6 @@ ENV/
 [Ll]ib
 [Ll]ib64
 [Ll]ocal
-[Ss]cripts
 pyvenv.cfg
 pip-selfcheck.json
 
@@ -91,3 +90,5 @@ README.md
 .Trashes
 ehthumbs.db
 Thumbs.db 
+data/ldsc
+data/ldsc_test/

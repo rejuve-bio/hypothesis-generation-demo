@@ -1,0 +1,119 @@
+abc_stem	ontology_id	cre_key
+Acinar	CL:0002064	Pancreatic_Acinar_Cell
+Adipocyte	CL:0000136	Adipocyte
+Airway Goblet	CL:0002370	Airway_Goblet_Cell
+Alpha 1	CL:0000171	Pancreatic_Alpha_Cell_1
+Alpha 2	CL:0000171	Pancreatic_Alpha_Cell_2
+Alveolar Cap Endo	CL:0000115	Alveolar_Capillary_Endothelial_Cell
+Alveolar Type 1	CL:0002062	Alveolar_Type_1_AT1_Cell
+Alveolar Type 2 (Immune)	CL:0002063	Alverolar_Type_2,Immune
+Alveolar Type 2	CL:0002063	Alveolar_Type_2_AT2_Cell
+Astrocyte 1	CL:0000127	Astrocyte_1
+Astrocyte 2	CL:0000127	Astrocyte_2
+BBB Endothelial	CL:0000115	Blood_Brain_Barrier_Endothelial_Cell
+Beta 1	CL:0000169	Pancreatic_Beta_Cell_1
+Beta 2	CL:0000169	Pancreatic_Beta_Cell_2
+Cardiac Fibroblast	CL:0002548	Cardiac_Fibroblasts
+Cardiac Pericyte 1	CL:0000669	Cardiac_Pericyte_1
+Cardiac Pericyte 2	CL:0000669	Cardiac_Pericyte_2
+Cardiac Pericyte 3	CL:0000669	Cardiac_Pericyte_3
+Cardiac Pericyte 4	CL:0000669	Cardiac_Pericyte_4
+Chief	CL:0000155	Chief_Cell
+Cilliated	CL:0000064	Cilliated_Cell
+Club	CL:0000158	Club_Cell
+Colon Epithelial 1	CL:0011108	Colon_Epithelial_Cell_1
+Colon Epithelial 2	CL:0011108	Colon_Epithelial_Cell_2
+Colon Epithelial 3	CL:0011108	Colon_Epithelial_Cell_3
+Colon Goblet	CL:0009039	Colonic_Goblet_Cell
+Cortical Epithelial	CL:0002097	Cortical_Epithelial-like
+Delta+Gamma	CL:0000173	Pancreatic_Delta,Gamma_cell
+Ductal	CL:0002079	Ductal_Cell_Pancreatic
+Endocardial	CL:0002350	Endocardial_Cell
+Endothelial Exocrine	CL:0000115	Endothelial_Exocrine_Tissues
+Endothelial General 1	CL:0000115	Endothelial_Cell_General_1
+Endothelial General 2	CL:0000115	Endothelial_Cell_General_2
+Endothelial General 3	CL:0000115	Endothelial_Cell_General_3
+Endothelial Myocardial	CL:0010008	Endothelial_Cell_Myocardial
+Enteric Neuron	CL:0007011	CNS,Enteric_Neuron
+Enterochromaffin	CL:0000504	Enterochromaffin_Cell
+Enterocyte	CL:1000334	Small_Intestinal_Enterocyte
+Esophageal Epithelial	CL:0000238	Esophageal_Epithelial_Cell
+Fasciculata	CL:0002136	Zona_Fasciculata_Cortical_Cell
+Fibro Epithelial	CL:0002620	Fibroblast_Epithelial
+Fibro GI	CL:0000057	Fibroblast_Gastrointestinal
+Fibro General	CL:0000057	Fibroblast_General
+Fibro Liver Adrenal	CL:0000057	Fibroblast_Liver_Adrenal
+Fibro Muscle	CL:0011027	Fibroblast_Sk_Muscle_Associated
+Fibro Nerve	CL:0000057	Fibroblast_Peripheral_Nerve
+Follicular	CL:0002258	Thyroid_Follicular_Cell
+Foveolar	CL:0002179	Foveolar_Cell
+GABA 1	CL:0000617	GABAergic_Neuron_1
+GABA 2	CL:0000617	GABAergic_Neuron_2
+Gastric Neuroendocrine	CL:1000222	Gastric_Neuroendocrine_Cell
+Glomerulosa	CL:0002099	Zona_Glomerulosa_Cortical_Cell
+Glutamatergic 1	CL:0000679	Glutamatergic_Neuron_1
+Glutamatergic 2	CL:0000679	Glutamatergic_Neuron_2
+Hepatocyte	CL:0000182	Hepatocyte
+Keratinocyte 1	CL:0000312	Keratinocyte_1
+Keratinocyte 2	CL:0000312	Keratinocyte_2
+Luteal	CL:0000175	Luteal_Cell_Ovarian
+Lymphatic	CL:0002138	Lymphatic_Endothelial_Cell
+Macrophage Gen or Alv	CL:0000583	Macrophage_General,Alveolar
+Macrophage General	CL:0000235	Macrophage_General
+Mammary Basal Epi	CL:0000646	Basal_Epithelial_Mammary
+Mammary Epithelial	CL:0002327	Mammary_Epithelial
+Mammary Luminal Epi 1	CL:0002326	Mammary_Luminal_Epithelial_Cell_1
+Mammary Luminal Epi 2	CL:0002326	Mammary_Luminal_Epithelial_Cell_2
+Mast	CL:0000097	Mast_Cell
+Melanocyte	CL:0000148	Melanocyte
+Memory B	CL:0000787	Memory_B_Cell
+Mesothelial	CL:0000077	Mesothelial_Cell
+Microglia	CL:0000129	Microglia
+Myoepithelial	CL:0000185	Myoepithelial_Skin
+Naive T	CL:0000898	Naive_T_cell
+Natural Killer T	CL:0000814	Natural_Killer_T_Cell
+Nerve Stromal	CL:0000499	Peripheral_Nerve_Stromal
+Oligo Precursor	CL:0002453	Oligodendrocyte_Precursor
+Oligodendrocyte	CL:0000128	Oligodendrocyte
+Paneth	CL:0000510	Paneth_Cell
+Parietal	CL:0000162	Parietal_Cell
+Pericyte General 1	CL:0000669	Pericyte_General_1
+Pericyte General 2	CL:0000669	Pericyte_General_2
+Pericyte General 3	CL:0000669	Pericyte_General_3
+Pericyte General 4	CL:0000669	Pericyte_General_4
+Pericyte Muscularis	CL:0000669	Pericyte_Esophageal_Muscularis
+Plasma B	CL:0000786	Plasma_Cell
+SI Goblet	CL:1000495	Small_Intestinal_Goblet_Cell
+Satellite	CL:0000594	Satellite_Cell
+Schwann General	CL:0002573	Schwann_Cell_General
+Skin Basal Epidermal	CL:0002187	Basal_Epidermal_Skin
+Skin Eccrine Epidermal	CL:0000434	Eccrine_Epidermal_Skin
+Skin Granular Epidermal	CL:0002189	Granular_Epidermal_Skin
+Sm Ms Colon 1	CL:0002504	Smooth_Muscle_Colon_1
+Sm Ms Colon 2	CL:0002504	Smooth_Muscle_Colon_2
+Sm Ms GE junction	CL:0000192	Smooth_Muscle_GE_Junction
+Sm Ms GI	CL:0000192	Smooth_Muscle_General_Gastrointestinal
+Sm Ms General	CL:0000192	Smooth_Muscle_General
+Sm Ms Mucosal	CL:0000192	Smooth_Muscle_Esophageal_Mucosal
+Sm Ms Muscularis 1	CL:0002599	Smooth_Muscle_Esophageal_Muscularis_1
+Sm Ms Muscularis 2	CL:0002599	Smooth_Muscle_Esophageal_Muscularis_2
+Sm Ms Muscularis 3	CL:0000192	Smooth_Muscle_Esophageal_Muscularis_3
+Sm Ms Uterine	CL:0002601	Smooth_Muscle_Uterine
+Sm Ms Vaginal	CL:0000192	Smooth_Muscle_Vaginal
+T Lymphocyte 1 (CD8+)	CL:0000625	T_Lymphocyte_1_CD8+
+T lymphocyte 2 (CD4+)	CL:0000624	T_lymphocyte_2_CD4+
+Transitional Cortical	CL:0002097	Transitional_Zone_Cortical_Cell
+Tuft	CL:0019032	Tuft_Cell
+Type I Skeletal Myocyte	CL:0002211	Type_I_Skeletal_Myocyte
+Type II Skeletal Myocyte	CL:0002212	Type_II_Skeletal_Myocyte
+V Cardiomyocyte	CL:2000046	Ventricular_Cardiomyocyte
+Vasc Sm Muscle 1	CL:0019018	Vascular_Smooth_Muscle_1
+Vasc Sm Muscle 2	CL:0019018	Vascular_Smooth_Muscle_2
+T Lymphocyte 1 (CD8+)	CL:0000625	T_Lymphocyte_1_CD8_
+T lymphocyte 2 (CD4+)	CL:0000624	T_lymphocyte_2_CD4_
+Fetal T Lymphocyte 1 (CD4+)	CL:0000084	Fetal_T_Lymphocyte_1_CD4_
+Fetal T Lymphocyte 2 (Cytotoxic)	CL:0000084	Fetal_T_Lymphocyte_2_Cytotoxic
+Macrophage (General)	CL:0000235	Fetal_Macrophage_General_3
+Macrophage (General)	CL:0000235	Fetal_Macrophage_General_1
+Fetal B Lymphocyte 2 (CXCR5+)	CL:0000236	Fetal_B_Lymphocyte_2_CXCR5_
+Fetal T Lymphocyte 3 (IL2+)	CL:0000084	Fetal_T_Lymphocyte_3_IL2_

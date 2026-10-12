@@ -1,0 +1,448 @@
+name: CI - Build, Test and Push All Services (Staging)
+
+on:
+  push:
+    branches: [ staging ]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [staging]
+
+env:
+  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+  DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+  DOCKER_HUB_ORG: rejuvebio
+
+jobs:
+  # Unit test suite (reusable workflow, see run-tests.yml)
+  run-tests:
+    uses: ./.github/workflows/run-tests.yml
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+  # SonarQube Code Quality Analysis
+  code-quality-analysis:
+    needs: [run-tests]
+    runs-on: [self-hosted, dev-runner]
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pylint
+
+    - name: Download coverage report from run-tests
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: test-reports
+
+    - name: Run pylint
+      run: |
+        pylint . --output-format=json > pylint-report.json || true
+
+    - name: SonarQube Scan
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+      uses: sonarsource/sonarqube-scan-action@master
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: https://dev.rejuve.bio:5058
+      with:
+        args: >
+          -Dsonar.projectKey=hypothesis-generation-demo
+          -Dsonar.sources=.
+          -Dsonar.host.url=https://dev.rejuve.bio:5058
+          -Dsonar.token=${{ secrets.SONAR_TOKEN }}
+          -Dsonar.python.pylint.reportPaths=pylint-report.json
+          -Dsonar.python.coverage.reportPaths=coverage.xml
+          -Dsonar.exclusions=**/venv/**,**/__pycache__/**,**/data/**,**/pl/**,**/prolog_out_ci/**,**/external_data_ci/**,.github/**
+
+    - name: SonarQube Quality Gate Check
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+      uses: sonarsource/sonarqube-quality-gate-action@master
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      continue-on-error: true
+
+    - name: Upload pylint report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pylint-report
+        path: pylint-report.json
+
+  build-and-test-all:
+    needs: [run-tests, code-quality-analysis]
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'push')
+    runs-on: [self-hosted, dev-runner]
+
+    env:
+      # New services in docker-compose.yml are picked up automatically.
+      COMPOSE: docker compose -p hgd-ci-staging --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.ci.override.yml
+
+    outputs:
+      validation-status: ${{ steps.validate.outcome }}
+      docker-pushed: ${{ steps.deployment-trigger.outputs.docker_pushed }}
+
+    steps:
+    - name: Pre-cleanup workspace
+      run: |
+        echo "=== Cleaning workspace before checkout ==="
+        docker run --rm -v "$GITHUB_WORKSPACE:/workspace" alpine:latest sh -c "chmod -R 777 /workspace" 2>/dev/null || true
+        # $COMPOSE needs .env to exist just to parse
+        [ -f .env ] || touch .env
+        [ -f docker/docker-compose.yml ] && $COMPOSE down -v --remove-orphans 2>/dev/null || true
+        docker network prune -f 2>/dev/null || true
+        sleep 2
+        echo "[success] Pre-cleanup completed"
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+
+    # Secret Scanning with TruffleHog
+    - name: TruffleHog Secret Scan
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.repository.default_branch }}
+        head: HEAD
+        extra_args: --debug --only-verified
+
+    - name: Free up disk space
+      run: |
+        echo "=== Disk space before cleanup ==="
+        df -h
+
+        echo "=== Cleaning only this workflow's Docker resources ==="
+        # Only clean up containers from this specific CI run
+        docker container prune -f --filter "label=com.docker.compose.project" || true
+
+        echo "=== Disk space after cleanup ==="
+        df -h
+
+    - name: Check if this is a merge commit (for push events)
+      id: check-merge
+      run: |
+        if [ "${{ github.event_name }}" == "push" ]; then
+          if [ $(git rev-list --parents -n 1 HEAD | wc -w) -gt 2 ]; then
+            echo "is_merge=true" >> $GITHUB_OUTPUT
+            echo "This is a merge commit from a PR"
+          else
+            echo "is_merge=false" >> $GITHUB_OUTPUT
+            echo "This is a direct push, not a merge"
+          fi
+        else
+          echo "is_merge=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Login to Docker Hub
+      if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+    - name: Create .env file for testing
+      run: |
+        cp .env.ci.example .env
+        echo "=== .env created from .env.ci.example ==="
+
+    - name: Prepare CI directories
+      run: mkdir -p prolog_out_ci external_data_ci data
+
+    - name: Build and Monitor All Services
+      id: validate
+      run: |
+        set -e
+        echo "=== Building all Docker images ==="
+        $COMPOSE build
+
+        echo "=== Starting ALL services ==="
+        $COMPOSE up -d
+
+        echo "=== Waiting for services to initialize (90 seconds) ==="
+        sleep 90
+
+        echo "=== Checking every service Compose actually started ==="
+        $COMPOSE ps --all
+
+        FAILED_SERVICES=""
+        for service in $($COMPOSE ps --all --services); do
+          STATE=$($COMPOSE ps --all --format '{{.Service}} {{.State}}' | awk -v s="$service" '$1==s{print $2}')
+          if [ "$STATE" = "running" ]; then
+            echo "[SUCCESS] $service is running"
+            $COMPOSE logs "$service" --tail=5
+          else
+            echo "[ERROR] $service is not running (state: ${STATE:-unknown}) — full logs below:"
+            $COMPOSE logs "$service"
+            FAILED_SERVICES="$FAILED_SERVICES $service"
+          fi
+        done
+
+        if [ -n "$FAILED_SERVICES" ]; then
+          echo "[ERROR] Failed services:$FAILED_SERVICES — see their logs above to diagnose"
+          exit 1
+        fi
+
+        echo "[SUCCESS] VALIDATION PASSED - ALL services are running and healthy!"
+
+    # Services with build: and no profile get pushed as hypothesis-generation-<service>.
+    - name: Determine pushable services
+      if: steps.validate.outcome == 'success'
+      id: services
+      run: |
+        LIST=$($COMPOSE config --format json --no-interpolate | python3 -c "
+        import sys, json
+        c = json.load(sys.stdin)
+        names = sorted(n for n, s in c['services'].items() if 'build' in s and not s.get('profiles'))
+        print(' '.join(names))
+        ")
+        echo "list=$LIST" >> $GITHUB_OUTPUT
+        echo "Pushable services: $LIST"
+
+    # Docker Image Size Check
+    - name: Check Docker image sizes
+      if: steps.validate.outcome == 'success'
+      run: |
+        echo "=== Checking Docker image sizes ==="
+        for service in ${{ steps.services.outputs.list }}; do
+          IMAGE_ID=$($COMPOSE images -q $service)
+          SIZE=$(docker images $IMAGE_ID --format "{{.Size}}")
+          echo "$service image size: $SIZE"
+        done
+        echo "[SUCCESS] Image size check completed"
+
+    # Tag and Push
+    - name: Tag and Push Images to Docker Hub
+      if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true' && steps.validate.outcome == 'success'
+      run: |
+        echo "=== Tagging and pushing images to Docker Hub ==="
+        SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+
+        for service in ${{ steps.services.outputs.list }}; do
+          IMAGE_ID=$($COMPOSE images -q $service)
+          SERVICE_NAME="hypothesis-generation-${service}"
+          STAGING_TAG="${{ env.DOCKER_HUB_ORG }}/${SERVICE_NAME}:staging"
+          SHA_TAG="${{ env.DOCKER_HUB_ORG }}/${SERVICE_NAME}:staging-${SHORT_SHA}"
+          LATEST_TAG="${{ env.DOCKER_HUB_ORG }}/${SERVICE_NAME}:staging-latest"
+
+          docker tag $IMAGE_ID $STAGING_TAG
+          docker tag $IMAGE_ID $SHA_TAG
+          docker tag $IMAGE_ID $LATEST_TAG
+
+          docker push $STAGING_TAG
+          docker push $SHA_TAG
+          docker push $LATEST_TAG
+
+          echo "[SUCCESS] $service pushed — $STAGING_TAG / $SHA_TAG"
+        done
+
+        echo "[SUCCESS] All images pushed to Docker Hub"
+    
+    - name: Cleanup old Docker Hub tags (keep last 2 SHA tags per service)
+      if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true' && steps.validate.outcome == 'success'
+      run: |
+        echo "=== Cleaning up old Docker Hub tags ==="
+        SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+        
+        for service in ${{ steps.services.outputs.list }}; do
+          SERVICE_NAME="hypothesis-generation-${service}"
+          REPO="${{ env.DOCKER_HUB_ORG }}/${SERVICE_NAME}"
+          
+          echo "Cleaning tags for: $REPO"
+          
+          # Get all tags
+          TAGS=$(curl -s -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+            "https://hub.docker.com/v2/repositories/${REPO}/tags?page_size=100" \
+            | python3 -c "
+        import sys, json
+        data = json.load(sys.stdin)
+        tags = data.get('results', [])
+        # Filter only SHA tags (staging-xxxxxxx pattern)
+        sha_tags = [t for t in tags if t['name'].startswith('staging-') and len(t['name']) == 15]
+        # Sort by last_updated oldest first
+        sha_tags.sort(key=lambda x: x['last_updated'])
+        # Print all except last 2
+        to_delete = sha_tags[:-2]
+        for t in to_delete:
+            print(t['name'])
+        ")
+          
+          # Delete old tags
+          for TAG in $TAGS; do
+            echo "Deleting old tag: $TAG"
+            curl -s -X DELETE \
+              -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+              "https://hub.docker.com/v2/repositories/${REPO}/tags/${TAG}/"
+            echo "Deleted: $TAG"
+          done
+          
+          echo "Done cleaning: $REPO"
+        done
+        
+        echo "[SUCCESS] Docker Hub cleanup completed - kept last 2 SHA tags per service"
+
+    - name: Set deployment trigger
+      if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true' && steps.validate.outcome == 'success'
+      id: deployment-trigger
+      run: |
+        echo "docker_pushed=true" >> $GITHUB_OUTPUT
+
+    - name: Complete Cleanup
+      if: always()
+      run: |
+        echo "=== Cleaning up CI containers and networks ==="
+
+        echo "=== Current running containers before cleanup ==="
+        $COMPOSE ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+
+        # Stop and remove containers
+        $COMPOSE down -v --remove-orphans 2>/dev/null || true
+
+        # Fix permissions on files created by Docker containers
+        docker run --rm -v "$GITHUB_WORKSPACE:/workspace" alpine:latest sh -c "chmod -R 777 /workspace" || true
+
+        echo "=== Current running containers after cleanup ==="
+        $COMPOSE ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+
+        echo "=== Cleaning up temporary files ==="
+        rm -f .env
+
+        echo "=== Cleaning Docker system ==="
+        docker system prune -f
+
+        echo "=== Disk space after cleanup ==="
+        df -h
+
+        echo "[SUCCESS] Hypothesis Docker resources cleaned up"
+
+    - name: Trigger CD workflow via Repository Dispatch
+      if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true' && steps.validate.outcome == 'success'
+      run: |
+        SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+        IMAGE_TAG="staging-${SHORT_SHA}"
+
+        curl -L -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/${{ github.repository }}/dispatches \
+          -d "{\"event_type\":\"deploy-staging\",\"client_payload\":{\"image_tag\":\"${IMAGE_TAG}\"}}"
+        echo "[SUCCESS] CD workflow triggered successfully!"
+
+  # Email Notifications
+  notify-success:
+    runs-on: [self-hosted, dev-runner]
+    needs: [build-and-test-all]
+    if: success() && github.event_name == 'push'
+    steps:
+    - name: Send success email
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "CI Pipeline SUCCESS - Hypothesis Generation"
+        to: ${{ secrets.RECIEVER_EMAIL }}
+        from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
+        body: |
+          CI Pipeline Completed Successfully! [SUCCESS]
+
+          Repository: ${{ github.repository }}
+          Branch: ${{ github.ref_name }}
+          Commit: ${{ github.sha }}
+          Author: ${{ github.actor }}
+
+          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Images pushed:
+          - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-prolog-service:staging
+          - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-dask-scheduler:staging
+          - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-dask-worker:staging
+          - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-api-service:staging
+          - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-prefect-service:staging
+          - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-prefect-deployment:staging
+
+  notify-failure:
+    runs-on: [self-hosted, dev-runner]
+    needs: [build-and-test-all]
+    if: failure() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+    steps:
+    - name: Send failure email
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "CI Pipeline FAILED - Hypothesis Generation"
+        to: abdum14@gmail.com
+        from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
+        body: |
+          CI Pipeline Failed! [FAILED]
+
+          Repository: ${{ github.repository }}
+          Branch: ${{ github.ref_name }}
+          Commit: ${{ github.sha }}
+          Author: ${{ github.actor }}
+
+          View Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Please check the workflow logs for details.
+
+  validation-summary:
+    runs-on: [self-hosted, dev-runner]
+    needs: build-and-test-all
+    if: always()
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Display artifact structure
+      run: |
+        echo "=== Downloaded Artifacts ==="
+        ls -R artifacts/ || echo "No artifacts found"
+
+    - name: Summary
+      run: |
+        echo "=== CI/CD Validation Summary ==="
+        echo "Event: ${{ github.event_name }}"
+        echo "Validation Status: ${{ needs.build-and-test-all.outputs.validation-status }}"
+
+        if [[ "${{ needs.build-and-test-all.outputs.validation-status }}" == "success" ]]; then
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "[SUCCESS] All services built, validated, and pushed to Docker Hub!"
+            echo "*** Images:"
+            echo "  - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-prolog-service:staging"
+            echo "  - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-dask-scheduler:staging"
+            echo "  - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-dask-worker:staging"
+            echo "  - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-api-service:staging"
+            echo "  - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-prefect-service:staging"
+            echo "  - ${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-prefect-deployment:staging"
+          else
+            echo "[SUCCESS] PR validation passed - ready to merge!"
+          fi
+        else
+          echo "[ERROR] Validation did not pass. Check the build-and-test-all job for details."
+          exit 1
+        fi

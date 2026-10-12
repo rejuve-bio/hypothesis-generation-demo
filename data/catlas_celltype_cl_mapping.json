@@ -1,0 +1,2222 @@
+{
+  "Adipocyte": {
+    "catlas_cell_type": "Adipocyte",
+    "matched_census_name": "adipocyte",
+    "cl_id": "CL:0000136",
+    "cl_name": "adipocyte",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000325",
+    "cellxgene_parent_cl_name": "stuff accumulating cell",
+    "parent_match_type": "descendant"
+  },
+  "Airway Goblet Cell": {
+    "catlas_cell_type": "Airway Goblet Cell",
+    "matched_census_name": null,
+    "cl_id": "CL:0002370",
+    "cl_name": "respiratory tract goblet cell",
+    "match_method": "manual_override",
+    "cellxgene_parent_cl_id": "CL:0000159",
+    "cellxgene_parent_cl_name": "seromucus secreting cell",
+    "parent_match_type": "descendant"
+  },
+  "Alveolar Capillary Endothelial Cell": {
+    "catlas_cell_type": "Alveolar Capillary Endothelial Cell",
+    "matched_census_name": "alveolar capillary type endothelial cell",
+    "cl_id": "CL:4028003",
+    "cl_name": "alveolar capillary type 2 endothelial cell",
+    "match_method": "fuzzy:0.93",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Alveolar Type 1 (AT1) Cell": {
+    "catlas_cell_type": "Alveolar Type 1 (AT1) Cell",
+    "matched_census_name": "pulmonary alveolar type cell",
+    "cl_id": "CL:0002062",
+    "cl_name": "pulmonary alveolar type 1 cell",
+    "match_method": "fuzzy:0.72",
+    "cellxgene_parent_cl_id": "CL:0000082",
+    "cellxgene_parent_cl_name": "epithelial cell of lung",
+    "parent_match_type": "descendant"
+  },
+  "Alveolar Type 2 (AT2) Cell": {
+    "catlas_cell_type": "Alveolar Type 2 (AT2) Cell",
+    "matched_census_name": "pulmonary alveolar type cell",
+    "cl_id": "CL:0002062",
+    "cl_name": "pulmonary alveolar type 1 cell",
+    "match_method": "fuzzy:0.72",
+    "cellxgene_parent_cl_id": "CL:0000082",
+    "cellxgene_parent_cl_name": "epithelial cell of lung",
+    "parent_match_type": "descendant"
+  },
+  "Alverolar Type 2,Immune": {
+    "catlas_cell_type": "Alverolar Type 2,Immune",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Astrocyte 1": {
+    "catlas_cell_type": "Astrocyte 1",
+    "matched_census_name": "astrocyte",
+    "cl_id": "CL:0000127",
+    "cl_name": "astrocyte",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Astrocyte 2": {
+    "catlas_cell_type": "Astrocyte 2",
+    "matched_census_name": "astrocyte",
+    "cl_id": "CL:0000127",
+    "cl_name": "astrocyte",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Atrial Cardiomyocyte": {
+    "catlas_cell_type": "Atrial Cardiomyocyte",
+    "matched_census_name": "fetal cardiomyocyte",
+    "cl_id": "CL:0002495",
+    "cl_name": "fetal cardiomyocyte",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Basal Epidermal (Skin)": {
+    "catlas_cell_type": "Basal Epidermal (Skin)",
+    "matched_census_name": "epidermal cell",
+    "cl_id": "CL:0000362",
+    "cl_name": "epidermal cell",
+    "match_method": "fuzzy:0.65",
+    "cellxgene_parent_cl_id": "CL:0002077",
+    "cellxgene_parent_cl_name": "ecto-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Basal Epithelial (Mammary)": {
+    "catlas_cell_type": "Basal Epithelial (Mammary)",
+    "matched_census_name": null,
+    "cl_id": "CL:0002324",
+    "cl_name": "basal-myoepithelial cell of mammary gland",
+    "match_method": "manual_override",
+    "cellxgene_parent_cl_id": "CL:0002327",
+    "cellxgene_parent_cl_name": "mammary gland epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Blood Brain Barrier Endothelial Cell": {
+    "catlas_cell_type": "Blood Brain Barrier Endothelial Cell",
+    "matched_census_name": "endothelial cell",
+    "cl_id": "CL:0000115",
+    "cl_name": "endothelial cell",
+    "match_method": "fuzzy:0.62",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "direct"
+  },
+  "CNS,Enteric Neuron": {
+    "catlas_cell_type": "CNS,Enteric Neuron",
+    "matched_census_name": "enteric neuron",
+    "cl_id": "CL:0007011",
+    "cl_name": "enteric neuron",
+    "match_method": "fuzzy:0.88",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Cardiac Fibroblasts": {
+    "catlas_cell_type": "Cardiac Fibroblasts",
+    "matched_census_name": "fibroblast of cardiac tissue",
+    "cl_id": "CL:0002548",
+    "cl_name": "fibroblast of cardiac tissue",
+    "match_method": "fuzzy:0.81",
+    "cellxgene_parent_cl_id": "CL:0000057",
+    "cellxgene_parent_cl_name": "fibroblast",
+    "parent_match_type": "descendant"
+  },
+  "Cardiac Pericyte 1": {
+    "catlas_cell_type": "Cardiac Pericyte 1",
+    "matched_census_name": "pericyte",
+    "cl_id": "CL:0000669",
+    "cl_name": "pericyte",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Cardiac Pericyte 2": {
+    "catlas_cell_type": "Cardiac Pericyte 2",
+    "matched_census_name": "pericyte",
+    "cl_id": "CL:0000669",
+    "cl_name": "pericyte",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Cardiac Pericyte 3": {
+    "catlas_cell_type": "Cardiac Pericyte 3",
+    "matched_census_name": "pericyte",
+    "cl_id": "CL:0000669",
+    "cl_name": "pericyte",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Cardiac Pericyte 4": {
+    "catlas_cell_type": "Cardiac Pericyte 4",
+    "matched_census_name": "pericyte",
+    "cl_id": "CL:0000669",
+    "cl_name": "pericyte",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Chief Cell": {
+    "catlas_cell_type": "Chief Cell",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Cilliated Cell": {
+    "catlas_cell_type": "Cilliated Cell",
+    "matched_census_name": "ciliated cell",
+    "cl_id": "CL:0000064",
+    "cl_name": "ciliated cell",
+    "match_method": "fuzzy:0.96",
+    "cellxgene_parent_cl_id": "CL:0000064",
+    "cellxgene_parent_cl_name": "ciliated cell",
+    "parent_match_type": "direct"
+  },
+  "Club Cell": {
+    "catlas_cell_type": "Club Cell",
+    "matched_census_name": "club cell",
+    "cl_id": "CL:0000158",
+    "cl_name": "club cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0011026",
+    "cellxgene_parent_cl_name": "progenitor cell",
+    "parent_match_type": "descendant"
+  },
+  "Colon Epithelial Cell 1": {
+    "catlas_cell_type": "Colon Epithelial Cell 1",
+    "matched_census_name": "colon epithelial cell",
+    "cl_id": "CL:0011108",
+    "cl_name": "colon epithelial cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0002076",
+    "cellxgene_parent_cl_name": "endo-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Colon Epithelial Cell 2": {
+    "catlas_cell_type": "Colon Epithelial Cell 2",
+    "matched_census_name": "colon epithelial cell",
+    "cl_id": "CL:0011108",
+    "cl_name": "colon epithelial cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0002076",
+    "cellxgene_parent_cl_name": "endo-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Colon Epithelial Cell 3": {
+    "catlas_cell_type": "Colon Epithelial Cell 3",
+    "matched_census_name": "colon epithelial cell",
+    "cl_id": "CL:0011108",
+    "cl_name": "colon epithelial cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0002076",
+    "cellxgene_parent_cl_name": "endo-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Colonic Goblet Cell": {
+    "catlas_cell_type": "Colonic Goblet Cell",
+    "matched_census_name": "colon goblet cell",
+    "cl_id": "CL:0009039",
+    "cl_name": "colon goblet cell",
+    "match_method": "fuzzy:0.94",
+    "cellxgene_parent_cl_id": "CL:0000159",
+    "cellxgene_parent_cl_name": "seromucus secreting cell",
+    "parent_match_type": "descendant"
+  },
+  "Cortical Epithelial-like": {
+    "catlas_cell_type": "Cortical Epithelial-like",
+    "matched_census_name": "epithelial cell",
+    "cl_id": "CL:0000066",
+    "cl_name": "epithelial cell",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0000066",
+    "cellxgene_parent_cl_name": "epithelial cell",
+    "parent_match_type": "direct"
+  },
+  "Ductal Cell (Pancreatic)": {
+    "catlas_cell_type": "Ductal Cell (Pancreatic)",
+    "matched_census_name": null,
+    "cl_id": "CL:0002079",
+    "cl_name": "pancreatic ductal cell",
+    "match_method": "manual_override",
+    "cellxgene_parent_cl_id": "CL:0000083",
+    "cellxgene_parent_cl_name": "epithelial cell of pancreas",
+    "parent_match_type": "descendant"
+  },
+  "Eccrine Epidermal (Skin)": {
+    "catlas_cell_type": "Eccrine Epidermal (Skin)",
+    "matched_census_name": "epidermal cell",
+    "cl_id": "CL:0000362",
+    "cl_name": "epidermal cell",
+    "match_method": "fuzzy:0.61",
+    "cellxgene_parent_cl_id": "CL:0002077",
+    "cellxgene_parent_cl_name": "ecto-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Endocardial Cell": {
+    "catlas_cell_type": "Endocardial Cell",
+    "matched_census_name": "endocardial cell",
+    "cl_id": "CL:0002350",
+    "cl_name": "endocardial cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Endothelial (Exocrine Tissues)": {
+    "catlas_cell_type": "Endothelial (Exocrine Tissues)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Endothelial Cell (General) 1": {
+    "catlas_cell_type": "Endothelial Cell (General) 1",
+    "matched_census_name": "endothelial cell",
+    "cl_id": "CL:0000115",
+    "cl_name": "endothelial cell",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "direct"
+  },
+  "Endothelial Cell (General) 2": {
+    "catlas_cell_type": "Endothelial Cell (General) 2",
+    "matched_census_name": "endothelial cell",
+    "cl_id": "CL:0000115",
+    "cl_name": "endothelial cell",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "direct"
+  },
+  "Endothelial Cell (General) 3": {
+    "catlas_cell_type": "Endothelial Cell (General) 3",
+    "matched_census_name": "endothelial cell",
+    "cl_id": "CL:0000115",
+    "cl_name": "endothelial cell",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "direct"
+  },
+  "Endothelial Cell (Myocardial)": {
+    "catlas_cell_type": "Endothelial Cell (Myocardial)",
+    "matched_census_name": "endothelial cell",
+    "cl_id": "CL:0000115",
+    "cl_name": "endothelial cell",
+    "match_method": "fuzzy:0.74",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "direct"
+  },
+  "Enterochromaffin Cell": {
+    "catlas_cell_type": "Enterochromaffin Cell",
+    "matched_census_name": "enterochromaffin like cell",
+    "cl_id": "CL:0000504",
+    "cl_name": "enterochromaffin-like cell",
+    "match_method": "fuzzy:0.89",
+    "cellxgene_parent_cl_id": "CL:0000163",
+    "cellxgene_parent_cl_name": "endocrine cell",
+    "parent_match_type": "descendant"
+  },
+  "Esophageal Epithelial Cell": {
+    "catlas_cell_type": "Esophageal Epithelial Cell",
+    "matched_census_name": null,
+    "cl_id": "CL:0002252",
+    "cl_name": "epithelial cell of esophagus",
+    "match_method": "manual_override",
+    "cellxgene_parent_cl_id": "CL:0002076",
+    "cellxgene_parent_cl_name": "endo-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Adrenal Chromaffin Cell": {
+    "catlas_cell_type": "Fetal Adrenal Chromaffin Cell",
+    "matched_census_name": "chromaffin cell",
+    "cl_id": "CL:0000166",
+    "cl_name": "chromaffin cell",
+    "match_method": "fuzzy:0.68",
+    "cellxgene_parent_cl_id": "CL:0002077",
+    "cellxgene_parent_cl_name": "ecto-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Adrenal Cortical Cell": {
+    "catlas_cell_type": "Fetal Adrenal Cortical Cell",
+    "matched_census_name": "cortical cell of adrenal gland",
+    "cl_id": "CL:0002097",
+    "cl_name": "cortical cell of adrenal gland",
+    "match_method": "fuzzy:0.81",
+    "cellxgene_parent_cl_id": "CL:0000150",
+    "cellxgene_parent_cl_name": "glandular secretory epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Adrenal Neuron": {
+    "catlas_cell_type": "Fetal Adrenal Neuron",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Adrenal Sympathoblasts": {
+    "catlas_cell_type": "Fetal Adrenal Sympathoblasts",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Alveolar Endothelial Cell": {
+    "catlas_cell_type": "Fetal Alveolar Endothelial Cell",
+    "matched_census_name": "alveolar capillary type endothelial cell",
+    "cl_id": "CL:4028003",
+    "cl_name": "alveolar capillary type 2 endothelial cell",
+    "match_method": "fuzzy:0.76",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Astrocyte 1": {
+    "catlas_cell_type": "Fetal Astrocyte 1",
+    "matched_census_name": "astrocyte",
+    "cl_id": "CL:0000127",
+    "cl_name": "astrocyte",
+    "match_method": "fuzzy:0.75",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Astrocyte 2": {
+    "catlas_cell_type": "Fetal Astrocyte 2",
+    "matched_census_name": "astrocyte",
+    "cl_id": "CL:0000127",
+    "cl_name": "astrocyte",
+    "match_method": "fuzzy:0.75",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Astrocyte 3": {
+    "catlas_cell_type": "Fetal Astrocyte 3",
+    "matched_census_name": "astrocyte",
+    "cl_id": "CL:0000127",
+    "cl_name": "astrocyte",
+    "match_method": "fuzzy:0.75",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Astrocyte 4": {
+    "catlas_cell_type": "Fetal Astrocyte 4",
+    "matched_census_name": "astrocyte",
+    "cl_id": "CL:0000127",
+    "cl_name": "astrocyte",
+    "match_method": "fuzzy:0.75",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Astrocyte 5": {
+    "catlas_cell_type": "Fetal Astrocyte 5",
+    "matched_census_name": "astrocyte",
+    "cl_id": "CL:0000127",
+    "cl_name": "astrocyte",
+    "match_method": "fuzzy:0.75",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Atrial Cardiomyocyte": {
+    "catlas_cell_type": "Fetal Atrial Cardiomyocyte",
+    "matched_census_name": "fetal cardiomyocyte",
+    "cl_id": "CL:0002495",
+    "cl_name": "fetal cardiomyocyte",
+    "match_method": "fuzzy:0.84",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal B Lymphocyte 1 (SPIB+)": {
+    "catlas_cell_type": "Fetal B Lymphocyte 1 (SPIB+)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal B Lymphocyte 2 (CXCR5+)": {
+    "catlas_cell_type": "Fetal B Lymphocyte 2 (CXCR5+)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal B Lymphocyte 3 (NPY+)": {
+    "catlas_cell_type": "Fetal B Lymphocyte 3 (NPY+)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Broncial and Alveolar Epithelial Cell 1": {
+    "catlas_cell_type": "Fetal Broncial and Alveolar Epithelial Cell 1",
+    "matched_census_name": "bronchial epithelial cell",
+    "cl_id": "CL:0002328",
+    "cl_name": "bronchial epithelial cell",
+    "match_method": "fuzzy:0.71",
+    "cellxgene_parent_cl_id": "CL:0002076",
+    "cellxgene_parent_cl_name": "endo-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Broncial and Alveolar Epithelial Cell 2": {
+    "catlas_cell_type": "Fetal Broncial and Alveolar Epithelial Cell 2",
+    "matched_census_name": "bronchial epithelial cell",
+    "cl_id": "CL:0002328",
+    "cl_name": "bronchial epithelial cell",
+    "match_method": "fuzzy:0.71",
+    "cellxgene_parent_cl_id": "CL:0002076",
+    "cellxgene_parent_cl_name": "endo-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Cardiac Fibroblast": {
+    "catlas_cell_type": "Fetal Cardiac Fibroblast",
+    "matched_census_name": "fibroblast of cardiac tissue",
+    "cl_id": "CL:0002548",
+    "cl_name": "fibroblast of cardiac tissue",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000057",
+    "cellxgene_parent_cl_name": "fibroblast",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Cholangiocytes": {
+    "catlas_cell_type": "Fetal Cholangiocytes",
+    "matched_census_name": "cholangiocyte",
+    "cl_id": "CL:1000488",
+    "cl_name": "cholangiocyte",
+    "match_method": "fuzzy:0.79",
+    "cellxgene_parent_cl_id": "CL:0000068",
+    "cellxgene_parent_cl_name": "duct epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Cilliated Epithelial Cell": {
+    "catlas_cell_type": "Fetal Cilliated Epithelial Cell",
+    "matched_census_name": "ciliated epithelial cell",
+    "cl_id": "CL:0000067",
+    "cl_name": "ciliated epithelial cell",
+    "match_method": "fuzzy:0.87",
+    "cellxgene_parent_cl_id": "CL:0000064",
+    "cellxgene_parent_cl_name": "ciliated cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Endocardial Cell": {
+    "catlas_cell_type": "Fetal Endocardial Cell",
+    "matched_census_name": "endocardial cell",
+    "cl_id": "CL:0002350",
+    "cl_name": "endocardial cell",
+    "match_method": "fuzzy:0.84",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Endothelial (General) 1": {
+    "catlas_cell_type": "Fetal Endothelial (General) 1",
+    "matched_census_name": "endothelial cell",
+    "cl_id": "CL:0000115",
+    "cl_name": "endothelial cell",
+    "match_method": "fuzzy:0.54",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "direct"
+  },
+  "Fetal Endothelial (General) 2": {
+    "catlas_cell_type": "Fetal Endothelial (General) 2",
+    "matched_census_name": "endothelial cell",
+    "cl_id": "CL:0000115",
+    "cl_name": "endothelial cell",
+    "match_method": "fuzzy:0.54",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "direct"
+  },
+  "Fetal Endothelial (General) 3": {
+    "catlas_cell_type": "Fetal Endothelial (General) 3",
+    "matched_census_name": "endothelial cell",
+    "cl_id": "CL:0000115",
+    "cl_name": "endothelial cell",
+    "match_method": "fuzzy:0.54",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "direct"
+  },
+  "Fetal Enteric Glia": {
+    "catlas_cell_type": "Fetal Enteric Glia",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Enteric Neuron": {
+    "catlas_cell_type": "Fetal Enteric Neuron",
+    "matched_census_name": "enteric neuron",
+    "cl_id": "CL:0007011",
+    "cl_name": "enteric neuron",
+    "match_method": "fuzzy:0.82",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Enterocyte 1": {
+    "catlas_cell_type": "Fetal Enterocyte 1",
+    "matched_census_name": "enterocyte",
+    "cl_id": "CL:0000584",
+    "cl_name": "enterocyte",
+    "match_method": "fuzzy:0.77",
+    "cellxgene_parent_cl_id": "CL:0000075",
+    "cellxgene_parent_cl_name": "columnar/cuboidal epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Enterocyte 2": {
+    "catlas_cell_type": "Fetal Enterocyte 2",
+    "matched_census_name": "enterocyte",
+    "cl_id": "CL:0000584",
+    "cl_name": "enterocyte",
+    "match_method": "fuzzy:0.77",
+    "cellxgene_parent_cl_id": "CL:0000075",
+    "cellxgene_parent_cl_name": "columnar/cuboidal epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Enterocyte 3": {
+    "catlas_cell_type": "Fetal Enterocyte 3",
+    "matched_census_name": "enterocyte",
+    "cl_id": "CL:0000584",
+    "cl_name": "enterocyte",
+    "match_method": "fuzzy:0.77",
+    "cellxgene_parent_cl_id": "CL:0000075",
+    "cellxgene_parent_cl_name": "columnar/cuboidal epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Enteroendocrine": {
+    "catlas_cell_type": "Fetal Enteroendocrine",
+    "matched_census_name": "enteroendocrine cell",
+    "cl_id": "CL:0000164",
+    "cl_name": "enteroendocrine cell",
+    "match_method": "fuzzy:0.73",
+    "cellxgene_parent_cl_id": "CL:0000163",
+    "cellxgene_parent_cl_name": "endocrine cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Erythroblast 1": {
+    "catlas_cell_type": "Fetal Erythroblast 1",
+    "matched_census_name": "erythroblast",
+    "cl_id": "CL:0000765",
+    "cl_name": "erythroblast",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0011026",
+    "cellxgene_parent_cl_name": "progenitor cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Erythroblast 2": {
+    "catlas_cell_type": "Fetal Erythroblast 2",
+    "matched_census_name": "erythroblast",
+    "cl_id": "CL:0000765",
+    "cl_name": "erythroblast",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0011026",
+    "cellxgene_parent_cl_name": "progenitor cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Erythroblast 3": {
+    "catlas_cell_type": "Fetal Erythroblast 3",
+    "matched_census_name": "erythroblast",
+    "cl_id": "CL:0000765",
+    "cl_name": "erythroblast",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0011026",
+    "cellxgene_parent_cl_name": "progenitor cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Erythroblast 4": {
+    "catlas_cell_type": "Fetal Erythroblast 4",
+    "matched_census_name": "erythroblast",
+    "cl_id": "CL:0000765",
+    "cl_name": "erythroblast",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0011026",
+    "cellxgene_parent_cl_name": "progenitor cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Erythroblast 5": {
+    "catlas_cell_type": "Fetal Erythroblast 5",
+    "matched_census_name": "erythroblast",
+    "cl_id": "CL:0000765",
+    "cl_name": "erythroblast",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0011026",
+    "cellxgene_parent_cl_name": "progenitor cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 1": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 1",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 10": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 10",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 11": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 11",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 12": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 12",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 2": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 2",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 3": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 3",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 4": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 4",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 5": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 5",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 6": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 6",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 7": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 7",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 8": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 8",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Excitatory Neuron 9": {
+    "catlas_cell_type": "Fetal Excitatory Neuron 9",
+    "matched_census_name": "thalamic excitatory neuron",
+    "cl_id": "CL:4023068",
+    "cl_name": "thalamic excitatory neuron",
+    "match_method": "fuzzy:0.69",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Extravillous Trophoblast": {
+    "catlas_cell_type": "Fetal Extravillous Trophoblast",
+    "matched_census_name": "extravillous trophoblast",
+    "cl_id": "CL:0008036",
+    "cl_name": "extravillous trophoblast",
+    "match_method": "fuzzy:0.89",
+    "cellxgene_parent_cl_id": "CL:0000351",
+    "cellxgene_parent_cl_name": "trophoblast cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Fibroblast (Gastrointestinal)": {
+    "catlas_cell_type": "Fetal Fibroblast (Gastrointestinal)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Fibroblast (General) 1": {
+    "catlas_cell_type": "Fetal Fibroblast (General) 1",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Fibroblast (General) 2": {
+    "catlas_cell_type": "Fetal Fibroblast (General) 2",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Fibroblast (General) 3": {
+    "catlas_cell_type": "Fetal Fibroblast (General) 3",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Fibroblast (General) 4": {
+    "catlas_cell_type": "Fetal Fibroblast (General) 4",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Fibroblast (General) 5": {
+    "catlas_cell_type": "Fetal Fibroblast (General) 5",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Fibroblast (Sk Muscle Associated) 1": {
+    "catlas_cell_type": "Fetal Fibroblast (Sk Muscle Associated) 1",
+    "matched_census_name": "muscle fibroblast",
+    "cl_id": "CL:1001609",
+    "cl_name": "muscle fibroblast",
+    "match_method": "fuzzy:0.63",
+    "cellxgene_parent_cl_id": "CL:0000057",
+    "cellxgene_parent_cl_name": "fibroblast",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Fibroblast (Splenic)": {
+    "catlas_cell_type": "Fetal Fibroblast (Splenic)",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Gastric Goblet Cell": {
+    "catlas_cell_type": "Fetal Gastric Goblet Cell",
+    "matched_census_name": "goblet cell",
+    "cl_id": "CL:0000160",
+    "cl_name": "goblet cell",
+    "match_method": "fuzzy:0.61",
+    "cellxgene_parent_cl_id": "CL:0000159",
+    "cellxgene_parent_cl_name": "seromucus secreting cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Goblet Cell": {
+    "catlas_cell_type": "Fetal Goblet Cell",
+    "matched_census_name": "goblet cell",
+    "cl_id": "CL:0000160",
+    "cl_name": "goblet cell",
+    "match_method": "fuzzy:0.79",
+    "cellxgene_parent_cl_id": "CL:0000159",
+    "cellxgene_parent_cl_name": "seromucus secreting cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Hematopoeitic Stem Cell": {
+    "catlas_cell_type": "Fetal Hematopoeitic Stem Cell",
+    "matched_census_name": "hematopoietic stem cell",
+    "cl_id": "CL:0000037",
+    "cl_name": "hematopoietic stem cell",
+    "match_method": "fuzzy:0.85",
+    "cellxgene_parent_cl_id": "CL:0000034",
+    "cellxgene_parent_cl_name": "stem cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Hepatic Endothelial 1": {
+    "catlas_cell_type": "Fetal Hepatic Endothelial 1",
+    "matched_census_name": "endothelial cell of hepatic sinusoid",
+    "cl_id": "CL:1000398",
+    "cl_name": "endothelial cell of hepatic sinusoid",
+    "match_method": "fuzzy:0.62",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Hepatic Endothelial 2": {
+    "catlas_cell_type": "Fetal Hepatic Endothelial 2",
+    "matched_census_name": "endothelial cell of hepatic sinusoid",
+    "cl_id": "CL:1000398",
+    "cl_name": "endothelial cell of hepatic sinusoid",
+    "match_method": "fuzzy:0.62",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Hepatic Macrophage 1": {
+    "catlas_cell_type": "Fetal Hepatic Macrophage 1",
+    "matched_census_name": "macrophage",
+    "cl_id": "CL:0000235",
+    "cl_name": "macrophage",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Hepatic Macrophage 2": {
+    "catlas_cell_type": "Fetal Hepatic Macrophage 2",
+    "matched_census_name": "macrophage",
+    "cl_id": "CL:0000235",
+    "cl_name": "macrophage",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Hepatic Macrophage 3": {
+    "catlas_cell_type": "Fetal Hepatic Macrophage 3",
+    "matched_census_name": "macrophage",
+    "cl_id": "CL:0000235",
+    "cl_name": "macrophage",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Hepatic Stellate Cell": {
+    "catlas_cell_type": "Fetal Hepatic Stellate Cell",
+    "matched_census_name": "hepatic stellate cell",
+    "cl_id": "CL:0000632",
+    "cl_name": "hepatic stellate cell",
+    "match_method": "fuzzy:0.88",
+    "cellxgene_parent_cl_id": "CL:0000057",
+    "cellxgene_parent_cl_name": "fibroblast",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Hepatoblast": {
+    "catlas_cell_type": "Fetal Hepatoblast",
+    "matched_census_name": "hepatoblast",
+    "cl_id": "CL:0005026",
+    "cl_name": "hepatoblast",
+    "match_method": "fuzzy:0.79",
+    "cellxgene_parent_cl_id": "CL:0000034",
+    "cellxgene_parent_cl_name": "stem cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Inhibitory Neuron 1": {
+    "catlas_cell_type": "Fetal Inhibitory Neuron 1",
+    "matched_census_name": "inhibitory motor neuron",
+    "cl_id": "CL:0008015",
+    "cl_name": "inhibitory motor neuron",
+    "match_method": "fuzzy:0.74",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Inhibitory Neuron 2": {
+    "catlas_cell_type": "Fetal Inhibitory Neuron 2",
+    "matched_census_name": "inhibitory motor neuron",
+    "cl_id": "CL:0008015",
+    "cl_name": "inhibitory motor neuron",
+    "match_method": "fuzzy:0.74",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Inhibitory Neuron 3": {
+    "catlas_cell_type": "Fetal Inhibitory Neuron 3",
+    "matched_census_name": "inhibitory motor neuron",
+    "cl_id": "CL:0008015",
+    "cl_name": "inhibitory motor neuron",
+    "match_method": "fuzzy:0.74",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Inhibitory Neuron 4": {
+    "catlas_cell_type": "Fetal Inhibitory Neuron 4",
+    "matched_census_name": "inhibitory motor neuron",
+    "cl_id": "CL:0008015",
+    "cl_name": "inhibitory motor neuron",
+    "match_method": "fuzzy:0.74",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Inhibitory Neuron 5": {
+    "catlas_cell_type": "Fetal Inhibitory Neuron 5",
+    "matched_census_name": "inhibitory motor neuron",
+    "cl_id": "CL:0008015",
+    "cl_name": "inhibitory motor neuron",
+    "match_method": "fuzzy:0.74",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Lymphatic Endothelial Cell": {
+    "catlas_cell_type": "Fetal Lymphatic Endothelial Cell",
+    "matched_census_name": "endothelial cell of lymphatic vessel",
+    "cl_id": "CL:0002138",
+    "cl_name": "endothelial cell of lymphatic vessel",
+    "match_method": "fuzzy:0.76",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Macrophage (General) 1": {
+    "catlas_cell_type": "Fetal Macrophage (General) 1",
+    "matched_census_name": "macrophage",
+    "cl_id": "CL:0000235",
+    "cl_name": "macrophage",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Macrophage (General) 3": {
+    "catlas_cell_type": "Fetal Macrophage (General) 3",
+    "matched_census_name": "macrophage",
+    "cl_id": "CL:0000235",
+    "cl_name": "macrophage",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Macrophage (General) 4": {
+    "catlas_cell_type": "Fetal Macrophage (General) 4",
+    "matched_census_name": "macrophage",
+    "cl_id": "CL:0000235",
+    "cl_name": "macrophage",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Macrophage(General) 2": {
+    "catlas_cell_type": "Fetal Macrophage(General) 2",
+    "matched_census_name": "macrophage",
+    "cl_id": "CL:0000235",
+    "cl_name": "macrophage",
+    "match_method": "fuzzy:0.59",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Megakaryocyte": {
+    "catlas_cell_type": "Fetal Megakaryocyte",
+    "matched_census_name": "megakaryocyte",
+    "cl_id": "CL:0000556",
+    "cl_name": "megakaryocyte",
+    "match_method": "fuzzy:0.81",
+    "cellxgene_parent_cl_id": "CL:0000763",
+    "cellxgene_parent_cl_name": "myeloid cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Mesangial Cell 1": {
+    "catlas_cell_type": "Fetal Mesangial Cell 1",
+    "matched_census_name": "mesangial cell",
+    "cl_id": "CL:0000650",
+    "cl_name": "mesangial cell",
+    "match_method": "fuzzy:0.82",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Mesangial Cell 2": {
+    "catlas_cell_type": "Fetal Mesangial Cell 2",
+    "matched_census_name": "mesangial cell",
+    "cl_id": "CL:0000650",
+    "cl_name": "mesangial cell",
+    "match_method": "fuzzy:0.82",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Mesothelial Cell": {
+    "catlas_cell_type": "Fetal Mesothelial Cell",
+    "matched_census_name": "mesothelial cell",
+    "cl_id": "CL:0000077",
+    "cl_name": "mesothelial cell",
+    "match_method": "fuzzy:0.84",
+    "cellxgene_parent_cl_id": "CL:0000076",
+    "cellxgene_parent_cl_name": "squamous epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Metanephric Cell": {
+    "catlas_cell_type": "Fetal Metanephric Cell",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Oligodendrocyte Progenitor 2": {
+    "catlas_cell_type": "Fetal Oligodendrocyte Progenitor 2",
+    "matched_census_name": "oligodendrocyte",
+    "cl_id": "CL:0000128",
+    "cl_name": "oligodendrocyte",
+    "match_method": "fuzzy:0.64",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Pancreatic Acinar Cell 1": {
+    "catlas_cell_type": "Fetal Pancreatic Acinar Cell 1",
+    "matched_census_name": "pancreatic acinar cell",
+    "cl_id": "CL:0002064",
+    "cl_name": "pancreatic acinar cell",
+    "match_method": "fuzzy:0.88",
+    "cellxgene_parent_cl_id": "CL:0000150",
+    "cellxgene_parent_cl_name": "glandular secretory epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Pancreatic Acinar Cell 2": {
+    "catlas_cell_type": "Fetal Pancreatic Acinar Cell 2",
+    "matched_census_name": "pancreatic acinar cell",
+    "cl_id": "CL:0002064",
+    "cl_name": "pancreatic acinar cell",
+    "match_method": "fuzzy:0.88",
+    "cellxgene_parent_cl_id": "CL:0000150",
+    "cellxgene_parent_cl_name": "glandular secretory epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Pancreatic Ductal Cell": {
+    "catlas_cell_type": "Fetal Pancreatic Ductal Cell",
+    "matched_census_name": "pancreatic ductal cell",
+    "cl_id": "CL:0002079",
+    "cl_name": "pancreatic ductal cell",
+    "match_method": "fuzzy:0.88",
+    "cellxgene_parent_cl_id": "CL:0000083",
+    "cellxgene_parent_cl_name": "epithelial cell of pancreas",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Pancreatic Islet Cell": {
+    "catlas_cell_type": "Fetal Pancreatic Islet Cell",
+    "matched_census_name": "pancreatic e cell",
+    "cl_id": "CL:0005019",
+    "cl_name": "pancreatic epsilon cell",
+    "match_method": "fuzzy:0.77",
+    "cellxgene_parent_cl_id": "CL:0000083",
+    "cellxgene_parent_cl_name": "epithelial cell of pancreas",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Parietal,Chief Cell": {
+    "catlas_cell_type": "Fetal Parietal,Chief Cell",
+    "matched_census_name": "parietal cell",
+    "cl_id": "CL:0000162",
+    "cl_name": "parietal cell",
+    "match_method": "fuzzy:0.68",
+    "cellxgene_parent_cl_id": "CL:0000150",
+    "cellxgene_parent_cl_name": "glandular secretory epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Photoreceptor Cell": {
+    "catlas_cell_type": "Fetal Photoreceptor Cell",
+    "matched_census_name": "photoreceptor cell",
+    "cl_id": "CL:0000210",
+    "cl_name": "photoreceptor cell",
+    "match_method": "fuzzy:0.86",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Placental Endothelial Cell": {
+    "catlas_cell_type": "Fetal Placental Endothelial Cell",
+    "matched_census_name": "endothelial cell of placenta",
+    "cl_id": "CL:0009092",
+    "cl_name": "endothelial cell of placenta",
+    "match_method": "fuzzy:0.90",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Placental Fibroblast 1": {
+    "catlas_cell_type": "Fetal Placental Fibroblast 1",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.56",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Placental Fibroblast 2": {
+    "catlas_cell_type": "Fetal Placental Fibroblast 2",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.56",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Placental Macrophage": {
+    "catlas_cell_type": "Fetal Placental Macrophage",
+    "matched_census_name": "macrophage",
+    "cl_id": "CL:0000235",
+    "cl_name": "macrophage",
+    "match_method": "fuzzy:0.56",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Placental Neuron": {
+    "catlas_cell_type": "Fetal Placental Neuron",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Pulmonary Neuroendocrine Cell": {
+    "catlas_cell_type": "Fetal Pulmonary Neuroendocrine Cell",
+    "matched_census_name": "pulmonary neuroendocrine cell",
+    "cl_id": "CL:1000223",
+    "cl_name": "pulmonary neuroendocrine cell",
+    "match_method": "fuzzy:0.91",
+    "cellxgene_parent_cl_id": "CL:0002077",
+    "cellxgene_parent_cl_name": "ecto-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Retinal Neuron": {
+    "catlas_cell_type": "Fetal Retinal Neuron",
+    "matched_census_name": "retinal bipolar neuron",
+    "cl_id": "CL:0000748",
+    "cl_name": "retinal bipolar neuron",
+    "match_method": "fuzzy:0.76",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Retinal Pigment Cell": {
+    "catlas_cell_type": "Fetal Retinal Pigment Cell",
+    "matched_census_name": "retinal pigment epithelial cell",
+    "cl_id": "CL:0002586",
+    "cl_name": "retinal pigment epithelial cell",
+    "match_method": "fuzzy:0.88",
+    "cellxgene_parent_cl_id": "CL:0000147",
+    "cellxgene_parent_cl_name": "pigment cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Retinal Progenitors and Muller glia 1": {
+    "catlas_cell_type": "Fetal Retinal Progenitors and Muller glia 1",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Retinal Progenitors and Muller glia 2": {
+    "catlas_cell_type": "Fetal Retinal Progenitors and Muller glia 2",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Satellite Cell 1": {
+    "catlas_cell_type": "Fetal Satellite Cell 1",
+    "matched_census_name": "skeletal muscle satellite cell",
+    "cl_id": "CL:0000594",
+    "cl_name": "skeletal muscle satellite cell",
+    "match_method": "fuzzy:0.64",
+    "cellxgene_parent_cl_id": "CL:0000680",
+    "cellxgene_parent_cl_name": "muscle precursor cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Satellite Cell 2": {
+    "catlas_cell_type": "Fetal Satellite Cell 2",
+    "matched_census_name": "skeletal muscle satellite cell",
+    "cl_id": "CL:0000594",
+    "cl_name": "skeletal muscle satellite cell",
+    "match_method": "fuzzy:0.64",
+    "cellxgene_parent_cl_id": "CL:0000680",
+    "cellxgene_parent_cl_name": "muscle precursor cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Schwann Cell": {
+    "catlas_cell_type": "Fetal Schwann Cell",
+    "matched_census_name": "schwann cell",
+    "cl_id": "CL:0002573",
+    "cl_name": "Schwann cell",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Skeletal Myocyte 1": {
+    "catlas_cell_type": "Fetal Skeletal Myocyte 1",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Skeletal Myocyte 2": {
+    "catlas_cell_type": "Fetal Skeletal Myocyte 2",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Skeletal Myocyte 3": {
+    "catlas_cell_type": "Fetal Skeletal Myocyte 3",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Syncitiotrophoblast,Cytotrophoblast,Trophoblast Giant": {
+    "catlas_cell_type": "Fetal Syncitiotrophoblast,Cytotrophoblast,Trophoblast Giant",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal T Lymphocyte 1 (CD4+)": {
+    "catlas_cell_type": "Fetal T Lymphocyte 1 (CD4+)",
+    "matched_census_name": "cd4 positive a b t cell",
+    "cl_id": "CL:0000624",
+    "cl_name": "CD4-positive, alpha-beta T cell",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0000738",
+    "cellxgene_parent_cl_name": "leukocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal T Lymphocyte 2 (Cytotoxic)": {
+    "catlas_cell_type": "Fetal T Lymphocyte 2 (Cytotoxic)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal T Lymphocyte 3 (IL2+)": {
+    "catlas_cell_type": "Fetal T Lymphocyte 3 (IL2+)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal T Lymphocyte 4 (FASLG+)": {
+    "catlas_cell_type": "Fetal T Lymphocyte 4 (FASLG+)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Thymocyte": {
+    "catlas_cell_type": "Fetal Thymocyte",
+    "matched_census_name": "thymocyte",
+    "cl_id": "CL:0000893",
+    "cl_name": "thymocyte",
+    "match_method": "fuzzy:0.75",
+    "cellxgene_parent_cl_id": "CL:0000738",
+    "cellxgene_parent_cl_name": "leukocyte",
+    "parent_match_type": "descendant"
+  },
+  "Fetal Ureteric Bud Cell": {
+    "catlas_cell_type": "Fetal Ureteric Bud Cell",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Fetal Ventricular Cardioyocyte": {
+    "catlas_cell_type": "Fetal Ventricular Cardioyocyte",
+    "matched_census_name": "regular ventricular cardiac myocyte",
+    "cl_id": "CL:0002131",
+    "cl_name": "regular ventricular cardiac myocyte",
+    "match_method": "fuzzy:0.80",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Fibroblast (Epithelial)": {
+    "catlas_cell_type": "Fibroblast (Epithelial)",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.65",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fibroblast (Gastrointestinal)": {
+    "catlas_cell_type": "Fibroblast (Gastrointestinal)",
+    "matched_census_name": "kidney interstitial fibroblast",
+    "cl_id": "CL:1000692",
+    "cl_name": "kidney interstitial fibroblast",
+    "match_method": "fuzzy:0.70",
+    "cellxgene_parent_cl_id": "CL:4030031",
+    "cellxgene_parent_cl_name": "interstitial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fibroblast (General)": {
+    "catlas_cell_type": "Fibroblast (General)",
+    "matched_census_name": "fibroblast",
+    "cl_id": "CL:0000057",
+    "cl_name": "fibroblast",
+    "match_method": "fuzzy:0.71",
+    "cellxgene_parent_cl_id": "CL:0000499",
+    "cellxgene_parent_cl_name": "stromal cell",
+    "parent_match_type": "descendant"
+  },
+  "Fibroblast (Liver Adrenal)": {
+    "catlas_cell_type": "Fibroblast (Liver Adrenal)",
+    "matched_census_name": "adventitial fibroblast",
+    "cl_id": "CL:4052030",
+    "cl_name": "adventitial fibroblast",
+    "match_method": "fuzzy:0.74",
+    "cellxgene_parent_cl_id": "CL:0002503",
+    "cellxgene_parent_cl_name": "adventitial cell",
+    "parent_match_type": "descendant"
+  },
+  "Fibroblast (Peripheral Nerve)": {
+    "catlas_cell_type": "Fibroblast (Peripheral Nerve)",
+    "matched_census_name": "lung perichondrial fibroblast",
+    "cl_id": "CL:4033026",
+    "cl_name": "lung perichondrial fibroblast",
+    "match_method": "fuzzy:0.75",
+    "cellxgene_parent_cl_id": "CL:0000057",
+    "cellxgene_parent_cl_name": "fibroblast",
+    "parent_match_type": "descendant"
+  },
+  "Fibroblast (Sk Muscle Associated)": {
+    "catlas_cell_type": "Fibroblast (Sk Muscle Associated)",
+    "matched_census_name": "muscle fibroblast",
+    "cl_id": "CL:1001609",
+    "cl_name": "muscle fibroblast",
+    "match_method": "fuzzy:0.71",
+    "cellxgene_parent_cl_id": "CL:0000057",
+    "cellxgene_parent_cl_name": "fibroblast",
+    "parent_match_type": "descendant"
+  },
+  "Foveolar Cell": {
+    "catlas_cell_type": "Foveolar Cell",
+    "matched_census_name": "foveolar cell of stomach",
+    "cl_id": "CL:0002179",
+    "cl_name": "foveolar cell of stomach",
+    "match_method": "fuzzy:0.70",
+    "cellxgene_parent_cl_id": "CL:0000159",
+    "cellxgene_parent_cl_name": "seromucus secreting cell",
+    "parent_match_type": "descendant"
+  },
+  "GABAergic Neuron 1": {
+    "catlas_cell_type": "GABAergic Neuron 1",
+    "matched_census_name": "gabaergic neuron",
+    "cl_id": "CL:0000617",
+    "cl_name": "GABAergic neuron",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "GABAergic Neuron 2": {
+    "catlas_cell_type": "GABAergic Neuron 2",
+    "matched_census_name": "gabaergic neuron",
+    "cl_id": "CL:0000617",
+    "cl_name": "GABAergic neuron",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Gastric Neuroendocrine Cell": {
+    "catlas_cell_type": "Gastric Neuroendocrine Cell",
+    "matched_census_name": "neuroendocrine cell",
+    "cl_id": "CL:0000165",
+    "cl_name": "neuroendocrine cell",
+    "match_method": "fuzzy:0.83",
+    "cellxgene_parent_cl_id": "CL:0002077",
+    "cellxgene_parent_cl_name": "ecto-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Glutamatergic Neuron 1": {
+    "catlas_cell_type": "Glutamatergic Neuron 1",
+    "matched_census_name": "glutamatergic neuron",
+    "cl_id": "CL:0000679",
+    "cl_name": "glutamatergic neuron",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Glutamatergic Neuron 2": {
+    "catlas_cell_type": "Glutamatergic Neuron 2",
+    "matched_census_name": "glutamatergic neuron",
+    "cl_id": "CL:0000679",
+    "cl_name": "glutamatergic neuron",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Granular Epidermal (Skin)": {
+    "catlas_cell_type": "Granular Epidermal (Skin)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Hepatocyte": {
+    "catlas_cell_type": "Hepatocyte",
+    "matched_census_name": "hepatocyte",
+    "cl_id": "CL:0000182",
+    "cl_name": "hepatocyte",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000066",
+    "cellxgene_parent_cl_name": "epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Keratinocyte 1": {
+    "catlas_cell_type": "Keratinocyte 1",
+    "matched_census_name": "keratinocyte",
+    "cl_id": "CL:0000312",
+    "cl_name": "keratinocyte",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0002077",
+    "cellxgene_parent_cl_name": "ecto-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Keratinocyte 2": {
+    "catlas_cell_type": "Keratinocyte 2",
+    "matched_census_name": "keratinocyte",
+    "cl_id": "CL:0000312",
+    "cl_name": "keratinocyte",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0002077",
+    "cellxgene_parent_cl_name": "ecto-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Luteal Cell (Ovarian)": {
+    "catlas_cell_type": "Luteal Cell (Ovarian)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Lymphatic Endothelial Cell": {
+    "catlas_cell_type": "Lymphatic Endothelial Cell",
+    "matched_census_name": "endothelial cell of lymphatic vessel",
+    "cl_id": "CL:0002138",
+    "cl_name": "endothelial cell of lymphatic vessel",
+    "match_method": "fuzzy:0.84",
+    "cellxgene_parent_cl_id": "CL:0000115",
+    "cellxgene_parent_cl_name": "endothelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Macrophage (General)": {
+    "catlas_cell_type": "Macrophage (General)",
+    "matched_census_name": "macrophage",
+    "cl_id": "CL:0000235",
+    "cl_name": "macrophage",
+    "match_method": "fuzzy:0.71",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Macrophage (General,Alveolar)": {
+    "catlas_cell_type": "Macrophage (General,Alveolar)",
+    "matched_census_name": "alveolar macrophage",
+    "cl_id": "CL:0000583",
+    "cl_name": "alveolar macrophage",
+    "match_method": "fuzzy:0.83",
+    "cellxgene_parent_cl_id": "CL:0000234",
+    "cellxgene_parent_cl_name": "phagocyte",
+    "parent_match_type": "descendant"
+  },
+  "Mammary Epithelial": {
+    "catlas_cell_type": "Mammary Epithelial",
+    "matched_census_name": "mammary gland epithelial cell",
+    "cl_id": "CL:0002327",
+    "cl_name": "mammary gland epithelial cell",
+    "match_method": "fuzzy:0.77",
+    "cellxgene_parent_cl_id": "CL:0000066",
+    "cellxgene_parent_cl_name": "epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Mammary Luminal Epithelial Cell 1": {
+    "catlas_cell_type": "Mammary Luminal Epithelial Cell 1",
+    "matched_census_name": "luminal epithelial cell of mammary gland",
+    "cl_id": "CL:0002326",
+    "cl_name": "luminal epithelial cell of mammary gland",
+    "match_method": "fuzzy:0.87",
+    "cellxgene_parent_cl_id": "CL:0002327",
+    "cellxgene_parent_cl_name": "mammary gland epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Mammary Luminal Epithelial Cell 2": {
+    "catlas_cell_type": "Mammary Luminal Epithelial Cell 2",
+    "matched_census_name": "luminal epithelial cell of mammary gland",
+    "cl_id": "CL:0002326",
+    "cl_name": "luminal epithelial cell of mammary gland",
+    "match_method": "fuzzy:0.87",
+    "cellxgene_parent_cl_id": "CL:0002327",
+    "cellxgene_parent_cl_name": "mammary gland epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Mast Cell": {
+    "catlas_cell_type": "Mast Cell",
+    "matched_census_name": "mast cell",
+    "cl_id": "CL:0000097",
+    "cl_name": "mast cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000763",
+    "cellxgene_parent_cl_name": "myeloid cell",
+    "parent_match_type": "descendant"
+  },
+  "Melanocyte": {
+    "catlas_cell_type": "Melanocyte",
+    "matched_census_name": "melanocyte",
+    "cl_id": "CL:0000148",
+    "cl_name": "melanocyte",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000147",
+    "cellxgene_parent_cl_name": "pigment cell",
+    "parent_match_type": "descendant"
+  },
+  "Memory B Cell": {
+    "catlas_cell_type": "Memory B Cell",
+    "matched_census_name": "memory b cell",
+    "cl_id": "CL:0000787",
+    "cl_name": "memory B cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000738",
+    "cellxgene_parent_cl_name": "leukocyte",
+    "parent_match_type": "descendant"
+  },
+  "Mesothelial Cell": {
+    "catlas_cell_type": "Mesothelial Cell",
+    "matched_census_name": "mesothelial cell",
+    "cl_id": "CL:0000077",
+    "cl_name": "mesothelial cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000076",
+    "cellxgene_parent_cl_name": "squamous epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Microglia": {
+    "catlas_cell_type": "Microglia",
+    "matched_census_name": "microglial cell",
+    "cl_id": "CL:0000129",
+    "cl_name": "microglial cell",
+    "match_method": "fuzzy:0.75",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Myoepithelial (Skin)": {
+    "catlas_cell_type": "Myoepithelial (Skin)",
+    "matched_census_name": "myoepithelial cell",
+    "cl_id": "CL:0000185",
+    "cl_name": "myoepithelial cell",
+    "match_method": "fuzzy:0.72",
+    "cellxgene_parent_cl_id": "CL:0000075",
+    "cellxgene_parent_cl_name": "columnar/cuboidal epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Naive T cell": {
+    "catlas_cell_type": "Naive T cell",
+    "matched_census_name": "naive t cell",
+    "cl_id": "CL:0000898",
+    "cl_name": "naive T cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000738",
+    "cellxgene_parent_cl_name": "leukocyte",
+    "parent_match_type": "descendant"
+  },
+  "Natural Killer T Cell": {
+    "catlas_cell_type": "Natural Killer T Cell",
+    "matched_census_name": "natural killer cell",
+    "cl_id": "CL:0000623",
+    "cl_name": "natural killer cell",
+    "match_method": "fuzzy:0.95",
+    "cellxgene_parent_cl_id": "CL:0000738",
+    "cellxgene_parent_cl_name": "leukocyte",
+    "parent_match_type": "descendant"
+  },
+  "Oligodendrocyte": {
+    "catlas_cell_type": "Oligodendrocyte",
+    "matched_census_name": "oligodendrocyte",
+    "cl_id": "CL:0000128",
+    "cl_name": "oligodendrocyte",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Oligodendrocyte Precursor": {
+    "catlas_cell_type": "Oligodendrocyte Precursor",
+    "matched_census_name": "oligodendrocyte precursor cell",
+    "cl_id": "CL:0002453",
+    "cl_name": "oligodendrocyte precursor cell",
+    "match_method": "fuzzy:0.91",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Pancreatic Acinar Cell": {
+    "catlas_cell_type": "Pancreatic Acinar Cell",
+    "matched_census_name": "pancreatic acinar cell",
+    "cl_id": "CL:0002064",
+    "cl_name": "pancreatic acinar cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000150",
+    "cellxgene_parent_cl_name": "glandular secretory epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Pancreatic Alpha Cell 1": {
+    "catlas_cell_type": "Pancreatic Alpha Cell 1",
+    "matched_census_name": null,
+    "cl_id": "CL:0000171",
+    "cl_name": "pancreatic A cell",
+    "match_method": "manual_override",
+    "cellxgene_parent_cl_id": "CL:0000083",
+    "cellxgene_parent_cl_name": "epithelial cell of pancreas",
+    "parent_match_type": "descendant"
+  },
+  "Pancreatic Alpha Cell 2": {
+    "catlas_cell_type": "Pancreatic Alpha Cell 2",
+    "matched_census_name": null,
+    "cl_id": "CL:0000171",
+    "cl_name": "pancreatic A cell",
+    "match_method": "manual_override",
+    "cellxgene_parent_cl_id": "CL:0000083",
+    "cellxgene_parent_cl_name": "epithelial cell of pancreas",
+    "parent_match_type": "descendant"
+  },
+  "Pancreatic Beta Cell 1": {
+    "catlas_cell_type": "Pancreatic Beta Cell 1",
+    "matched_census_name": null,
+    "cl_id": "CL:0000169",
+    "cl_name": "type B pancreatic cell",
+    "match_method": "manual_override",
+    "cellxgene_parent_cl_id": "CL:0000083",
+    "cellxgene_parent_cl_name": "epithelial cell of pancreas",
+    "parent_match_type": "descendant"
+  },
+  "Pancreatic Beta Cell 2": {
+    "catlas_cell_type": "Pancreatic Beta Cell 2",
+    "matched_census_name": null,
+    "cl_id": "CL:0000169",
+    "cl_name": "type B pancreatic cell",
+    "match_method": "manual_override",
+    "cellxgene_parent_cl_id": "CL:0000083",
+    "cellxgene_parent_cl_name": "epithelial cell of pancreas",
+    "parent_match_type": "descendant"
+  },
+  "Pancreatic Delta,Gamma cell": {
+    "catlas_cell_type": "Pancreatic Delta,Gamma cell",
+    "matched_census_name": "pancreatic d cell",
+    "cl_id": "CL:0000173",
+    "cl_name": "pancreatic D cell",
+    "match_method": "fuzzy:0.94",
+    "cellxgene_parent_cl_id": "CL:0002077",
+    "cellxgene_parent_cl_name": "ecto-epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Paneth Cell": {
+    "catlas_cell_type": "Paneth Cell",
+    "matched_census_name": "paneth cell",
+    "cl_id": "CL:0000510",
+    "cl_name": "paneth cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000150",
+    "cellxgene_parent_cl_name": "glandular secretory epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Parietal Cell": {
+    "catlas_cell_type": "Parietal Cell",
+    "matched_census_name": "parietal cell",
+    "cl_id": "CL:0000162",
+    "cl_name": "parietal cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000150",
+    "cellxgene_parent_cl_name": "glandular secretory epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Pericyte (Esophageal Muscularis)": {
+    "catlas_cell_type": "Pericyte (Esophageal Muscularis)",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Pericyte (General) 1": {
+    "catlas_cell_type": "Pericyte (General) 1",
+    "matched_census_name": "pericyte",
+    "cl_id": "CL:0000669",
+    "cl_name": "pericyte",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Pericyte (General) 2": {
+    "catlas_cell_type": "Pericyte (General) 2",
+    "matched_census_name": "pericyte",
+    "cl_id": "CL:0000669",
+    "cl_name": "pericyte",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Pericyte (General) 3": {
+    "catlas_cell_type": "Pericyte (General) 3",
+    "matched_census_name": "pericyte",
+    "cl_id": "CL:0000669",
+    "cl_name": "pericyte",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Pericyte (General) 4": {
+    "catlas_cell_type": "Pericyte (General) 4",
+    "matched_census_name": "pericyte",
+    "cl_id": "CL:0000669",
+    "cl_name": "pericyte",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0008034",
+    "cellxgene_parent_cl_name": "mural cell",
+    "parent_match_type": "descendant"
+  },
+  "Peripheral Nerve Stromal": {
+    "catlas_cell_type": "Peripheral Nerve Stromal",
+    "matched_census_name": "peripheral nervous system neuron",
+    "cl_id": "CL:2000032",
+    "cl_name": "peripheral nervous system neuron",
+    "match_method": "fuzzy:0.71",
+    "cellxgene_parent_cl_id": "CL:0000540",
+    "cellxgene_parent_cl_name": "neuron",
+    "parent_match_type": "descendant"
+  },
+  "Plasma Cell": {
+    "catlas_cell_type": "Plasma Cell",
+    "matched_census_name": "plasma cell",
+    "cl_id": "CL:0000786",
+    "cl_name": "plasma cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000738",
+    "cellxgene_parent_cl_name": "leukocyte",
+    "parent_match_type": "descendant"
+  },
+  "Satellite Cell": {
+    "catlas_cell_type": "Satellite Cell",
+    "matched_census_name": "skeletal muscle satellite cell",
+    "cl_id": "CL:0000594",
+    "cl_name": "skeletal muscle satellite cell",
+    "match_method": "fuzzy:0.64",
+    "cellxgene_parent_cl_id": "CL:0000680",
+    "cellxgene_parent_cl_name": "muscle precursor cell",
+    "parent_match_type": "descendant"
+  },
+  "Schwann Cell (General)": {
+    "catlas_cell_type": "Schwann Cell (General)",
+    "matched_census_name": "schwann cell",
+    "cl_id": "CL:0002573",
+    "cl_name": "Schwann cell",
+    "match_method": "fuzzy:0.75",
+    "cellxgene_parent_cl_id": "CL:0000095",
+    "cellxgene_parent_cl_name": "neuron associated cell",
+    "parent_match_type": "descendant"
+  },
+  "Small Intestinal Enterocyte": {
+    "catlas_cell_type": "Small Intestinal Enterocyte",
+    "matched_census_name": null,
+    "cl_id": "CL:1000334",
+    "cl_name": "enterocyte of epithelium of small intestine",
+    "match_method": "manual_override",
+    "cellxgene_parent_cl_id": "CL:0000584",
+    "cellxgene_parent_cl_name": "enterocyte",
+    "parent_match_type": "descendant"
+  },
+  "Small Intestinal Goblet Cell": {
+    "catlas_cell_type": "Small Intestinal Goblet Cell",
+    "matched_census_name": "small intestine goblet cell",
+    "cl_id": "CL:1000495",
+    "cl_name": "small intestine goblet cell",
+    "match_method": "fuzzy:0.95",
+    "cellxgene_parent_cl_id": "CL:0000159",
+    "cellxgene_parent_cl_name": "seromucus secreting cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (Colon) 1": {
+    "catlas_cell_type": "Smooth Muscle (Colon) 1",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.86",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (Colon) 2": {
+    "catlas_cell_type": "Smooth Muscle (Colon) 2",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.86",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (Esophageal Mucosal)": {
+    "catlas_cell_type": "Smooth Muscle (Esophageal Mucosal)",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.68",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (Esophageal Muscularis) 1": {
+    "catlas_cell_type": "Smooth Muscle (Esophageal Muscularis) 1",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.60",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (Esophageal Muscularis) 2": {
+    "catlas_cell_type": "Smooth Muscle (Esophageal Muscularis) 2",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.60",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (Esophageal Muscularis) 3": {
+    "catlas_cell_type": "Smooth Muscle (Esophageal Muscularis) 3",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.60",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (GE Junction)": {
+    "catlas_cell_type": "Smooth Muscle (GE Junction)",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.70",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (General Gastrointestinal)": {
+    "catlas_cell_type": "Smooth Muscle (General Gastrointestinal)",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.61",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (General)": {
+    "catlas_cell_type": "Smooth Muscle (General)",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.82",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (Uterine)": {
+    "catlas_cell_type": "Smooth Muscle (Uterine)",
+    "matched_census_name": "uterine smooth muscle cell",
+    "cl_id": "CL:0002601",
+    "cl_name": "uterine smooth muscle cell",
+    "match_method": "fuzzy:0.89",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Smooth Muscle (Vaginal)": {
+    "catlas_cell_type": "Smooth Muscle (Vaginal)",
+    "matched_census_name": "smooth muscle cell",
+    "cl_id": "CL:0000192",
+    "cl_name": "smooth muscle cell",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "T Lymphocyte 1 (CD8+)": {
+    "catlas_cell_type": "T Lymphocyte 1 (CD8+)",
+    "matched_census_name": "cd8 positive a b t cell",
+    "cl_id": "CL:0000625",
+    "cl_name": "CD8-positive, alpha-beta T cell",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0000738",
+    "cellxgene_parent_cl_name": "leukocyte",
+    "parent_match_type": "descendant"
+  },
+  "T lymphocyte 2 (CD4+)": {
+    "catlas_cell_type": "T lymphocyte 2 (CD4+)",
+    "matched_census_name": "cd4 positive a b t cell",
+    "cl_id": "CL:0000624",
+    "cl_name": "CD4-positive, alpha-beta T cell",
+    "match_method": "fuzzy:0.67",
+    "cellxgene_parent_cl_id": "CL:0000738",
+    "cellxgene_parent_cl_name": "leukocyte",
+    "parent_match_type": "descendant"
+  },
+  "Thyroid Follicular Cell": {
+    "catlas_cell_type": "Thyroid Follicular Cell",
+    "matched_census_name": "thyroid follicular cell",
+    "cl_id": "CL:0002258",
+    "cl_name": "thyroid follicular cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000150",
+    "cellxgene_parent_cl_name": "glandular secretory epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Transitional Zone Cortical Cell": {
+    "catlas_cell_type": "Transitional Zone Cortical Cell",
+    "matched_census_name": "transitional stage b cell",
+    "cl_id": "CL:0000818",
+    "cl_name": "transitional stage B cell",
+    "match_method": "fuzzy:0.71",
+    "cellxgene_parent_cl_id": "CL:0000738",
+    "cellxgene_parent_cl_name": "leukocyte",
+    "parent_match_type": "descendant"
+  },
+  "Tuft Cell": {
+    "catlas_cell_type": "Tuft Cell",
+    "matched_census_name": "tuft cell",
+    "cl_id": "CL:0002204",
+    "cl_name": "tuft cell",
+    "match_method": "exact",
+    "cellxgene_parent_cl_id": "CL:0000066",
+    "cellxgene_parent_cl_name": "epithelial cell",
+    "parent_match_type": "descendant"
+  },
+  "Type I Skeletal Myocyte": {
+    "catlas_cell_type": "Type I Skeletal Myocyte",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Type II Skeletal Myocyte": {
+    "catlas_cell_type": "Type II Skeletal Myocyte",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Vascular Smooth Muscle 1": {
+    "catlas_cell_type": "Vascular Smooth Muscle 1",
+    "matched_census_name": "vascular associated smooth muscle cell",
+    "cl_id": "CL:0000359",
+    "cl_name": "vascular associated smooth muscle cell",
+    "match_method": "fuzzy:0.73",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Vascular Smooth Muscle 2": {
+    "catlas_cell_type": "Vascular Smooth Muscle 2",
+    "matched_census_name": "vascular associated smooth muscle cell",
+    "cl_id": "CL:0000359",
+    "cl_name": "vascular associated smooth muscle cell",
+    "match_method": "fuzzy:0.73",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Ventricular Cardiomyocyte": {
+    "catlas_cell_type": "Ventricular Cardiomyocyte",
+    "matched_census_name": "fetal cardiomyocyte",
+    "cl_id": "CL:0002495",
+    "cl_name": "fetal cardiomyocyte",
+    "match_method": "fuzzy:0.77",
+    "cellxgene_parent_cl_id": "CL:0000187",
+    "cellxgene_parent_cl_name": "muscle cell",
+    "parent_match_type": "descendant"
+  },
+  "Zona Fasciculata Cortical Cell": {
+    "catlas_cell_type": "Zona Fasciculata Cortical Cell",
+    "matched_census_name": null,
+    "cl_id": null,
+    "cl_name": null,
+    "match_method": "no_match",
+    "cellxgene_parent_cl_id": null,
+    "cellxgene_parent_cl_name": null,
+    "parent_match_type": "no_cl_match"
+  },
+  "Zona Glomerulosa Cortical Cell": {
+    "catlas_cell_type": "Zona Glomerulosa Cortical Cell",
+    "matched_census_name": "glomerular endothelial cell",
+    "cl_id": "CL:0002188",
+    "cl_name": "glomerular endothelial cell",
+    "match_method": "fuzzy:0.70",
+    "cellxgene_parent_cl_id": "CL:1000497",
+    "cellxgene_parent_cl_name": "kidney cell",
+    "parent_match_type": "descendant"
+  }
+}
