@@ -42,6 +42,7 @@ def __(mo):
     | Human dbSNP variants | [NCBI dbSNP build 156, GRCh38 VCF](https://ftp.ncbi.nih.gov/snp/archive/b156/VCF/GCF_000001405.40.gz) | `DELTASVM_VCF` (gzip-compressed VCF) |
     | Models and code | [Ren lab repository](https://github.com/ren-lab/deltaSVM) | `DELTASVM_MODELS_DIR` |
     | Weights and thresholds | [Ren lab resource links](https://github.com/ren-lab/deltaSVM#models) | `DELTASVM_WEIGHTS`, `DELTASVM_OBS_THRESHOLDS`, `DELTASVM_PBS_THRESHOLDS` |
+    | Human TF identifiers | [HGNC complete set](https://hgnc.genenames.org/download/) | `DELTASVM_HGNC_FILE` (TSV) |
     | Optional variant intersection | [Open Targets 25.03 GRCh38 variants](https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/25.03/output/variant/) | `DELTASVM_OT_DIR` |
     | gkmpredict | [Dongwon-Lee/lsgkm](https://github.com/Dongwon-Lee/lsgkm) | built in the workspace |
 
@@ -96,12 +97,14 @@ def __():
         "weights": configured_path("DELTASVM_WEIGHTS", workspace / "resources/models.weights.txt"),
         "obs": configured_path("DELTASVM_OBS_THRESHOLDS", workspace / "resources/thresholds.obs.tsv"),
         "pbs": configured_path("DELTASVM_PBS_THRESHOLDS", workspace / "resources/thresholds.pbs.tsv"),
+        "hgnc": configured_path("DELTASVM_HGNC_FILE", workspace / "resources/hgnc_complete_set.tsv"),
         "ot_dir": configured_path("DELTASVM_OT_DIR", workspace / "downloads/opentargets-25.03/variant"),
         "reference_url": os.environ.get("DELTASVM_REFERENCE_URL", "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz"),
         "vcf_url": os.environ.get("DELTASVM_VCF_URL", "https://ftp.ncbi.nih.gov/snp/archive/b156/VCF/GCF_000001405.40.gz"),
         "weights_url": os.environ.get("DELTASVM_WEIGHTS_URL", "https://renlab.sdsc.edu/yunjiang/deltaSVM/resources/models.weights.txt"),
         "obs_url": os.environ.get("DELTASVM_OBS_THRESHOLDS_URL", "https://renlab.sdsc.edu/yunjiang/deltaSVM/resources/threhsolds.obs.tsv"),
         "pbs_url": os.environ.get("DELTASVM_PBS_THRESHOLDS_URL", "https://renlab.sdsc.edu/yunjiang/deltaSVM/resources/threhsolds.pbs.tsv"),
+        "hgnc_url": os.environ.get("DELTASVM_HGNC_URL", "https://storage.googleapis.com/public-download-files/hgnc/tsv/tsv/hgnc_complete_set.txt"),
         "ot_url": os.environ.get("DELTASVM_OT_URL", "https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/25.03/output/variant/"),
         "ren_revision": os.environ.get("DELTASVM_REN_REVISION", "566b29557fa7fc37d24a94057a1bcdf08cdae000"),
         "lsgkm_revision": os.environ.get("DELTASVM_LSGKM_REVISION", "d7ef90f7cb326b190619c51a13843da48c99e239"),
@@ -1041,6 +1044,68 @@ def __(Path, file_digest, json, mo, rsid_button, settings):
 
     mo.stop(not rsid_button.value, mo.md("Press the button above to run this step."))
     attach_rsids(settings["single"])
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 12. Add Ensembl Gene IDs for Human TFs
+    Downloads the HGNC complete set and maps approved TF symbols to Ensembl gene IDs.
+    The selected chromosome's Parquet file is updated in bounded batches; symbols
+    without an HGNC Ensembl ID remain `.` and are listed in `tf_id_unmapped.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    tf_id_button = mo.ui.run_button(label='Add Ensembl IDs to TF results')
+    tf_id_button
+    return (tf_id_button,)
+
+
+@app.cell
+def __(Path, download_file, file_digest, mo, record_source, settings, tf_id_button):
+    def annotate_tf_ids(chrom):
+        import csv
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        hgnc_path = settings["hgnc"]
+        existed = hgnc_path.is_file() and hgnc_path.stat().st_size > 0
+        download_file(settings["hgnc_url"], hgnc_path)
+        record_source("hgnc", hgnc_path,
+                      status="existing local file" if existed else "downloaded",
+                      configured_url=settings["hgnc_url"], sha256=file_digest(hgnc_path))
+        parquet = settings["workspace"] / "runs" / chrom / "out" / f"{chrom}_deltasvm.parquet"
+        if not parquet.is_file() or not parquet.stat().st_size:
+            raise FileNotFoundError(f"Export the {chrom} predictions to Parquet before adding TF identifiers.")
+        symbol_to_ensembl = {}
+        with hgnc_path.open(encoding="utf-8-sig", newline="") as stream:
+            for row in csv.DictReader(stream, delimiter="\t"):
+                symbol = row.get("symbol", "").strip()
+                ensembl = row.get("ensembl_gene_id", "").strip().split("|")[0]
+                if symbol and ensembl:
+                    symbol_to_ensembl[symbol] = ensembl
+        temporary = parquet.with_suffix(".parquet.part")
+        source = pq.ParquetFile(parquet)
+        unmapped = set()
+        rows = 0
+        with pq.ParquetWriter(temporary, source.schema_arrow) as writer:
+            for record_batch in source.iter_batches(batch_size=50000):
+                frame = pa.Table.from_batches([record_batch]).to_pandas()
+                frame["TfId"] = frame["TfName"].map(symbol_to_ensembl).fillna(".")
+                unmapped.update(frame.loc[frame["TfId"].eq("."), "TfName"].astype(str).unique())
+                rows += len(frame)
+                writer.write_table(pa.Table.from_pandas(frame, schema=source.schema_arrow, preserve_index=False))
+        temporary.replace(parquet)
+        unmapped_path = settings["workspace"] / "runs" / chrom / "out" / "tf_id_unmapped.tsv"
+        unmapped_path.write_text("TfName\n" + "".join(f"{name}\n" for name in sorted(unmapped)))
+        print(f"{chrom}: mapped TF Ensembl IDs for {rows:,} result rows; {len(unmapped):,} symbols remain unmapped.")
+
+    mo.stop(not tf_id_button.value, mo.md("Press the button above to run this step."))
+    annotate_tf_ids(settings["single"])
     return
 
 
