@@ -1656,6 +1656,8 @@ def __(file_digest, json, record_source, settings):
             "deltasvm_combined_validation.tsv",
             "deltasvm_run_manifest.json",
             f"{settings['single']}_run_record.json",
+            "deltasvm_skipped_variants.tsv",
+            "deltasvm_skipped_variant_summary.tsv",
         )
         files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
         files.append((provenance, "provenance.json"))
@@ -1931,6 +1933,86 @@ def __(file_digest, json, record_source, run_signature, settings):
 def __(export_chromosome_run_record, mo, run_record_button):
     mo.stop(not run_record_button.value, mo.md("Press the button above to export the chromosome run record."))
     export_chromosome_run_record()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 24. Summarize Skipped Variants
+    Combines `data/skipped.tsv` from each selected chromosome into
+    `results/deltasvm_skipped_variants.tsv` and writes exclusion counts by reason to
+    `results/deltasvm_skipped_variant_summary.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    skipped_variants_button = mo.ui.run_button(label='Summarize skipped variants')
+    skipped_variants_button
+    return (skipped_variants_button,)
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def summarize_skipped_variants():
+        import csv
+        from collections import Counter
+
+        sources = [(chrom, settings["workspace"] / "runs" / chrom / "data" / "skipped.tsv")
+                   for chrom in settings["chromosomes"]]
+        missing = [str(path) for _, path in sources if not path.is_file() or not path.stat().st_size]
+        if missing:
+            raise FileNotFoundError("Prepare every selected chromosome before summarizing skipped variants: " + ", ".join(missing))
+        results = settings["workspace"] / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        detail_path = results / "deltasvm_skipped_variants.tsv"
+        summary_path = results / "deltasvm_skipped_variant_summary.tsv"
+        detail_temporary = detail_path.with_suffix(".tsv.part")
+        summary_temporary = summary_path.with_suffix(".tsv.part")
+        counts = Counter()
+        rows = 0
+        try:
+            with detail_temporary.open("w", newline="") as detail_stream:
+                writer = csv.writer(detail_stream, delimiter="\t")
+                writer.writerow(("chromosome", "variant", "reason"))
+                for chrom, source in sources:
+                    with source.open(encoding="utf-8", newline="") as source_stream:
+                        reader = csv.DictReader(source_stream, delimiter="\t")
+                        if not reader.fieldnames or not {"variant", "reason"}.issubset(reader.fieldnames):
+                            raise ValueError(f"Unexpected skipped-variant columns in {source}")
+                        for row in reader:
+                            reason = row.get("reason", "")
+                            writer.writerow((chrom, row.get("variant", ""), reason))
+                            counts[reason] += 1
+                            rows += 1
+            with summary_temporary.open("w", newline="") as summary_stream:
+                writer = csv.writer(summary_stream, delimiter="\t")
+                writer.writerow(("reason", "variants"))
+                for reason, count in sorted(counts.items()):
+                    writer.writerow((reason, count))
+            detail_temporary.replace(detail_path)
+            summary_temporary.replace(summary_path)
+        finally:
+            detail_temporary.unlink(missing_ok=True)
+            summary_temporary.unlink(missing_ok=True)
+        source_digests = {str(path): file_digest(path) for _, path in sources}
+        record_source("deltasvm_skipped_variants", detail_path,
+                      chromosomes=list(settings["chromosomes"]), source_sha256=source_digests,
+                      rows=rows, sha256=file_digest(detail_path))
+        record_source("deltasvm_skipped_variant_summary", summary_path,
+                      detail_file=str(detail_path), sha256=file_digest(summary_path))
+        print(f"Combined {rows:,} skipped variants across {len(sources)} chromosomes.")
+        print(f"Reports saved to {detail_path} and {summary_path}")
+
+    return (summarize_skipped_variants,)
+
+
+@app.cell
+def __(mo, skipped_variants_button, summarize_skipped_variants):
+    mo.stop(not skipped_variants_button.value, mo.md("Press the button above to summarize exclusions."))
+    summarize_skipped_variants()
     return
 
 
