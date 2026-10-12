@@ -2342,5 +2342,29 @@ def __(effect_input, export_filtered_tsv, filtered_tsv_button, minimum_score_inp
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 30. Download the Filtered TSV
+    After exporting the filtered TSV in section 29, use the download button to save
+    the compressed file directly.
+    """)
+    return
+
+
+@app.cell
+def __(mo, settings):
+    filtered_tsv_path = settings["workspace"] / "results" / "deltasvm_filtered.tsv.gz"
+
+    def open_filtered_tsv():
+        if not filtered_tsv_path.is_file() or not filtered_tsv_path.stat().st_size:
+            raise FileNotFoundError("Create the filtered TSV in section 29 before downloading it.")
+        return filtered_tsv_path.open("rb")
+
+    mo.download(data=open_filtered_tsv, filename="deltasvm_filtered.tsv.gz",
+                mimetype="application/gzip", label="Download filtered deltaSVM TSV")
+    return
+
+
 if __name__ == "__main__":
     app.run()
