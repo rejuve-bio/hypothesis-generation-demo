@@ -1788,5 +1788,70 @@ def __(mo, run_manifest_button, write_run_manifest):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 22. Validate the Reproducibility Manifest
+    Checks that the selected chromosome list and recorded result checksums still match
+    the current workspace. The check is saved to `results/deltasvm_manifest_validation.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    manifest_validation_button = mo.ui.run_button(label='Validate reproducibility manifest')
+    manifest_validation_button
+    return (manifest_validation_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def validate_run_manifest():
+        results = settings["workspace"] / "results"
+        manifest_path = results / "deltasvm_run_manifest.json"
+        if not manifest_path.is_file() or not manifest_path.stat().st_size:
+            raise FileNotFoundError("Write the reproducibility manifest in section 21 first.")
+        manifest = json.loads(manifest_path.read_text())
+        findings = []
+        saved_chromosomes = manifest.get("settings", {}).get("chromosomes")
+        if saved_chromosomes != list(settings["chromosomes"]):
+            findings.append("selected chromosome list differs from the manifest")
+        expected_outputs = manifest.get("outputs", {})
+        for name, details in sorted(expected_outputs.items()):
+            path = results / name
+            if not path.is_file() or not path.stat().st_size:
+                findings.append(f"output is missing or empty: {name}")
+            elif file_digest(path) != details.get("sha256"):
+                findings.append(f"output checksum differs from the manifest: {name}")
+        status = "current" if not findings else "stale"
+        report = results / "deltasvm_manifest_validation.tsv"
+        temporary = report.with_suffix(".tsv.part")
+        with temporary.open("w") as stream:
+            stream.write("status\tdetail\n")
+            if findings:
+                for finding in findings:
+                    stream.write(f"{status}\t{finding}\n")
+            else:
+                stream.write("current\tSelected chromosomes and recorded output checksums match the manifest.\n")
+        temporary.replace(report)
+        record_source("deltaSVM_manifest_validation", report, status=status,
+                      findings=findings, report_sha256=file_digest(report))
+        if findings:
+            print("Reproducibility manifest is stale: " + "; ".join(findings))
+        else:
+            print(f"Reproducibility manifest is current for {len(expected_outputs)} outputs.")
+        print(f"Validation report saved to {report}")
+
+    return (validate_run_manifest,)
+
+
+@app.cell
+def __(manifest_validation_button, mo, validate_run_manifest):
+    mo.stop(not manifest_validation_button.value, mo.md("Press the button above to check the manifest."))
+    validate_run_manifest()
+    return
+
+
 if __name__ == "__main__":
     app.run()
