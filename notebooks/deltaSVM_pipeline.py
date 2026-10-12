@@ -941,8 +941,8 @@ def __(mo):
     mo.md(r"""
     ## 10. Convert the Selected Chromosome Results to Parquet
     Exports Gain/Loss predictions from `runs/chrN/out/summary.pred.tsv` in bounded
-    chunks. `rsId` and `TfId` remain `.` in this export; the extracted rsID mapping is
-    available separately at `rsid_map.tsv`. Predictions describe the supplied human
+    chunks. The next section can attach dbSNP rsIDs from `rsid_map.tsv`. `TfId` remains
+    `.` because the Ren Lab models do not supply stable TF identifiers. Predictions describe the supplied human
     TF models and do not provide fly-specific biological validation.
     """)
     return
@@ -959,6 +959,88 @@ def __(mo):
 def __(mo, export_button, export_chromosome, settings):
     mo.stop(not export_button.value, mo.md("Press the button above to run this step."))
     export_chromosome(settings["single"])
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 11. Attach dbSNP rsIDs to the Selected Chromosome Results
+    Uses the rsID map produced during variant preparation to replace placeholder rsIDs
+    in the selected chromosome's Parquet file. The mapping is indexed in SQLite on
+    disk, and Parquet row groups are processed in bounded batches.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    rsid_button = mo.ui.run_button(label='Attach dbSNP rsIDs')
+    rsid_button
+    return (rsid_button,)
+
+
+@app.cell
+def __(Path, file_digest, json, mo, rsid_button, settings):
+    def attach_rsids(chrom):
+        import sqlite3
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        mapping = settings["workspace"] / "rsid_map.tsv"
+        if not mapping.is_file() or not mapping.stat().st_size:
+            raise FileNotFoundError("Run the dbSNP preparation section before attaching rsIDs.")
+        parquet = settings["workspace"] / "runs" / chrom / "out" / f"{chrom}_deltasvm.parquet"
+        if not parquet.is_file() or not parquet.stat().st_size:
+            raise FileNotFoundError(f"Export the {chrom} predictions to Parquet before attaching rsIDs.")
+        database = settings["workspace"] / "rsid_map.sqlite"
+        metadata = database.with_suffix(".json")
+        source_digest = file_digest(mapping)
+        recorded_digest = json.loads(metadata.read_text()).get("sha256") if metadata.is_file() else None
+        if not database.is_file() or recorded_digest != source_digest:
+            temporary_database = database.with_suffix(".sqlite.part")
+            temporary_database.unlink(missing_ok=True)
+            with sqlite3.connect(temporary_database) as connection:
+                connection.execute("CREATE TABLE rsids (variant TEXT PRIMARY KEY, rsid TEXT) WITHOUT ROWID")
+                batch = []
+                with mapping.open() as stream:
+                    next(stream, None)
+                    for line in stream:
+                        fields = line.rstrip("\n").split("\t", 1)
+                        if len(fields) == 2:
+                            batch.append((fields[0], fields[1]))
+                        if len(batch) == 100000:
+                            connection.executemany("INSERT OR REPLACE INTO rsids VALUES (?, ?)", batch)
+                            connection.commit()
+                            batch.clear()
+                if batch:
+                    connection.executemany("INSERT OR REPLACE INTO rsids VALUES (?, ?)", batch)
+                    connection.commit()
+            temporary_database.replace(database)
+            temporary_metadata = metadata.with_suffix(".json.part")
+            temporary_metadata.write_text(json.dumps({"sha256": source_digest}) + "\n")
+            temporary_metadata.replace(metadata)
+        temporary_parquet = parquet.with_suffix(".parquet.part")
+        source = pq.ParquetFile(parquet)
+        rows = 0
+        annotated = 0
+        with sqlite3.connect(database) as connection, pq.ParquetWriter(temporary_parquet, source.schema_arrow) as writer:
+            connection.execute("CREATE TEMP TABLE selected (variant TEXT PRIMARY KEY) WITHOUT ROWID")
+            for record_batch in source.iter_batches(batch_size=50000):
+                frame = pa.Table.from_batches([record_batch]).to_pandas()
+                variants = frame["variant"].astype(str).tolist()
+                connection.executemany("INSERT OR IGNORE INTO selected VALUES (?)", ((variant,) for variant in variants))
+                lookup = dict(connection.execute("SELECT rsids.variant, rsids.rsid FROM rsids JOIN selected USING (variant)").fetchall())
+                frame["rsId"] = frame["variant"].map(lookup).fillna(".")
+                annotated += sum(value != "." for value in frame["rsId"])
+                rows += len(frame)
+                writer.write_table(pa.Table.from_pandas(frame, schema=source.schema_arrow, preserve_index=False))
+                connection.execute("DELETE FROM selected")
+        temporary_parquet.replace(parquet)
+        print(f"{chrom}: attached rsIDs to {annotated:,} of {rows:,} result rows.")
+
+    mo.stop(not rsid_button.value, mo.md("Press the button above to run this step."))
+    attach_rsids(settings["single"])
     return
 
 
