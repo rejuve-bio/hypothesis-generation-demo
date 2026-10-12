@@ -1448,5 +1448,95 @@ def __(effect_input, export_filtered_results, filtered_export_button, minimum_sc
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 17. Export Top Variants for Each TF
+    Selects the variants with the largest absolute deltaSVM scores for each
+    transcription factor and writes them to `results/deltasvm_top_variants_by_tf.tsv`.
+    The ranking keeps only the requested number of rows per TF in memory.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    top_variants_input = mo.ui.text(value="25", label="Maximum variants per TF")
+    top_variants_button = mo.ui.run_button(label='Export top variants by TF')
+    mo.vstack([top_variants_input, top_variants_button])
+    return top_variants_button, top_variants_input
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def export_top_variants_per_tf(limit_value):
+        import csv
+        import heapq
+        import math
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+
+        try:
+            limit = int(limit_value)
+        except (TypeError, ValueError):
+            raise ValueError("Enter a whole number of variants per TF.")
+        if limit < 1 or limit > 1000:
+            raise ValueError("The number of variants per TF must be between 1 and 1000.")
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before ranking variants.")
+        parquet = pq.ParquetFile(source)
+        fields = ("variant", "rsId", "TfId", "TfName", "Effect", "Score")
+        missing = sorted(set(fields) - set(parquet.schema_arrow.names))
+        if missing:
+            raise ValueError("Combined results are missing required columns: " + ", ".join(missing))
+        rankings = {}
+        for batch in parquet.iter_batches(batch_size=50000, columns=list(fields)):
+            frame = pa.Table.from_batches([batch]).to_pandas()
+            scores = pd.to_numeric(frame["Score"], errors="coerce").tolist()
+            for variant, rsid, tfid, name, effect, score in zip(
+                frame["variant"].tolist(), frame["rsId"].tolist(), frame["TfId"].tolist(),
+                frame["TfName"].tolist(), frame["Effect"].tolist(), scores
+            ):
+                if score is None or not math.isfinite(score):
+                    continue
+                key = (abs(score), score, str(variant), str(rsid), str(tfid), str(effect))
+                heap = rankings.setdefault(str(name), [])
+                if len(heap) < limit:
+                    heapq.heappush(heap, key)
+                elif key > heap[0]:
+                    heapq.heapreplace(heap, key)
+        if not rankings:
+            raise ValueError("No finite deltaSVM scores were available for ranking.")
+        destination = settings["workspace"] / "results" / "deltasvm_top_variants_by_tf.tsv"
+        temporary = destination.with_suffix(".tsv.part")
+        rows = 0
+        try:
+            with temporary.open("w", newline="") as stream:
+                writer = csv.writer(stream, delimiter="\t")
+                writer.writerow(fields)
+                for name in sorted(rankings):
+                    for absolute_score, score, variant, rsid, tfid, effect in sorted(rankings[name], reverse=True):
+                        writer.writerow((variant, rsid, tfid, name, effect, score))
+                        rows += 1
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("top_deltasvm_variants_by_tf", destination,
+                      source=str(source), source_sha256=file_digest(source),
+                      maximum_per_tf=limit, rows=rows, sha256=file_digest(destination))
+        print(f"Saved {rows:,} ranked variant rows across {len(rankings)} TFs to {destination}")
+
+    return (export_top_variants_per_tf,)
+
+
+@app.cell
+def __(export_top_variants_per_tf, mo, top_variants_button, top_variants_input):
+    mo.stop(not top_variants_button.value, mo.md("Choose a per-TF row limit, then press the export button."))
+    export_top_variants_per_tf(top_variants_input.value)
+    return
+
+
 if __name__ == "__main__":
     app.run()
