@@ -1658,6 +1658,7 @@ def __(file_digest, json, record_source, settings):
             f"{settings['single']}_run_record.json",
             "deltasvm_skipped_variants.tsv",
             "deltasvm_skipped_variant_summary.tsv",
+            "README.txt",
         )
         files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
         files.append((provenance, "provenance.json"))
@@ -2013,6 +2014,77 @@ def __(file_digest, record_source, settings):
 def __(mo, skipped_variants_button, summarize_skipped_variants):
     mo.stop(not skipped_variants_button.value, mo.md("Press the button above to summarize exclusions."))
     summarize_skipped_variants()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 25. Write a Data Dictionary for the Results
+    Creates `results/README.txt` with the result column definitions, identifier
+    conventions, effect labels, and a guide to the generated reports.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    data_dictionary_button = mo.ui.run_button(label='Write results data dictionary')
+    data_dictionary_button
+    return (data_dictionary_button,)
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def write_results_data_dictionary():
+        results = settings["workspace"] / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        destination = results / "README.txt"
+        content = f"""deltaSVM result files
+
+Selected chromosomes: {', '.join(settings['chromosomes'])}
+Genome build: GRCh38
+
+Combined prediction table
+File: deltasvm_selected_chromosomes.parquet
+Columns:
+  variant: contig_position_reference_allele_alternate_allele identifier.
+  rsId: dbSNP identifier when mapped; a period means no mapping was available.
+  TfId: HGNC Ensembl gene identifier for the TF symbol when available; a period means no mapping was available.
+  TfName: transcription factor symbol used by the supplied human TF models.
+  Effect: Gain or Loss label from the pipeline's preferred allele prediction.
+  Score: numeric deltaSVM score from the supplied model resources.
+
+Reports and derived files
+deltasvm_qc_report.tsv: per-chromosome result counts, effect counts, invalid scores, and missing identifier counts.
+deltasvm_tf_summary.tsv: per-TF row counts, effect counts, mean score, and maximum absolute score.
+deltasvm_filtered.parquet: optional rows filtered by effect and minimum absolute score; settings are in provenance.json.
+deltasvm_top_variants_by_tf.tsv: optional highest absolute-score variants retained per TF.
+deltasvm_skipped_variants.tsv: skipped variants with chromosome and exclusion reason.
+deltasvm_skipped_variant_summary.tsv: skipped variant counts grouped by exclusion reason.
+deltasvm_combined_validation.tsv: check of combined output checksums and selected chromosomes.
+deltasvm_manifest_validation.tsv: check of manifest output checksums and selected chromosomes.
+deltasvm_run_manifest.json: software versions, settings, source provenance, and result checksums.
+{settings['single']}_run_record.json: selected chromosome input fingerprints, run settings, TF completion count, and output checksums.
+deltasvm_results_bundle.zip: archive of available result files and provenance.
+
+Periods in rsId and TfId fields indicate unavailable annotations. Annotation coverage is reported in deltasvm_qc_report.tsv.
+The predictions use the supplied human TF models and do not provide fly-specific biological validation.
+"""
+        temporary = destination.with_suffix(".txt.part")
+        temporary.write_text(content)
+        temporary.replace(destination)
+        record_source("deltaSVM_results_data_dictionary", destination,
+                      sha256=file_digest(destination), chromosomes=list(settings["chromosomes"]))
+        print(f"Results data dictionary saved to {destination}")
+
+    return (write_results_data_dictionary,)
+
+
+@app.cell
+def __(data_dictionary_button, mo, write_results_data_dictionary):
+    mo.stop(not data_dictionary_button.value, mo.md("Press the button above to document the results."))
+    write_results_data_dictionary()
     return
 
 
