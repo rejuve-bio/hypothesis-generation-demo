@@ -1660,6 +1660,7 @@ def __(file_digest, json, record_source, settings):
             "deltasvm_skipped_variants.tsv",
             "deltasvm_skipped_variant_summary.tsv",
             "deltasvm_bundle_validation.tsv",
+            "deltasvm_selected_chromosomes.tsv.gz",
             "README.txt",
         )
         files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
@@ -2057,6 +2058,9 @@ Columns:
   Effect: Gain or Loss label from the pipeline's preferred allele prediction.
   Score: numeric deltaSVM score from the supplied model resources.
 
+Compressed text export
+deltasvm_selected_chromosomes.tsv.gz: tab-separated export of the combined prediction table, compressed with gzip.
+
 Reports and derived files
 deltasvm_qc_report.tsv: per-chromosome result counts, effect counts, invalid scores, and missing identifier counts.
 deltasvm_tf_summary.tsv: per-TF row counts, effect counts, mean score, and maximum absolute score.
@@ -2168,6 +2172,68 @@ def __(file_digest, json, record_source, settings):
 def __(bundle_validation_button, mo, validate_results_bundle):
     mo.stop(not bundle_validation_button.value, mo.md("Press the button above to verify the archive."))
     validate_results_bundle()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 27. Export the Combined Results as Compressed TSV
+    Writes `results/deltasvm_selected_chromosomes.tsv.gz` in bounded batches for
+    analysis tools that do not read Parquet files.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    tsv_export_button = mo.ui.run_button(label='Export combined results as compressed TSV')
+    tsv_export_button
+    return (tsv_export_button,)
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def export_combined_tsv():
+        import gzip
+        import pyarrow.parquet as pq
+
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before creating a TSV export.")
+        parquet = pq.ParquetFile(source)
+        if not parquet.metadata.num_rows:
+            raise ValueError("The combined Parquet file contains no rows to export.")
+        destination = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.tsv.gz"
+        temporary = destination.with_suffix(".gz.part")
+        rows = 0
+        first_batch = True
+        try:
+            with gzip.open(temporary, "wt", encoding="utf-8", newline="") as stream:
+                for batch in parquet.iter_batches(batch_size=50000):
+                    frame = batch.to_pandas()
+                    frame.to_csv(stream, sep="\t", index=False, header=first_batch,
+                                 na_rep=".", lineterminator="\n")
+                    first_batch = False
+                    rows += len(frame)
+            if not rows:
+                raise ValueError("The combined Parquet file contains no rows to export.")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("combined_deltasvm_tsv_gzip", destination,
+                      source=str(source), source_sha256=file_digest(source),
+                      chromosomes=list(settings["chromosomes"]), rows=rows,
+                      sha256=file_digest(destination))
+        print(f"Exported {rows:,} rows to {destination}")
+
+    return (export_combined_tsv,)
+
+
+@app.cell
+def __(export_combined_tsv, mo, tsv_export_button):
+    mo.stop(not tsv_export_button.value, mo.md("Press the button above to create the compressed TSV."))
+    export_combined_tsv()
     return
 
 
