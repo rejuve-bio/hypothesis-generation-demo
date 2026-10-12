@@ -1655,6 +1655,7 @@ def __(file_digest, json, record_source, settings):
             "deltasvm_top_variants_by_tf.tsv",
             "deltasvm_combined_validation.tsv",
             "deltasvm_run_manifest.json",
+            f"{settings['single']}_run_record.json",
         )
         files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
         files.append((provenance, "provenance.json"))
@@ -1850,6 +1851,86 @@ def __(file_digest, json, record_source, settings):
 def __(manifest_validation_button, mo, validate_run_manifest):
     mo.stop(not manifest_validation_button.value, mo.md("Press the button above to check the manifest."))
     validate_run_manifest()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 23. Export a Selected Chromosome Run Record
+    Saves the current input fingerprints, run settings, completed TF count, and
+    checksums for available chromosome outputs to `results/chrN_run_record.json`.
+    The record is created only when the run inputs still match their saved fingerprints.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    run_record_button = mo.ui.run_button(label='Export selected chromosome run record')
+    run_record_button
+    return (run_record_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, run_signature, settings):
+    def export_chromosome_run_record():
+        from datetime import datetime, timezone
+
+        chrom = settings["single"]
+        directory = settings["workspace"] / "runs" / chrom
+        input_record = directory / "inputs.json"
+        if not input_record.is_file():
+            raise FileNotFoundError(f"Prepare and run {chrom} before exporting its run record.")
+        input_fingerprints = json.loads(input_record.read_text())
+        current_fingerprints = run_signature(chrom)
+        if input_fingerprints != current_fingerprints:
+            raise RuntimeError(f"{chrom} inputs changed after scoring. Rerun the chromosome before exporting its record.")
+        output_paths = (
+            directory / "input_snp.tsv",
+            directory / "data" / "skipped.tsv",
+            directory / "out" / "pbs.pred.tsv",
+            directory / "out" / "obs.pred.tsv",
+            directory / "out" / "summary.pred.tsv",
+            directory / "out" / f"{chrom}_deltasvm.parquet",
+            directory / "out" / "tf_id_unmapped.tsv",
+        )
+        outputs = {
+            str(path.relative_to(directory)): {"size_bytes": path.stat().st_size,
+                                              "sha256": file_digest(path)}
+            for path in output_paths if path.is_file()
+        }
+        completed_tfs = sum(path.is_file() and path.stat().st_size > 0
+                            for path in (directory / "tmp").glob("*.merge.gkm.tsv"))
+        record = {
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "chromosome": chrom,
+            "settings": {"threads": settings["threads"], "tf_jobs": settings["tf_jobs"],
+                         "use_opentargets": settings["use_ot"],
+                         "common_variants_only": settings["common_only"],
+                         "maximum_variants": settings["max_snps"]},
+            "input_fingerprints": input_fingerprints,
+            "completed_tf_predictions": completed_tfs,
+            "output_files": outputs,
+        }
+        results = settings["workspace"] / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        destination = results / f"{chrom}_run_record.json"
+        temporary = destination.with_suffix(".json.part")
+        temporary.write_text(json.dumps(record, indent=2) + "\n")
+        temporary.replace(destination)
+        record_source(f"{chrom}_run_record", destination,
+                      chromosome=chrom, sha256=file_digest(destination),
+                      output_count=len(outputs))
+        print(f"Run record saved for {chrom}: {destination}")
+
+    return (export_chromosome_run_record,)
+
+
+@app.cell
+def __(export_chromosome_run_record, mo, run_record_button):
+    mo.stop(not run_record_button.value, mo.md("Press the button above to export the chromosome run record."))
+    export_chromosome_run_record()
     return
 
 
