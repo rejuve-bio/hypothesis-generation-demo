@@ -1654,6 +1654,7 @@ def __(file_digest, json, record_source, settings):
             "deltasvm_filtered.parquet",
             "deltasvm_top_variants_by_tf.tsv",
             "deltasvm_combined_validation.tsv",
+            "deltasvm_run_manifest.json",
         )
         files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
         files.append((provenance, "provenance.json"))
@@ -1710,6 +1711,80 @@ def __(mo, settings):
 
     mo.download(data=open_results_bundle, filename="deltasvm_results_bundle.zip",
                 mimetype="application/zip", label="Download deltaSVM results bundle")
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 21. Write a Reproducibility Manifest
+    Records the selected configuration, software versions, source provenance, and
+    checksums for available result files in `results/deltasvm_run_manifest.json`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    run_manifest_button = mo.ui.run_button(label='Write reproducibility manifest')
+    run_manifest_button
+    return (run_manifest_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def write_run_manifest():
+        import platform
+        import sys
+        from datetime import datetime, timezone
+        from importlib.metadata import PackageNotFoundError, version
+
+        workspace = settings["workspace"]
+        results = workspace / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        provenance_path = workspace / "provenance.json"
+        provenance = json.loads(provenance_path.read_text()) if provenance_path.is_file() else {}
+        packages = {}
+        for package in ("marimo", "pandas", "pyarrow", "pysam"):
+            try:
+                packages[package] = version(package)
+            except PackageNotFoundError:
+                packages[package] = None
+        outputs = {}
+        if results.is_dir():
+            for path in sorted(results.iterdir()):
+                if path.is_file() and path.name != "deltasvm_run_manifest.json":
+                    outputs[path.name] = {"size_bytes": path.stat().st_size,
+                                          "sha256": file_digest(path)}
+        normalized_settings = {
+            key: [str(item) for item in value] if isinstance(value, tuple)
+            else str(value) if hasattr(value, "as_posix") else value
+            for key, value in settings.items()
+        }
+        manifest = {
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "python": sys.version,
+            "platform": platform.platform(),
+            "packages": packages,
+            "settings": normalized_settings,
+            "provenance_sources": provenance.get("sources", {}),
+            "outputs": outputs,
+        }
+        destination = results / "deltasvm_run_manifest.json"
+        temporary = destination.with_suffix(".json.part")
+        temporary.write_text(json.dumps(manifest, indent=2) + "\n")
+        temporary.replace(destination)
+        record_source("deltaSVM_run_manifest", destination,
+                      sha256=file_digest(destination), output_count=len(outputs))
+        print(f"Reproducibility manifest saved to {destination}")
+
+    return (write_run_manifest,)
+
+
+@app.cell
+def __(mo, run_manifest_button, write_run_manifest):
+    mo.stop(not run_manifest_button.value, mo.md("Press the button above to write the manifest."))
+    write_run_manifest()
     return
 
 
