@@ -1147,5 +1147,71 @@ def __(Path, download_file, file_digest, mo, record_source, settings, tf_id_butt
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 13. Combine Selected Chromosome Results
+    Combines the per-chromosome Parquet exports into
+    `results/deltasvm_selected_chromosomes.parquet` using bounded batches. Every
+    selected chromosome must have an export, and all files must have the same columns
+    and types. Run annotation consistently across chromosomes before combining if you
+    want rsID and Ensembl ID columns in the combined file.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    combine_button = mo.ui.run_button(label='Combine selected chromosome results')
+    combine_button
+    return (combine_button,)
+
+
+@app.cell
+def __(file_digest, mo, record_source, settings):
+    def combine_chromosome_results():
+        import pyarrow.parquet as pq
+
+        chromosomes = settings["chromosomes"]
+        sources = [settings["workspace"] / "runs" / chrom / "out" / f"{chrom}_deltasvm.parquet"
+                   for chrom in chromosomes]
+        missing = [str(path) for path in sources if not path.is_file() or not path.stat().st_size]
+        if missing:
+            raise FileNotFoundError("Export results for every selected chromosome first: " + ", ".join(missing))
+        parquet_files = [pq.ParquetFile(path) for path in sources]
+        schema = parquet_files[0].schema_arrow
+        for chrom, parquet in zip(chromosomes[1:], parquet_files[1:]):
+            if not schema.equals(parquet.schema_arrow, check_metadata=False):
+                raise ValueError(f"{chrom} has a different Parquet schema. Apply the same annotations to every selected chromosome before combining.")
+        output_directory = settings["workspace"] / "results"
+        output_directory.mkdir(parents=True, exist_ok=True)
+        output = output_directory / "deltasvm_selected_chromosomes.parquet"
+        temporary = output.with_suffix(".parquet.part")
+        rows = 0
+        try:
+            with pq.ParquetWriter(temporary, schema) as writer:
+                for parquet in parquet_files:
+                    for batch in parquet.iter_batches(batch_size=50000):
+                        writer.write_batch(batch)
+                        rows += batch.num_rows
+            temporary.replace(output)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("combined_deltasvm_results", output,
+                      chromosomes=list(chromosomes),
+                      source_sha256={str(path): file_digest(path) for path in sources},
+                      sha256=file_digest(output), rows=rows)
+        print(f"Combined {rows:,} rows across {len(chromosomes)} chromosomes: {output}")
+
+    return (combine_chromosome_results,)
+
+
+@app.cell
+def __(combine_button, combine_chromosome_results, mo):
+    mo.stop(not combine_button.value, mo.md("Press the button above to run this step."))
+    combine_chromosome_results()
+    return
+
+
 if __name__ == "__main__":
     app.run()
