@@ -131,7 +131,7 @@ def test_variant_to_persisted_hypothesis_component_e2e(
     ]
     llm.summarize_graph.return_value = "IRF8 may alter inflammatory signaling."
     gene_expression = MagicMock()
-    gene_expression.get_tissue_selection.return_value = None
+    gene_expression.get_tissue_selection.return_value = {"tissue_name": "Liver"}
     gene_expression.get_ldsc_results_for_project.return_value = []
     deps = {
         "enrichment": enrichment,

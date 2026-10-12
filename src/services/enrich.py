@@ -1,14 +1,13 @@
 import copy
 import pickle
 import re
-from typing import List, Optional
+from typing import Optional
 
 import gseapy as gp
 import pandas as pd
 from loguru import logger
 
 from src.config import Config
-from src.catlas_census_mapping import CatlasMappingError
 from src.tasks.gene_expression import get_coexpression_matrix_for_tissue
 
 _ENSG_RE = re.compile(r"^ENSG\d+$", re.IGNORECASE)
@@ -28,6 +27,37 @@ class EnrichrAPIUnavailableError(RuntimeError):
         return detail
 
 
+class NoEnrichmentFoundError(ValueError):
+    """Enrichment found nothing for the gene; ``reason`` says which step came up empty."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        gene: str | None = None,
+        tissue: str | None = None,
+        variant: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.gene = gene
+        self.tissue = tissue
+        self.variant = variant
+
+    def as_detail(self) -> dict[str, str]:
+        detail = {
+            "error_type": "no_enrichment_found",
+            "reason": self.reason,
+            "message": str(self),
+        }
+        for key in ("gene", "tissue", "variant"):
+            value = getattr(self, key)
+            if value:
+                detail[key] = value
+        return detail
+
+
 class Enrich:
 
     def __init__(self, ensembl_hgnc_map_path, hgnc_ensembl_map_path,
@@ -42,18 +72,6 @@ class Enrich:
         
         self.config = Config.from_env()
 
-    def _load_fallback_coexpression_data(self) -> List[str]:
-        """Load hardcoded brown preadipocytes coexpression data as fallback."""
-        fallback_path = f"{self.config.data_dir}/brown_preadipocytes_irx3_corr_top_500_genes.pkl"
-        with open(fallback_path, "rb") as f:
-            return pickle.load(f)
-    
-    def _load_fallback_background_data(self) -> List[str]:
-        """Load hardcoded brown preadipocytes background genes as fallback."""
-        fallback_path = f"{self.config.data_dir}/brown_preadipocytes_irx3_corr_background_genes.pkl"
-        with open(fallback_path, "rb") as f:
-            return pickle.load(f)
-    
     @staticmethod
     def is_ensembl_id(gene: str) -> bool:
         return bool(gene and _ENSG_RE.match(str(gene).strip()))
@@ -120,18 +138,17 @@ class Enrich:
         if coexpression_data is not None:
             top_positive_tuples, top_negative_tuples, all_genes = coexpression_data
         elif not tissue_name:
-            return self._load_fallback_coexpression_data()
+            raise NoEnrichmentFoundError(
+                f"Cannot build a co-expression network for {relevant_gene}: no tissue "
+                "was given. Enrichment needs a tissue to compute co-expression in.",
+                reason="no_tissue",
+                gene=relevant_gene,
+            )
         else:
-            try:
-                logger.info(f"[Enrich] Inline coexpression query for '{relevant_gene}' in '{tissue_name}'")
-                top_positive_tuples, top_negative_tuples, all_genes = get_coexpression_matrix_for_tissue.fn(
-                    relevant_gene, tissue_name, k=k
-                )
-            except CatlasMappingError:
-                raise
-            except Exception as e:
-                logger.error(f"Error running CellxGene coexpression analysis: {e}")
-                return self._load_fallback_coexpression_data()
+            logger.info(f"[Enrich] Inline coexpression query for '{relevant_gene}' in '{tissue_name}'")
+            top_positive_tuples, top_negative_tuples, all_genes = get_coexpression_matrix_for_tissue.fn(
+                relevant_gene, tissue_name, k=k
+            )
         
         # Extract gene symbols from tuples
         if top_positive_tuples and isinstance(top_positive_tuples[0], tuple):
@@ -223,45 +240,35 @@ class Enrich:
                 "coexpression queries may fail"
             )
 
-        coexpression_result = self.get_coexpression_net(
+        gene_list_ensembl, all_tissue_genes = self.get_coexpression_net(
             ensembl_gene, tissue_name, coexpression_data=coexpression_data
         )
-        
-        # Handle different return types (tuple for tissue-specific, list for fallback)
-        if isinstance(coexpression_result, tuple):
-            gene_list_ensembl, all_tissue_genes = coexpression_result
-            # Convert Ensembl IDs to HGNC symbols for both gene list and background
-            gene_list = self.get_hgnc_syms(gene_list_ensembl)
-            
-            # Using background size (5000 genes) instead of all tissue genes
-            max_background_size = 5000
-            if len(all_tissue_genes) > max_background_size:
-                logger.info(f"Limiting background from {len(all_tissue_genes)} to {max_background_size} genes for better enrichment signal")
-                background_genes_ensembl = all_tissue_genes[:max_background_size]
-            else:
-                background_genes_ensembl = all_tissue_genes
-            
-            background_genes = self.get_hgnc_syms(background_genes_ensembl)
-            logger.info(
-                f"Running tissue-specific enrichment for {causal_gene_symbol} "
-                f"in {tissue_name}"
-            )
-            logger.info(f"Using tissue-specific background: {len(background_genes)} genes from CellxGene analysis")
-            logger.info(f"Converted {len(gene_list_ensembl)} Ensembl IDs to {len(gene_list)} HGNC symbols")
-        else:
-            # Fallback case - no tissue specified or fallback data used (already HGNC symbols)
-            gene_list = coexpression_result
-            background_genes = self._load_fallback_background_data()
-            logger.info(f"Running standard enrichment for {causal_gene_symbol}")
-        
-        logger.info(f"Relevant Gene: {causal_gene_symbol}")
-        logger.info(f"Gene list sample: {gene_list[:5] if gene_list else []}")
-        logger.info(f"Total coexpressed genes: {len(gene_list) if gene_list else 0}")
-        
+
+        # Convert Ensembl IDs to HGNC symbols for both gene list and background
+        gene_list = self.get_hgnc_syms(gene_list_ensembl)
         if not gene_list:
-            logger.warning("No coexpressed genes found, returning empty results")
-            return pd.DataFrame(columns=["ID", "Term", "Desc", "Adjusted P-value", "Genes"])
-        
+            raise self._no_coexpressed_genes_error(
+                causal_gene_symbol, ensembl_gene, tissue_name,
+                gene_list_ensembl, all_tissue_genes,
+            )
+
+        # Using background size (5000 genes) instead of all tissue genes
+        max_background_size = 5000
+        if len(all_tissue_genes) > max_background_size:
+            logger.info(f"Limiting background from {len(all_tissue_genes)} to {max_background_size} genes for better enrichment signal")
+            background_genes_ensembl = all_tissue_genes[:max_background_size]
+        else:
+            background_genes_ensembl = all_tissue_genes
+
+        background_genes = self.get_hgnc_syms(background_genes_ensembl)
+        logger.info(
+            f"Running tissue-specific enrichment for {causal_gene_symbol} "
+            f"in {tissue_name}"
+        )
+        logger.info(f"Using tissue-specific background: {len(background_genes)} genes from CellxGene analysis")
+        logger.info(f"Converted {len(gene_list_ensembl)} Ensembl IDs to {len(gene_list)} HGNC symbols")
+        logger.info(f"Gene list sample: {gene_list[:5]}")
+
         res = self._run_enrichr_with_retry(
             gene_list=gene_list,
             gene_sets=library,
@@ -269,5 +276,54 @@ class Enrich:
             organism=organism,
             outdir=None,
         )
-        
-        return self._process_enrichment_results(res)
+
+        enriched = self._process_enrichment_results(res)
+        if enriched.empty:
+            raise NoEnrichmentFoundError(
+                f"{len(gene_list)} genes are co-expressed with {causal_gene_symbol} in "
+                f"'{tissue_name}', but no GO Biological Process term is significantly "
+                "enriched among them (adjusted p < 0.05). Selecting a different "
+                "tissue may give a result.",
+                reason="no_significant_go_terms",
+                gene=causal_gene_symbol,
+                tissue=tissue_name,
+            )
+        return enriched
+
+    @staticmethod
+    def _no_coexpressed_genes_error(
+        gene_symbol, ensembl_gene, tissue_name, gene_list_ensembl, all_tissue_genes
+    ) -> NoEnrichmentFoundError:
+        """Build the error explaining why co-expression returned no genes."""
+        if not all_tissue_genes:
+            reason = "tissue_data_unavailable"
+            message = (
+                f"No CellxGene expression data could be loaded for '{tissue_name}', "
+                f"so no co-expression network could be built for {gene_symbol}."
+            )
+        elif str(ensembl_gene).upper() not in {str(g).upper() for g in all_tissue_genes}:
+            reason = "gene_not_in_tissue_data"
+            message = (
+                f"{gene_symbol} is not measured in the CellxGene expression data for "
+                f"'{tissue_name}', so it has no co-expression network there."
+            )
+        elif gene_list_ensembl:
+            reason = "coexpressed_genes_unmapped"
+            message = (
+                f"{len(gene_list_ensembl)} genes are co-expressed with {gene_symbol} in "
+                f"'{tissue_name}', but none of them could be mapped to an HGNC gene "
+                "symbol, which GO enrichment needs."
+            )
+        else:
+            reason = "no_coexpressed_genes"
+            message = (
+                f"No genes are significantly co-expressed with {gene_symbol} in "
+                f"'{tissue_name}'. It may be expressed in too few cells of that tissue "
+                "to measure co-expression."
+            )
+        return NoEnrichmentFoundError(
+            f"{message} Selecting a different tissue may give a result.",
+            reason=reason,
+            gene=gene_symbol,
+            tissue=tissue_name,
+        )

@@ -55,6 +55,13 @@ router = APIRouter(tags=["hypothesis"])
 _HYPOTHESIS_FLOW_WAIT_TIMEOUT = float(os.getenv("HYPOTHESIS_FLOW_WAIT_TIMEOUT", "120"))
 
 
+def _hypothesis_warnings(doc: dict | None) -> list:
+    """Enrichment warnings followed by hypothesis warnings."""
+    if not doc:
+        return []
+    return [*doc.get("enrichment_warnings", []), *doc.get("warnings", [])]
+
+
 def _response_from_hypothesis_document(
     hypothesis_id: str,
     doc: dict | None,
@@ -68,7 +75,7 @@ def _response_from_hypothesis_document(
         "hypothesis_id": hypothesis_id,
         "summary": doc.get("summary") if doc else None,
         "graph": doc.get("graph") if doc else None,
-        "warnings": doc.get("warnings", []) if doc else [],
+        "warnings": _hypothesis_warnings(doc),
     }
     if enrich_id is not None:
         response["enrich_id"] = enrich_id
@@ -161,7 +168,7 @@ async def get_hypothesis(
                 "result": enrich_data,
                 "summary": hypothesis.get("summary"),
                 "graph": hypothesis.get("graph"),
-                "warnings": hypothesis.get("warnings", []),
+                "warnings": _hypothesis_warnings(hypothesis),
             }
 
             if "tissue_rankings" in hypothesis:
@@ -206,6 +213,7 @@ async def get_hypothesis(
             "task_history": public_task_history_entries(last_pending_task),
             "probability": confidence,
             "hypotheses": related_hypotheses,
+            "warnings": _hypothesis_warnings(hypothesis),
         }
 
         if "tissue_rankings" in hypothesis:

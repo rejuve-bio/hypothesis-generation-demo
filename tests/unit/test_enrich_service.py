@@ -38,31 +38,70 @@ def test_run_uses_tissue_gene_list_and_caps_background(monkeypatch):
     enrich.get_coexpression_net = MagicMock(
         return_value=(["ENSG1", "ENSG2"], ["ENSG1"] * 6000)
     )
-    enrich._process_enrichment_results = MagicMock(return_value="processed")
+    processed = pd.DataFrame({"ID": ["GO:1"]})
+    enrich._process_enrichment_results = MagicMock(return_value=processed)
     api = MagicMock()
     api.return_value.results = pd.DataFrame()
     monkeypatch.setattr(service.gp, "enrichr", api)
 
     result = enrich.run("GENE1", tissue_name="Liver", coexpression_data="matrix")
 
-    assert result == "processed"
+    assert result is processed
     assert len(api.call_args.kwargs["background"]) == 5000
     assert api.call_args.kwargs["gene_list"] == ["GENE1", "GENE2"]
     assert api.call_args.kwargs["outdir"] is None
 
 
-def test_run_returns_empty_frame_without_calling_api():
+@pytest.mark.parametrize(
+    "coexpression, reason, message",
+    [
+        (([], [], []), "tissue_data_unavailable",
+         "No CellxGene expression data could be loaded for 'Liver'"),
+        (([], [], ["ENSG2"]), "gene_not_in_tissue_data",
+         "GENE1 is not measured in the CellxGene expression data for 'Liver'"),
+        (([], [], ["ENSG1", "ENSG2"]), "no_coexpressed_genes",
+         "No genes are significantly co-expressed with GENE1 in 'Liver'"),
+        (([("ENSG_UNMAPPED", 0.9)], [], ["ENSG1", "ENSG_UNMAPPED"]),
+         "coexpressed_genes_unmapped",
+         "none of them could be mapped to an HGNC gene symbol"),
+    ],
+)
+def test_empty_coexpression_raises_with_the_specific_reason(
+    monkeypatch, coexpression, reason, message
+):
     enrich = _enrich()
-    enrich.get_coexpression_net = MagicMock(return_value=[])
-    enrich._load_fallback_background_data = MagicMock(return_value=["BG"])
-    original = service.gp.enrichr
-    service.gp.enrichr = MagicMock()
-    try:
-        result = enrich.run("GENE1")
-        assert list(result.columns) == ["ID", "Term", "Desc", "Adjusted P-value", "Genes"]
-        service.gp.enrichr.assert_not_called()
-    finally:
-        service.gp.enrichr = original
+    api = MagicMock()
+    monkeypatch.setattr(service.gp, "enrichr", api)
+
+    with pytest.raises(service.NoEnrichmentFoundError) as exc:
+        enrich.run("GENE1", tissue_name="Liver", coexpression_data=coexpression)
+
+    assert exc.value.reason == reason
+    assert message in str(exc.value)
+    api.assert_not_called()
+
+
+def test_no_significant_go_terms_raises_with_gene_count(monkeypatch):
+    enrich = _enrich()
+    api = MagicMock()
+    api.return_value.results = pd.DataFrame(
+        {
+            "Gene_set": ["GO_Biological_Process_2023"],
+            "Term": ["some process (GO:1)"],
+            "Adjusted P-value": [0.4],
+            "Genes": ["GENE1;GENE2"],
+        }
+    )
+    monkeypatch.setattr(service.gp, "enrichr", api)
+
+    with pytest.raises(service.NoEnrichmentFoundError) as exc:
+        enrich.run(
+            "GENE1", tissue_name="Liver",
+            coexpression_data=([("ENSG1", 0.9), ("ENSG2", 0.8)], [], ["ENSG1", "ENSG2"]),
+        )
+
+    assert exc.value.reason == "no_significant_go_terms"
+    assert "2 genes are co-expressed with GENE1 in 'Liver'" in str(exc.value)
 
 
 def test_retry_api_contract_is_available():
