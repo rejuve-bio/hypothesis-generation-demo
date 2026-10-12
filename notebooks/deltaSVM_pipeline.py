@@ -1689,5 +1689,29 @@ def __(bundle_button, create_results_bundle, mo):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 20. Download the Results Bundle
+    After creating the bundle in section 19, use the download button to save the ZIP
+    archive to your computer. The file is streamed from disk when the download starts.
+    """)
+    return
+
+
+@app.cell
+def __(mo, settings):
+    bundle_path = settings["workspace"] / "results" / "deltasvm_results_bundle.zip"
+
+    def open_results_bundle():
+        if not bundle_path.is_file() or not bundle_path.stat().st_size:
+            raise FileNotFoundError("Create the results bundle in section 19 before downloading it.")
+        return bundle_path.open("rb")
+
+    mo.download(data=open_results_bundle, filename="deltasvm_results_bundle.zip",
+                mimetype="application/zip", label="Download deltaSVM results bundle")
+    return
+
+
 if __name__ == "__main__":
     app.run()
