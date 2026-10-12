@@ -1295,5 +1295,77 @@ def __(mo, qc_button, validate_combined_results):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 15. Summarize Scores by Transcription Factor
+    Streams the combined results and writes per-TF row counts, Gain/Loss counts, mean
+    score, and maximum absolute score to `results/deltasvm_tf_summary.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    tf_summary_button = mo.ui.run_button(label='Create TF score summary')
+    tf_summary_button
+    return (tf_summary_button,)
+
+
+@app.cell
+def __(file_digest, mo, record_source, settings):
+    def summarize_tf_scores():
+        import math
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before summarizing TF scores.")
+        parquet = pq.ParquetFile(source)
+        required = {"TfName", "Effect", "Score"}
+        missing = sorted(required - set(parquet.schema_arrow.names))
+        if missing:
+            raise ValueError("Combined results are missing required columns: " + ", ".join(missing))
+        summary = {}
+        for batch in parquet.iter_batches(batch_size=50000, columns=sorted(required)):
+            frame = pa.Table.from_batches([batch]).to_pandas()
+            scores = pd.to_numeric(frame["Score"], errors="coerce").tolist()
+            for name, effect, score in zip(frame["TfName"].tolist(), frame["Effect"].tolist(), scores):
+                key = str(name)
+                row = summary.setdefault(key, {"rows": 0, "gain": 0, "loss": 0,
+                                               "score_sum": 0.0, "valid_scores": 0,
+                                               "max_abs_score": 0.0})
+                row["rows"] += 1
+                row["gain"] += effect == "Gain"
+                row["loss"] += effect == "Loss"
+                if score is not None and math.isfinite(score):
+                    row["score_sum"] += score
+                    row["valid_scores"] += 1
+                    row["max_abs_score"] = max(row["max_abs_score"], abs(score))
+        report = settings["workspace"] / "results" / "deltasvm_tf_summary.tsv"
+        fields = ("TfName", "rows", "gain", "loss", "mean_score", "max_abs_score")
+        with report.open("w") as stream:
+            stream.write("\t".join(fields) + "\n")
+            for name, row in sorted(summary.items()):
+                mean_score = row["score_sum"] / row["valid_scores"] if row["valid_scores"] else "."
+                values = (name, row["rows"], row["gain"], row["loss"], mean_score, row["max_abs_score"])
+                stream.write("\t".join(map(str, values)) + "\n")
+        record_source("deltaSVM_tf_summary", report,
+                      combined_results=str(source), combined_sha256=file_digest(source),
+                      report_sha256=file_digest(report))
+        print(f"TF score summary saved for {len(summary)} TFs: {report}")
+
+    return (summarize_tf_scores,)
+
+
+@app.cell
+def __(mo, summarize_tf_scores, tf_summary_button):
+    mo.stop(not tf_summary_button.value, mo.md("Press the button above to run this step."))
+    summarize_tf_scores()
+    return
+
+
 if __name__ == "__main__":
     app.run()
