@@ -1295,5 +1295,423 @@ def __(mo, qc_button, validate_combined_results):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 15. Summarize Scores by Transcription Factor
+    Streams the combined results and writes per-TF row counts, Gain/Loss counts, mean
+    score, and maximum absolute score to `results/deltasvm_tf_summary.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    tf_summary_button = mo.ui.run_button(label='Create TF score summary')
+    tf_summary_button
+    return (tf_summary_button,)
+
+
+@app.cell
+def __(file_digest, mo, record_source, settings):
+    def summarize_tf_scores():
+        import math
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before summarizing TF scores.")
+        parquet = pq.ParquetFile(source)
+        required = {"TfName", "Effect", "Score"}
+        missing = sorted(required - set(parquet.schema_arrow.names))
+        if missing:
+            raise ValueError("Combined results are missing required columns: " + ", ".join(missing))
+        summary = {}
+        for batch in parquet.iter_batches(batch_size=50000, columns=sorted(required)):
+            frame = pa.Table.from_batches([batch]).to_pandas()
+            scores = pd.to_numeric(frame["Score"], errors="coerce").tolist()
+            for name, effect, score in zip(frame["TfName"].tolist(), frame["Effect"].tolist(), scores):
+                key = str(name)
+                row = summary.setdefault(key, {"rows": 0, "gain": 0, "loss": 0,
+                                               "score_sum": 0.0, "valid_scores": 0,
+                                               "max_abs_score": 0.0})
+                row["rows"] += 1
+                row["gain"] += effect == "Gain"
+                row["loss"] += effect == "Loss"
+                if score is not None and math.isfinite(score):
+                    row["score_sum"] += score
+                    row["valid_scores"] += 1
+                    row["max_abs_score"] = max(row["max_abs_score"], abs(score))
+        report = settings["workspace"] / "results" / "deltasvm_tf_summary.tsv"
+        fields = ("TfName", "rows", "gain", "loss", "mean_score", "max_abs_score")
+        with report.open("w") as stream:
+            stream.write("\t".join(fields) + "\n")
+            for name, row in sorted(summary.items()):
+                mean_score = row["score_sum"] / row["valid_scores"] if row["valid_scores"] else "."
+                values = (name, row["rows"], row["gain"], row["loss"], mean_score, row["max_abs_score"])
+                stream.write("\t".join(map(str, values)) + "\n")
+        record_source("deltaSVM_tf_summary", report,
+                      combined_results=str(source), combined_sha256=file_digest(source),
+                      report_sha256=file_digest(report))
+        print(f"TF score summary saved for {len(summary)} TFs: {report}")
+
+    return (summarize_tf_scores,)
+
+
+@app.cell
+def __(mo, summarize_tf_scores, tf_summary_button):
+    mo.stop(not tf_summary_button.value, mo.md("Press the button above to run this step."))
+    summarize_tf_scores()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 16. Export Results Using Effect and Score Filters
+    Creates `results/deltasvm_filtered.parquet` from the combined results. Choose Gain,
+    Loss, or both effects and set the minimum absolute deltaSVM score.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    minimum_score_input = mo.ui.text(value="0", label="Minimum absolute deltaSVM score")
+    effect_input = mo.ui.dropdown(options=["Both", "Gain", "Loss"], value="Both", label="Effect")
+    filtered_export_button = mo.ui.run_button(label='Create filtered Parquet export')
+    mo.vstack([minimum_score_input, effect_input, filtered_export_button])
+    return effect_input, filtered_export_button, minimum_score_input
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def export_filtered_results(minimum_score, effect_choice):
+        import math
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+
+        try:
+            minimum_score = float(minimum_score)
+        except (TypeError, ValueError):
+            raise ValueError("Enter a numeric minimum absolute score.")
+        if not math.isfinite(minimum_score) or minimum_score < 0:
+            raise ValueError("The minimum absolute score must be a finite number at least zero.")
+        if effect_choice not in ("Both", "Gain", "Loss"):
+            raise ValueError("Select Both, Gain, or Loss for the effect filter.")
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before creating a filtered export.")
+        parquet = pq.ParquetFile(source)
+        required = {"Effect", "Score"}
+        missing = sorted(required - set(parquet.schema_arrow.names))
+        if missing:
+            raise ValueError("Combined results are missing required columns: " + ", ".join(missing))
+        destination = settings["workspace"] / "results" / "deltasvm_filtered.parquet"
+        temporary = destination.with_suffix(".parquet.part")
+        rows = 0
+        try:
+            with pq.ParquetWriter(temporary, parquet.schema_arrow) as writer:
+                for batch in parquet.iter_batches(batch_size=50000):
+                    frame = pa.Table.from_batches([batch]).to_pandas()
+                    scores = pd.to_numeric(frame["Score"], errors="coerce")
+                    selected = scores.map(lambda score: math.isfinite(score) if not pd.isna(score) else False)
+                    selected &= scores.abs() >= minimum_score
+                    if effect_choice != "Both":
+                        selected &= frame["Effect"].eq(effect_choice)
+                    filtered = frame.loc[selected]
+                    if not filtered.empty:
+                        writer.write_table(pa.Table.from_pandas(filtered, schema=parquet.schema_arrow,
+                                                               preserve_index=False))
+                        rows += len(filtered)
+            if not rows:
+                raise ValueError("No rows matched the selected effect and minimum score.")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("filtered_deltasvm_results", destination,
+                      source=str(source), source_sha256=file_digest(source),
+                      minimum_absolute_score=minimum_score, effect=effect_choice,
+                      rows=rows, sha256=file_digest(destination))
+        print(f"Saved {rows:,} filtered rows to {destination}")
+
+    return (export_filtered_results,)
+
+
+@app.cell
+def __(effect_input, export_filtered_results, filtered_export_button, minimum_score_input, mo):
+    mo.stop(not filtered_export_button.value, mo.md("Choose filters above, then press the export button."))
+    export_filtered_results(minimum_score_input.value, effect_input.value)
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 17. Export Top Variants for Each TF
+    Selects the variants with the largest absolute deltaSVM scores for each
+    transcription factor and writes them to `results/deltasvm_top_variants_by_tf.tsv`.
+    The ranking keeps only the requested number of rows per TF in memory.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    top_variants_input = mo.ui.text(value="25", label="Maximum variants per TF")
+    top_variants_button = mo.ui.run_button(label='Export top variants by TF')
+    mo.vstack([top_variants_input, top_variants_button])
+    return top_variants_button, top_variants_input
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def export_top_variants_per_tf(limit_value):
+        import csv
+        import heapq
+        import math
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+
+        try:
+            limit = int(limit_value)
+        except (TypeError, ValueError):
+            raise ValueError("Enter a whole number of variants per TF.")
+        if limit < 1 or limit > 1000:
+            raise ValueError("The number of variants per TF must be between 1 and 1000.")
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before ranking variants.")
+        parquet = pq.ParquetFile(source)
+        fields = ("variant", "rsId", "TfId", "TfName", "Effect", "Score")
+        missing = sorted(set(fields) - set(parquet.schema_arrow.names))
+        if missing:
+            raise ValueError("Combined results are missing required columns: " + ", ".join(missing))
+        rankings = {}
+        for batch in parquet.iter_batches(batch_size=50000, columns=list(fields)):
+            frame = pa.Table.from_batches([batch]).to_pandas()
+            scores = pd.to_numeric(frame["Score"], errors="coerce").tolist()
+            for variant, rsid, tfid, name, effect, score in zip(
+                frame["variant"].tolist(), frame["rsId"].tolist(), frame["TfId"].tolist(),
+                frame["TfName"].tolist(), frame["Effect"].tolist(), scores
+            ):
+                if score is None or not math.isfinite(score):
+                    continue
+                key = (abs(score), score, str(variant), str(rsid), str(tfid), str(effect))
+                heap = rankings.setdefault(str(name), [])
+                if len(heap) < limit:
+                    heapq.heappush(heap, key)
+                elif key > heap[0]:
+                    heapq.heapreplace(heap, key)
+        if not rankings:
+            raise ValueError("No finite deltaSVM scores were available for ranking.")
+        destination = settings["workspace"] / "results" / "deltasvm_top_variants_by_tf.tsv"
+        temporary = destination.with_suffix(".tsv.part")
+        rows = 0
+        try:
+            with temporary.open("w", newline="") as stream:
+                writer = csv.writer(stream, delimiter="\t")
+                writer.writerow(fields)
+                for name in sorted(rankings):
+                    for absolute_score, score, variant, rsid, tfid, effect in sorted(rankings[name], reverse=True):
+                        writer.writerow((variant, rsid, tfid, name, effect, score))
+                        rows += 1
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("top_deltasvm_variants_by_tf", destination,
+                      source=str(source), source_sha256=file_digest(source),
+                      maximum_per_tf=limit, rows=rows, sha256=file_digest(destination))
+        print(f"Saved {rows:,} ranked variant rows across {len(rankings)} TFs to {destination}")
+
+    return (export_top_variants_per_tf,)
+
+
+@app.cell
+def __(export_top_variants_per_tf, mo, top_variants_button, top_variants_input):
+    mo.stop(not top_variants_button.value, mo.md("Choose a per-TF row limit, then press the export button."))
+    export_top_variants_per_tf(top_variants_input.value)
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 18. Check Combined Results Are Current
+    Checks the combined Parquet checksum, selected chromosome list, and source file
+    checksums against the provenance manifest. Results are written to
+    `results/deltasvm_combined_validation.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    combined_validation_button = mo.ui.run_button(label='Check combined result provenance')
+    combined_validation_button
+    return (combined_validation_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def validate_combined_provenance():
+        from pathlib import Path
+
+        workspace = settings["workspace"]
+        manifest_path = workspace / "provenance.json"
+        combined_path = workspace / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not manifest_path.is_file():
+            raise FileNotFoundError("The provenance manifest is missing. Run the combine section first.")
+        manifest = json.loads(manifest_path.read_text())
+        record = manifest.get("sources", {}).get("combined_deltasvm_results")
+        findings = []
+        if not isinstance(record, dict):
+            findings.append("combined result provenance record is missing")
+        else:
+            if record.get("chromosomes") != list(settings["chromosomes"]):
+                findings.append("selected chromosome list differs from the combined result")
+            expected_output_digest = record.get("sha256")
+            if not combined_path.is_file() or not combined_path.stat().st_size:
+                findings.append("combined Parquet file is missing or empty")
+            elif not expected_output_digest or file_digest(combined_path) != expected_output_digest:
+                findings.append("combined Parquet checksum differs from provenance")
+            for source_path, expected_digest in record.get("source_sha256", {}).items():
+                source = Path(source_path)
+                if not source.is_file() or not source.stat().st_size:
+                    findings.append(f"source export is missing: {source_path}")
+                elif file_digest(source) != expected_digest:
+                    findings.append(f"source export changed: {source_path}")
+        status = "current" if not findings else "stale"
+        report = workspace / "results" / "deltasvm_combined_validation.tsv"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        temporary = report.with_suffix(".tsv.part")
+        with temporary.open("w") as stream:
+            stream.write("status\tdetail\n")
+            if findings:
+                for finding in findings:
+                    stream.write(f"{status}\t{finding}\n")
+            else:
+                stream.write("current\tCombined results match the selected chromosomes and recorded source checksums.\n")
+        temporary.replace(report)
+        record_source("combined_results_validation", report, status=status, findings=findings,
+                      combined_results=str(combined_path), report_sha256=file_digest(report))
+        if findings:
+            print("Combined results are stale: " + "; ".join(findings))
+        else:
+            print(f"Combined results are current: {combined_path}")
+        print(f"Validation report saved to {report}")
+
+    return (validate_combined_provenance,)
+
+
+@app.cell
+def __(combined_validation_button, mo, validate_combined_provenance):
+    mo.stop(not combined_validation_button.value, mo.md("Press the button above to check the combined output."))
+    validate_combined_provenance()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 19. Package Results for Sharing
+    Bundles the combined Parquet file, available summary reports, and the current
+    provenance manifest into `results/deltasvm_results_bundle.zip`. The archive
+    includes a manifest with file sizes and SHA-256 checksums.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    bundle_button = mo.ui.run_button(label='Create results bundle')
+    bundle_button
+    return (bundle_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def create_results_bundle():
+        import zipfile
+        from datetime import datetime, timezone
+
+        workspace = settings["workspace"]
+        results = workspace / "results"
+        provenance = workspace / "provenance.json"
+        required = results / "deltasvm_selected_chromosomes.parquet"
+        if not required.is_file() or not required.stat().st_size:
+            raise FileNotFoundError("Combine chromosome results before packaging the result bundle.")
+        if not provenance.is_file() or not provenance.stat().st_size:
+            raise FileNotFoundError("The provenance manifest is missing. Run the combine section first.")
+        filenames = (
+            "deltasvm_selected_chromosomes.parquet",
+            "deltasvm_qc_report.tsv",
+            "deltasvm_tf_summary.tsv",
+            "deltasvm_filtered.parquet",
+            "deltasvm_top_variants_by_tf.tsv",
+            "deltasvm_combined_validation.tsv",
+        )
+        files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
+        files.append((provenance, "provenance.json"))
+        inventory = [{"path": arcname, "size_bytes": path.stat().st_size,
+                      "sha256": file_digest(path)} for path, arcname in files]
+        bundle_manifest = {
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "chromosomes": list(settings["chromosomes"]),
+            "files": inventory,
+        }
+        destination = results / "deltasvm_results_bundle.zip"
+        temporary = destination.with_suffix(".zip.part")
+        try:
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+                for path, arcname in files:
+                    archive.write(path, arcname=arcname)
+                archive.writestr("bundle_manifest.json", json.dumps(bundle_manifest, indent=2) + "\n")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("deltaSVM_results_bundle", destination,
+                      included_files=[item["path"] for item in inventory],
+                      sha256=file_digest(destination), size_bytes=destination.stat().st_size)
+        print(f"Created results bundle with {len(files)} files: {destination}")
+
+    return (create_results_bundle,)
+
+
+@app.cell
+def __(bundle_button, create_results_bundle, mo):
+    mo.stop(not bundle_button.value, mo.md("Press the button above to package available results."))
+    create_results_bundle()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 20. Download the Results Bundle
+    After creating the bundle in section 19, use the download button to save the ZIP
+    archive to your computer. The file is streamed from disk when the download starts.
+    """)
+    return
+
+
+@app.cell
+def __(mo, settings):
+    bundle_path = settings["workspace"] / "results" / "deltasvm_results_bundle.zip"
+
+    def open_results_bundle():
+        if not bundle_path.is_file() or not bundle_path.stat().st_size:
+            raise FileNotFoundError("Create the results bundle in section 19 before downloading it.")
+        return bundle_path.open("rb")
+
+    mo.download(data=open_results_bundle, filename="deltasvm_results_bundle.zip",
+                mimetype="application/zip", label="Download deltaSVM results bundle")
+    return
+
+
 if __name__ == "__main__":
     app.run()
