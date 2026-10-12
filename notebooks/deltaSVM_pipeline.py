@@ -1213,5 +1213,87 @@ def __(combine_button, combine_chromosome_results, mo):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 14. Validate and Summarize the Combined Results
+    Streams the combined Parquet file and writes chromosome-level quality metrics to
+    `results/deltasvm_qc_report.tsv`. The report includes row and effect counts,
+    distinct TF symbols, invalid scores, and missing rsID or Ensembl ID annotations.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    qc_button = mo.ui.run_button(label='Validate combined results')
+    qc_button
+    return (qc_button,)
+
+
+@app.cell
+def __(file_digest, mo, record_source, settings):
+    def validate_combined_results():
+        import math
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before running quality checks.")
+        parquet = pq.ParquetFile(source)
+        required = {"variant", "rsId", "TfId", "TfName", "Effect", "Score"}
+        missing_columns = sorted(required - set(parquet.schema_arrow.names))
+        if missing_columns:
+            raise ValueError("Combined results are missing required columns: " + ", ".join(missing_columns))
+        summaries = {}
+        for batch in parquet.iter_batches(batch_size=50000, columns=sorted(required)):
+            frame = pa.Table.from_batches([batch]).to_pandas()
+            chromosomes = frame["variant"].astype(str).str.split("_", n=1).str[0]
+            scores = pd.to_numeric(frame["Score"], errors="coerce").tolist()
+            for chrom, effect, score, rsid, tfid, tf_name in zip(
+                chromosomes.tolist(), frame["Effect"].tolist(), scores, frame["rsId"].tolist(),
+                frame["TfId"].tolist(), frame["TfName"].tolist()
+            ):
+                row = summaries.setdefault(chrom, {
+                    "rows": 0, "gain": 0, "loss": 0, "invalid_effect": 0,
+                    "invalid_score": 0, "missing_rsid": 0, "missing_tfid": 0,
+                    "tf_names": set()
+                })
+                row["rows"] += 1
+                row["gain"] += effect == "Gain"
+                row["loss"] += effect == "Loss"
+                row["invalid_effect"] += effect not in ("Gain", "Loss")
+                row["invalid_score"] += score is None or not math.isfinite(score)
+                row["missing_rsid"] += rsid is None or pd.isna(rsid) or rsid in (".", "")
+                row["missing_tfid"] += tfid is None or pd.isna(tfid) or tfid in (".", "")
+                row["tf_names"].add(str(tf_name))
+        report = settings["workspace"] / "results" / "deltasvm_qc_report.tsv"
+        fields = ("chromosome", "rows", "gain", "loss", "invalid_effect", "invalid_score",
+                  "missing_rsid", "missing_tfid", "distinct_tf_names")
+        with report.open("w") as stream:
+            stream.write("\t".join(fields) + "\n")
+            for chrom in sorted(summaries):
+                row = summaries[chrom]
+                values = (chrom, row["rows"], row["gain"], row["loss"], row["invalid_effect"],
+                          row["invalid_score"], row["missing_rsid"], row["missing_tfid"], len(row["tf_names"]))
+                stream.write("\t".join(map(str, values)) + "\n")
+        record_source("combined_deltasvm_qc_report", report,
+                      combined_results=str(source), combined_sha256=file_digest(source),
+                      report_sha256=file_digest(report))
+        print(f"Quality report saved to {report}")
+        print(f"Rows: {sum(row['rows'] for row in summaries.values()):,}; chromosomes: {len(summaries)}")
+
+    return (validate_combined_results,)
+
+
+@app.cell
+def __(mo, qc_button, validate_combined_results):
+    mo.stop(not qc_button.value, mo.md("Press the button above to run this step."))
+    validate_combined_results()
+    return
+
+
 if __name__ == "__main__":
     app.run()
