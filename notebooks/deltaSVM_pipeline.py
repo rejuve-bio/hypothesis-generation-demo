@@ -1615,5 +1615,79 @@ def __(combined_validation_button, mo, validate_combined_provenance):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 19. Package Results for Sharing
+    Bundles the combined Parquet file, available summary reports, and the current
+    provenance manifest into `results/deltasvm_results_bundle.zip`. The archive
+    includes a manifest with file sizes and SHA-256 checksums.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    bundle_button = mo.ui.run_button(label='Create results bundle')
+    bundle_button
+    return (bundle_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def create_results_bundle():
+        import zipfile
+        from datetime import datetime, timezone
+
+        workspace = settings["workspace"]
+        results = workspace / "results"
+        provenance = workspace / "provenance.json"
+        required = results / "deltasvm_selected_chromosomes.parquet"
+        if not required.is_file() or not required.stat().st_size:
+            raise FileNotFoundError("Combine chromosome results before packaging the result bundle.")
+        if not provenance.is_file() or not provenance.stat().st_size:
+            raise FileNotFoundError("The provenance manifest is missing. Run the combine section first.")
+        filenames = (
+            "deltasvm_selected_chromosomes.parquet",
+            "deltasvm_qc_report.tsv",
+            "deltasvm_tf_summary.tsv",
+            "deltasvm_filtered.parquet",
+            "deltasvm_top_variants_by_tf.tsv",
+            "deltasvm_combined_validation.tsv",
+        )
+        files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
+        files.append((provenance, "provenance.json"))
+        inventory = [{"path": arcname, "size_bytes": path.stat().st_size,
+                      "sha256": file_digest(path)} for path, arcname in files]
+        bundle_manifest = {
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "chromosomes": list(settings["chromosomes"]),
+            "files": inventory,
+        }
+        destination = results / "deltasvm_results_bundle.zip"
+        temporary = destination.with_suffix(".zip.part")
+        try:
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+                for path, arcname in files:
+                    archive.write(path, arcname=arcname)
+                archive.writestr("bundle_manifest.json", json.dumps(bundle_manifest, indent=2) + "\n")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("deltaSVM_results_bundle", destination,
+                      included_files=[item["path"] for item in inventory],
+                      sha256=file_digest(destination), size_bytes=destination.stat().st_size)
+        print(f"Created results bundle with {len(files)} files: {destination}")
+
+    return (create_results_bundle,)
+
+
+@app.cell
+def __(bundle_button, create_results_bundle, mo):
+    mo.stop(not bundle_button.value, mo.md("Press the button above to package available results."))
+    create_results_bundle()
+    return
+
+
 if __name__ == "__main__":
     app.run()
