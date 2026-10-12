@@ -1654,10 +1654,12 @@ def __(file_digest, json, record_source, settings):
             "deltasvm_filtered.parquet",
             "deltasvm_top_variants_by_tf.tsv",
             "deltasvm_combined_validation.tsv",
+            "deltasvm_manifest_validation.tsv",
             "deltasvm_run_manifest.json",
             f"{settings['single']}_run_record.json",
             "deltasvm_skipped_variants.tsv",
             "deltasvm_skipped_variant_summary.tsv",
+            "deltasvm_bundle_validation.tsv",
             "README.txt",
         )
         files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
@@ -2064,6 +2066,7 @@ deltasvm_skipped_variants.tsv: skipped variants with chromosome and exclusion re
 deltasvm_skipped_variant_summary.tsv: skipped variant counts grouped by exclusion reason.
 deltasvm_combined_validation.tsv: check of combined output checksums and selected chromosomes.
 deltasvm_manifest_validation.tsv: check of manifest output checksums and selected chromosomes.
+deltasvm_bundle_validation.tsv: check that archived files match their recorded sizes and checksums.
 deltasvm_run_manifest.json: software versions, settings, source provenance, and result checksums.
 {settings['single']}_run_record.json: selected chromosome input fingerprints, run settings, TF completion count, and output checksums.
 deltasvm_results_bundle.zip: archive of available result files and provenance.
@@ -2085,6 +2088,86 @@ The predictions use the supplied human TF models and do not provide fly-specific
 def __(data_dictionary_button, mo, write_results_data_dictionary):
     mo.stop(not data_dictionary_button.value, mo.md("Press the button above to document the results."))
     write_results_data_dictionary()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 26. Verify the Results Bundle
+    Checks each packaged file against the SHA-256 checksum and size recorded in the
+    bundle manifest, then writes `results/deltasvm_bundle_validation.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    bundle_validation_button = mo.ui.run_button(label='Verify results bundle')
+    bundle_validation_button
+    return (bundle_validation_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def validate_results_bundle():
+        import hashlib
+        import zipfile
+
+        results = settings["workspace"] / "results"
+        bundle = results / "deltasvm_results_bundle.zip"
+        if not bundle.is_file() or not bundle.stat().st_size:
+            raise FileNotFoundError("Create the results bundle in section 19 before verifying it.")
+        findings = []
+        with zipfile.ZipFile(bundle) as archive:
+            try:
+                embedded = json.loads(archive.read("bundle_manifest.json"))
+            except KeyError:
+                raise ValueError("The ZIP archive does not contain bundle_manifest.json.")
+            for item in embedded.get("files", []):
+                name = item.get("path")
+                try:
+                    info = archive.getinfo(name)
+                except KeyError:
+                    findings.append(f"file is missing from archive: {name}")
+                    continue
+                digest = hashlib.sha256()
+                size = 0
+                with archive.open(info) as stream:
+                    for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                        digest.update(chunk)
+                        size += len(chunk)
+                if size != item.get("size_bytes"):
+                    findings.append(f"file size differs from bundle manifest: {name}")
+                if digest.hexdigest() != item.get("sha256"):
+                    findings.append(f"file checksum differs from bundle manifest: {name}")
+        status = "valid" if not findings else "invalid"
+        report = results / "deltasvm_bundle_validation.tsv"
+        temporary = report.with_suffix(".tsv.part")
+        with temporary.open("w") as stream:
+            stream.write("status\tdetail\n")
+            if findings:
+                for finding in findings:
+                    stream.write(f"{status}\t{finding}\n")
+            else:
+                stream.write("valid\tEvery packaged file matches its size and SHA-256 checksum.\n")
+        temporary.replace(report)
+        record_source("deltaSVM_bundle_validation", report, status=status,
+                      bundle=str(bundle), bundle_sha256=file_digest(bundle),
+                      findings=findings, report_sha256=file_digest(report))
+        if findings:
+            print("Results bundle validation failed: " + "; ".join(findings))
+        else:
+            print("Every file in the results bundle passed checksum validation.")
+        print(f"Validation report saved to {report}")
+
+    return (validate_results_bundle,)
+
+
+@app.cell
+def __(bundle_validation_button, mo, validate_results_bundle):
+    mo.stop(not bundle_validation_button.value, mo.md("Press the button above to verify the archive."))
+    validate_results_bundle()
     return
 
 
