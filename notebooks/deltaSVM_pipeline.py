@@ -177,18 +177,54 @@ def __(Path, settings):
         temporary.replace(destination)
 
     def download_file(url, destination, expected_md5=None):
+        import re
+        import time
+
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.is_file() or destination.stat().st_size == 0:
             temporary = destination.with_name(destination.name + ".part")
-            request = urllib.request.Request(url, headers={"User-Agent": "deltaSVM-notebook"})
             try:
-                with urllib.request.urlopen(request, timeout=120) as response, temporary.open("wb") as output:
-                    length = response.headers.get("Content-Length")
-                    shutil.copyfileobj(response, output, length=8 * 1024 * 1024)
-                if not temporary.stat().st_size or (length and temporary.stat().st_size != int(length)):
+                offset = temporary.stat().st_size if temporary.is_file() else 0
+                headers = {"User-Agent": "deltaSVM-notebook"}
+                if offset:
+                    headers["Range"] = f"bytes={offset}-"
+                request = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    status = getattr(response, "status", response.getcode())
+                    content_range = response.headers.get("Content-Range", "")
+                    match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+|\*)", content_range)
+                    if status == 206:
+                        if not match or int(match.group(1)) != offset:
+                            raise ValueError(f"Unexpected partial response for {url}: {content_range}")
+                        total = int(match.group(3)) if match.group(3) != "*" else None
+                        mode = "ab" if offset else "wb"
+                    elif status == 200:
+                        offset = 0
+                        total = int(response.headers["Content-Length"]) if response.headers.get("Content-Length") else None
+                        mode = "wb"
+                    else:
+                        raise ValueError(f"Unexpected HTTP status {status} for {url}")
+                    received = offset
+                    last_report = time.monotonic()
+                    with temporary.open(mode) as output:
+                        while True:
+                            chunk = response.read(8 * 1024 * 1024)
+                            if not chunk:
+                                break
+                            output.write(chunk)
+                            received += len(chunk)
+                            now = time.monotonic()
+                            if now - last_report >= 5:
+                                if total:
+                                    print(f"{destination.name}: {received:,}/{total:,} bytes ({100 * received / total:.1f}%)", flush=True)
+                                else:
+                                    print(f"{destination.name}: {received:,} bytes", flush=True)
+                                last_report = now
+                if not temporary.is_file() or not temporary.stat().st_size or (total and temporary.stat().st_size != total):
                     raise ValueError(f"Incomplete download: {url}")
                 if expected_md5 and file_digest(temporary, "md5") != expected_md5:
+                    temporary.unlink(missing_ok=True)
                     raise ValueError(f"Checksum mismatch: {url}")
                 temporary.replace(destination)
             except Exception as error:
@@ -277,7 +313,9 @@ def __(mo):
     ## 0b. Download Reference, Weights and Thresholds
     The reference is GRCh38 with UCSC chromosome names. Downloaded gzip data are
     expanded once and indexed with pysam. Existing files supplied in Configuration
-    are reused. The model and threshold checks require 94 matching human TFs.
+    are reused. Interrupted downloads resume when the server supports byte ranges;
+    otherwise the downloader restarts the file. Download progress and integrity checks
+    are reported. The model and threshold checks require 94 matching human TFs.
     The order of the PBS thresholds defines the columns of the deltaSVM weight table.
     """)
     return
