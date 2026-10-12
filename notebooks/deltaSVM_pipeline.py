@@ -2366,5 +2366,44 @@ def __(mo, settings):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 31. Download Individual Reports and Tables
+    Use the buttons below to download available result files individually. Generate
+    an output in its section before downloading it.
+    """)
+    return
+
+
+@app.cell
+def __(mo, settings):
+    results_directory = settings["workspace"] / "results"
+    download_files = (
+        ("deltasvm_qc_report.tsv", "text/tab-separated-values"),
+        ("deltasvm_tf_summary.tsv", "text/tab-separated-values"),
+        ("deltasvm_top_variants_by_tf.tsv", "text/tab-separated-values"),
+        ("deltasvm_skipped_variants.tsv", "text/tab-separated-values"),
+        ("deltasvm_skipped_variant_summary.tsv", "text/tab-separated-values"),
+        ("deltasvm_filtered.parquet", "application/octet-stream"),
+        ("deltasvm_run_manifest.json", "application/json"),
+        (f"{settings['single']}_run_record.json", "application/json"),
+        ("README.txt", "text/plain"),
+    )
+    download_buttons = []
+    for filename, mimetype in download_files:
+        path = results_directory / filename
+
+        def open_result(path=path):
+            if not path.is_file() or not path.stat().st_size:
+                raise FileNotFoundError(f"Generate {path.name} in its pipeline section before downloading it.")
+            return path.open("rb")
+
+        download_buttons.append(mo.download(data=open_result, filename=filename,
+                                            mimetype=mimetype, label=f"Download {filename}"))
+    mo.vstack(download_buttons)
+    return
+
+
 if __name__ == "__main__":
     app.run()
