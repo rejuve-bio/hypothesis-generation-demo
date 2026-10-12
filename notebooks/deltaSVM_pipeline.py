@@ -1654,6 +1654,15 @@ def __(file_digest, json, record_source, settings):
             "deltasvm_filtered.parquet",
             "deltasvm_top_variants_by_tf.tsv",
             "deltasvm_combined_validation.tsv",
+            "deltasvm_manifest_validation.tsv",
+            "deltasvm_run_manifest.json",
+            f"{settings['single']}_run_record.json",
+            "deltasvm_skipped_variants.tsv",
+            "deltasvm_skipped_variant_summary.tsv",
+            "deltasvm_bundle_validation.tsv",
+            "deltasvm_selected_chromosomes.tsv.gz",
+            "deltasvm_filtered.tsv.gz",
+            "README.txt",
         )
         files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
         files.append((provenance, "provenance.json"))
@@ -1710,6 +1719,689 @@ def __(mo, settings):
 
     mo.download(data=open_results_bundle, filename="deltasvm_results_bundle.zip",
                 mimetype="application/zip", label="Download deltaSVM results bundle")
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 21. Write a Reproducibility Manifest
+    Records the selected configuration, software versions, source provenance, and
+    checksums for available result files in `results/deltasvm_run_manifest.json`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    run_manifest_button = mo.ui.run_button(label='Write reproducibility manifest')
+    run_manifest_button
+    return (run_manifest_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def write_run_manifest():
+        import platform
+        import sys
+        from datetime import datetime, timezone
+        from importlib.metadata import PackageNotFoundError, version
+
+        workspace = settings["workspace"]
+        results = workspace / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        provenance_path = workspace / "provenance.json"
+        provenance = json.loads(provenance_path.read_text()) if provenance_path.is_file() else {}
+        packages = {}
+        for package in ("marimo", "pandas", "pyarrow", "pysam"):
+            try:
+                packages[package] = version(package)
+            except PackageNotFoundError:
+                packages[package] = None
+        outputs = {}
+        if results.is_dir():
+            for path in sorted(results.iterdir()):
+                if path.is_file() and path.name != "deltasvm_run_manifest.json":
+                    outputs[path.name] = {"size_bytes": path.stat().st_size,
+                                          "sha256": file_digest(path)}
+        normalized_settings = {
+            key: [str(item) for item in value] if isinstance(value, tuple)
+            else str(value) if hasattr(value, "as_posix") else value
+            for key, value in settings.items()
+        }
+        manifest = {
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "python": sys.version,
+            "platform": platform.platform(),
+            "packages": packages,
+            "settings": normalized_settings,
+            "provenance_sources": provenance.get("sources", {}),
+            "outputs": outputs,
+        }
+        destination = results / "deltasvm_run_manifest.json"
+        temporary = destination.with_suffix(".json.part")
+        temporary.write_text(json.dumps(manifest, indent=2) + "\n")
+        temporary.replace(destination)
+        record_source("deltaSVM_run_manifest", destination,
+                      sha256=file_digest(destination), output_count=len(outputs))
+        print(f"Reproducibility manifest saved to {destination}")
+
+    return (write_run_manifest,)
+
+
+@app.cell
+def __(mo, run_manifest_button, write_run_manifest):
+    mo.stop(not run_manifest_button.value, mo.md("Press the button above to write the manifest."))
+    write_run_manifest()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 22. Validate the Reproducibility Manifest
+    Checks that the selected chromosome list and recorded result checksums still match
+    the current workspace. The check is saved to `results/deltasvm_manifest_validation.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    manifest_validation_button = mo.ui.run_button(label='Validate reproducibility manifest')
+    manifest_validation_button
+    return (manifest_validation_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def validate_run_manifest():
+        results = settings["workspace"] / "results"
+        manifest_path = results / "deltasvm_run_manifest.json"
+        if not manifest_path.is_file() or not manifest_path.stat().st_size:
+            raise FileNotFoundError("Write the reproducibility manifest in section 21 first.")
+        manifest = json.loads(manifest_path.read_text())
+        findings = []
+        saved_chromosomes = manifest.get("settings", {}).get("chromosomes")
+        if saved_chromosomes != list(settings["chromosomes"]):
+            findings.append("selected chromosome list differs from the manifest")
+        expected_outputs = manifest.get("outputs", {})
+        for name, details in sorted(expected_outputs.items()):
+            path = results / name
+            if not path.is_file() or not path.stat().st_size:
+                findings.append(f"output is missing or empty: {name}")
+            elif file_digest(path) != details.get("sha256"):
+                findings.append(f"output checksum differs from the manifest: {name}")
+        status = "current" if not findings else "stale"
+        report = results / "deltasvm_manifest_validation.tsv"
+        temporary = report.with_suffix(".tsv.part")
+        with temporary.open("w") as stream:
+            stream.write("status\tdetail\n")
+            if findings:
+                for finding in findings:
+                    stream.write(f"{status}\t{finding}\n")
+            else:
+                stream.write("current\tSelected chromosomes and recorded output checksums match the manifest.\n")
+        temporary.replace(report)
+        record_source("deltaSVM_manifest_validation", report, status=status,
+                      findings=findings, report_sha256=file_digest(report))
+        if findings:
+            print("Reproducibility manifest is stale: " + "; ".join(findings))
+        else:
+            print(f"Reproducibility manifest is current for {len(expected_outputs)} outputs.")
+        print(f"Validation report saved to {report}")
+
+    return (validate_run_manifest,)
+
+
+@app.cell
+def __(manifest_validation_button, mo, validate_run_manifest):
+    mo.stop(not manifest_validation_button.value, mo.md("Press the button above to check the manifest."))
+    validate_run_manifest()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 23. Export a Selected Chromosome Run Record
+    Saves the current input fingerprints, run settings, completed TF count, and
+    checksums for available chromosome outputs to `results/chrN_run_record.json`.
+    The record is created only when the run inputs still match their saved fingerprints.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    run_record_button = mo.ui.run_button(label='Export selected chromosome run record')
+    run_record_button
+    return (run_record_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, run_signature, settings):
+    def export_chromosome_run_record():
+        from datetime import datetime, timezone
+
+        chrom = settings["single"]
+        directory = settings["workspace"] / "runs" / chrom
+        input_record = directory / "inputs.json"
+        if not input_record.is_file():
+            raise FileNotFoundError(f"Prepare and run {chrom} before exporting its run record.")
+        input_fingerprints = json.loads(input_record.read_text())
+        current_fingerprints = run_signature(chrom)
+        if input_fingerprints != current_fingerprints:
+            raise RuntimeError(f"{chrom} inputs changed after scoring. Rerun the chromosome before exporting its record.")
+        output_paths = (
+            directory / "input_snp.tsv",
+            directory / "data" / "skipped.tsv",
+            directory / "out" / "pbs.pred.tsv",
+            directory / "out" / "obs.pred.tsv",
+            directory / "out" / "summary.pred.tsv",
+            directory / "out" / f"{chrom}_deltasvm.parquet",
+            directory / "out" / "tf_id_unmapped.tsv",
+        )
+        outputs = {
+            str(path.relative_to(directory)): {"size_bytes": path.stat().st_size,
+                                              "sha256": file_digest(path)}
+            for path in output_paths if path.is_file()
+        }
+        completed_tfs = sum(path.is_file() and path.stat().st_size > 0
+                            for path in (directory / "tmp").glob("*.merge.gkm.tsv"))
+        record = {
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "chromosome": chrom,
+            "settings": {"threads": settings["threads"], "tf_jobs": settings["tf_jobs"],
+                         "use_opentargets": settings["use_ot"],
+                         "common_variants_only": settings["common_only"],
+                         "maximum_variants": settings["max_snps"]},
+            "input_fingerprints": input_fingerprints,
+            "completed_tf_predictions": completed_tfs,
+            "output_files": outputs,
+        }
+        results = settings["workspace"] / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        destination = results / f"{chrom}_run_record.json"
+        temporary = destination.with_suffix(".json.part")
+        temporary.write_text(json.dumps(record, indent=2) + "\n")
+        temporary.replace(destination)
+        record_source(f"{chrom}_run_record", destination,
+                      chromosome=chrom, sha256=file_digest(destination),
+                      output_count=len(outputs))
+        print(f"Run record saved for {chrom}: {destination}")
+
+    return (export_chromosome_run_record,)
+
+
+@app.cell
+def __(export_chromosome_run_record, mo, run_record_button):
+    mo.stop(not run_record_button.value, mo.md("Press the button above to export the chromosome run record."))
+    export_chromosome_run_record()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 24. Summarize Skipped Variants
+    Combines `data/skipped.tsv` from each selected chromosome into
+    `results/deltasvm_skipped_variants.tsv` and writes exclusion counts by reason to
+    `results/deltasvm_skipped_variant_summary.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    skipped_variants_button = mo.ui.run_button(label='Summarize skipped variants')
+    skipped_variants_button
+    return (skipped_variants_button,)
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def summarize_skipped_variants():
+        import csv
+        from collections import Counter
+
+        sources = [(chrom, settings["workspace"] / "runs" / chrom / "data" / "skipped.tsv")
+                   for chrom in settings["chromosomes"]]
+        missing = [str(path) for _, path in sources if not path.is_file() or not path.stat().st_size]
+        if missing:
+            raise FileNotFoundError("Prepare every selected chromosome before summarizing skipped variants: " + ", ".join(missing))
+        results = settings["workspace"] / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        detail_path = results / "deltasvm_skipped_variants.tsv"
+        summary_path = results / "deltasvm_skipped_variant_summary.tsv"
+        detail_temporary = detail_path.with_suffix(".tsv.part")
+        summary_temporary = summary_path.with_suffix(".tsv.part")
+        counts = Counter()
+        rows = 0
+        try:
+            with detail_temporary.open("w", newline="") as detail_stream:
+                writer = csv.writer(detail_stream, delimiter="\t")
+                writer.writerow(("chromosome", "variant", "reason"))
+                for chrom, source in sources:
+                    with source.open(encoding="utf-8", newline="") as source_stream:
+                        reader = csv.DictReader(source_stream, delimiter="\t")
+                        if not reader.fieldnames or not {"variant", "reason"}.issubset(reader.fieldnames):
+                            raise ValueError(f"Unexpected skipped-variant columns in {source}")
+                        for row in reader:
+                            reason = row.get("reason", "")
+                            writer.writerow((chrom, row.get("variant", ""), reason))
+                            counts[reason] += 1
+                            rows += 1
+            with summary_temporary.open("w", newline="") as summary_stream:
+                writer = csv.writer(summary_stream, delimiter="\t")
+                writer.writerow(("reason", "variants"))
+                for reason, count in sorted(counts.items()):
+                    writer.writerow((reason, count))
+            detail_temporary.replace(detail_path)
+            summary_temporary.replace(summary_path)
+        finally:
+            detail_temporary.unlink(missing_ok=True)
+            summary_temporary.unlink(missing_ok=True)
+        source_digests = {str(path): file_digest(path) for _, path in sources}
+        record_source("deltasvm_skipped_variants", detail_path,
+                      chromosomes=list(settings["chromosomes"]), source_sha256=source_digests,
+                      rows=rows, sha256=file_digest(detail_path))
+        record_source("deltasvm_skipped_variant_summary", summary_path,
+                      detail_file=str(detail_path), sha256=file_digest(summary_path))
+        print(f"Combined {rows:,} skipped variants across {len(sources)} chromosomes.")
+        print(f"Reports saved to {detail_path} and {summary_path}")
+
+    return (summarize_skipped_variants,)
+
+
+@app.cell
+def __(mo, skipped_variants_button, summarize_skipped_variants):
+    mo.stop(not skipped_variants_button.value, mo.md("Press the button above to summarize exclusions."))
+    summarize_skipped_variants()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 25. Write a Data Dictionary for the Results
+    Creates `results/README.txt` with the result column definitions, identifier
+    conventions, effect labels, and a guide to the generated reports.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    data_dictionary_button = mo.ui.run_button(label='Write results data dictionary')
+    data_dictionary_button
+    return (data_dictionary_button,)
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def write_results_data_dictionary():
+        results = settings["workspace"] / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        destination = results / "README.txt"
+        content = f"""deltaSVM result files
+
+Selected chromosomes: {', '.join(settings['chromosomes'])}
+Genome build: GRCh38
+
+Combined prediction table
+File: deltasvm_selected_chromosomes.parquet
+Columns:
+  variant: contig_position_reference_allele_alternate_allele identifier.
+  rsId: dbSNP identifier when mapped; a period means no mapping was available.
+  TfId: HGNC Ensembl gene identifier for the TF symbol when available; a period means no mapping was available.
+  TfName: transcription factor symbol used by the supplied human TF models.
+  Effect: Gain or Loss label from the pipeline's preferred allele prediction.
+  Score: numeric deltaSVM score from the supplied model resources.
+
+Compressed text export
+deltasvm_selected_chromosomes.tsv.gz: tab-separated export of the combined prediction table, compressed with gzip.
+deltasvm_filtered.tsv.gz: optional effect and absolute-score filtered TSV export, compressed with gzip.
+
+Reports and derived files
+deltasvm_qc_report.tsv: per-chromosome result counts, effect counts, invalid scores, and missing identifier counts.
+deltasvm_tf_summary.tsv: per-TF row counts, effect counts, mean score, and maximum absolute score.
+deltasvm_filtered.parquet: optional rows filtered by effect and minimum absolute score; settings are in provenance.json.
+deltasvm_top_variants_by_tf.tsv: optional highest absolute-score variants retained per TF.
+deltasvm_skipped_variants.tsv: skipped variants with chromosome and exclusion reason.
+deltasvm_skipped_variant_summary.tsv: skipped variant counts grouped by exclusion reason.
+deltasvm_combined_validation.tsv: check of combined output checksums and selected chromosomes.
+deltasvm_manifest_validation.tsv: check of manifest output checksums and selected chromosomes.
+deltasvm_bundle_validation.tsv: check that archived files match their recorded sizes and checksums.
+deltasvm_run_manifest.json: software versions, settings, source provenance, and result checksums.
+{settings['single']}_run_record.json: selected chromosome input fingerprints, run settings, TF completion count, and output checksums.
+deltasvm_results_bundle.zip: archive of available result files and provenance.
+
+Periods in rsId and TfId fields indicate unavailable annotations. Annotation coverage is reported in deltasvm_qc_report.tsv.
+The predictions use the supplied human TF models and do not provide fly-specific biological validation.
+"""
+        temporary = destination.with_suffix(".txt.part")
+        temporary.write_text(content)
+        temporary.replace(destination)
+        record_source("deltaSVM_results_data_dictionary", destination,
+                      sha256=file_digest(destination), chromosomes=list(settings["chromosomes"]))
+        print(f"Results data dictionary saved to {destination}")
+
+    return (write_results_data_dictionary,)
+
+
+@app.cell
+def __(data_dictionary_button, mo, write_results_data_dictionary):
+    mo.stop(not data_dictionary_button.value, mo.md("Press the button above to document the results."))
+    write_results_data_dictionary()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 26. Verify the Results Bundle
+    Checks each packaged file against the SHA-256 checksum and size recorded in the
+    bundle manifest, then writes `results/deltasvm_bundle_validation.tsv`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    bundle_validation_button = mo.ui.run_button(label='Verify results bundle')
+    bundle_validation_button
+    return (bundle_validation_button,)
+
+
+@app.cell
+def __(file_digest, json, record_source, settings):
+    def validate_results_bundle():
+        import hashlib
+        import zipfile
+
+        results = settings["workspace"] / "results"
+        bundle = results / "deltasvm_results_bundle.zip"
+        if not bundle.is_file() or not bundle.stat().st_size:
+            raise FileNotFoundError("Create the results bundle in section 19 before verifying it.")
+        findings = []
+        with zipfile.ZipFile(bundle) as archive:
+            try:
+                embedded = json.loads(archive.read("bundle_manifest.json"))
+            except KeyError:
+                raise ValueError("The ZIP archive does not contain bundle_manifest.json.")
+            for item in embedded.get("files", []):
+                name = item.get("path")
+                try:
+                    info = archive.getinfo(name)
+                except KeyError:
+                    findings.append(f"file is missing from archive: {name}")
+                    continue
+                digest = hashlib.sha256()
+                size = 0
+                with archive.open(info) as stream:
+                    for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                        digest.update(chunk)
+                        size += len(chunk)
+                if size != item.get("size_bytes"):
+                    findings.append(f"file size differs from bundle manifest: {name}")
+                if digest.hexdigest() != item.get("sha256"):
+                    findings.append(f"file checksum differs from bundle manifest: {name}")
+        status = "valid" if not findings else "invalid"
+        report = results / "deltasvm_bundle_validation.tsv"
+        temporary = report.with_suffix(".tsv.part")
+        with temporary.open("w") as stream:
+            stream.write("status\tdetail\n")
+            if findings:
+                for finding in findings:
+                    stream.write(f"{status}\t{finding}\n")
+            else:
+                stream.write("valid\tEvery packaged file matches its size and SHA-256 checksum.\n")
+        temporary.replace(report)
+        record_source("deltaSVM_bundle_validation", report, status=status,
+                      bundle=str(bundle), bundle_sha256=file_digest(bundle),
+                      findings=findings, report_sha256=file_digest(report))
+        if findings:
+            print("Results bundle validation failed: " + "; ".join(findings))
+        else:
+            print("Every file in the results bundle passed checksum validation.")
+        print(f"Validation report saved to {report}")
+
+    return (validate_results_bundle,)
+
+
+@app.cell
+def __(bundle_validation_button, mo, validate_results_bundle):
+    mo.stop(not bundle_validation_button.value, mo.md("Press the button above to verify the archive."))
+    validate_results_bundle()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 27. Export the Combined Results as Compressed TSV
+    Writes `results/deltasvm_selected_chromosomes.tsv.gz` in bounded batches for
+    analysis tools that do not read Parquet files.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    tsv_export_button = mo.ui.run_button(label='Export combined results as compressed TSV')
+    tsv_export_button
+    return (tsv_export_button,)
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def export_combined_tsv():
+        import gzip
+        import pyarrow.parquet as pq
+
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before creating a TSV export.")
+        parquet = pq.ParquetFile(source)
+        if not parquet.metadata.num_rows:
+            raise ValueError("The combined Parquet file contains no rows to export.")
+        destination = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.tsv.gz"
+        temporary = destination.with_suffix(".gz.part")
+        rows = 0
+        first_batch = True
+        try:
+            with gzip.open(temporary, "wt", encoding="utf-8", newline="") as stream:
+                for batch in parquet.iter_batches(batch_size=50000):
+                    frame = batch.to_pandas()
+                    frame.to_csv(stream, sep="\t", index=False, header=first_batch,
+                                 na_rep=".", lineterminator="\n")
+                    first_batch = False
+                    rows += len(frame)
+            if not rows:
+                raise ValueError("The combined Parquet file contains no rows to export.")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("combined_deltasvm_tsv_gzip", destination,
+                      source=str(source), source_sha256=file_digest(source),
+                      chromosomes=list(settings["chromosomes"]), rows=rows,
+                      sha256=file_digest(destination))
+        print(f"Exported {rows:,} rows to {destination}")
+
+    return (export_combined_tsv,)
+
+
+@app.cell
+def __(export_combined_tsv, mo, tsv_export_button):
+    mo.stop(not tsv_export_button.value, mo.md("Press the button above to create the compressed TSV."))
+    export_combined_tsv()
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 28. Download the Compressed TSV
+    After creating the compressed TSV in section 27, use the download button to save
+    it directly without downloading the full results bundle.
+    """)
+    return
+
+
+@app.cell
+def __(mo, settings):
+    tsv_path = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.tsv.gz"
+
+    def open_combined_tsv():
+        if not tsv_path.is_file() or not tsv_path.stat().st_size:
+            raise FileNotFoundError("Create the compressed TSV in section 27 before downloading it.")
+        return tsv_path.open("rb")
+
+    mo.download(data=open_combined_tsv,
+                filename="deltasvm_selected_chromosomes.tsv.gz",
+                mimetype="application/gzip", label="Download compressed deltaSVM TSV")
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 29. Export Filtered Results as Compressed TSV
+    Applies the effect and minimum absolute score selected in section 16 and writes
+    matching rows to `results/deltasvm_filtered.tsv.gz`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    filtered_tsv_button = mo.ui.run_button(label='Export filtered results as compressed TSV')
+    filtered_tsv_button
+    return (filtered_tsv_button,)
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def export_filtered_tsv(minimum_score_value, effect_choice):
+        import gzip
+        import math
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+
+        try:
+            minimum_score = float(minimum_score_value)
+        except (TypeError, ValueError):
+            raise ValueError("Enter a numeric minimum absolute score in section 16.")
+        if not math.isfinite(minimum_score) or minimum_score < 0:
+            raise ValueError("The minimum absolute score must be a finite number at least zero.")
+        if effect_choice not in ("Both", "Gain", "Loss"):
+            raise ValueError("Select Both, Gain, or Loss in section 16.")
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before creating a filtered TSV.")
+        parquet = pq.ParquetFile(source)
+        destination = settings["workspace"] / "results" / "deltasvm_filtered.tsv.gz"
+        temporary = destination.with_suffix(".gz.part")
+        rows = 0
+        first_batch = True
+        try:
+            with gzip.open(temporary, "wt", encoding="utf-8", newline="") as stream:
+                for batch in parquet.iter_batches(batch_size=50000):
+                    frame = pa.Table.from_batches([batch]).to_pandas()
+                    scores = pd.to_numeric(frame["Score"], errors="coerce")
+                    selected = scores.map(lambda score: math.isfinite(score) if not pd.isna(score) else False)
+                    selected &= scores.abs() >= minimum_score
+                    if effect_choice != "Both":
+                        selected &= frame["Effect"].eq(effect_choice)
+                    filtered = frame.loc[selected]
+                    if not filtered.empty:
+                        filtered.to_csv(stream, sep="\t", index=False, header=first_batch,
+                                        na_rep=".", lineterminator="\n")
+                        first_batch = False
+                        rows += len(filtered)
+            if not rows:
+                raise ValueError("No rows matched the selected effect and minimum score.")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("filtered_deltasvm_tsv_gzip", destination,
+                      source=str(source), source_sha256=file_digest(source),
+                      minimum_absolute_score=minimum_score, effect=effect_choice,
+                      rows=rows, sha256=file_digest(destination))
+        print(f"Exported {rows:,} filtered rows to {destination}")
+
+    return (export_filtered_tsv,)
+
+
+@app.cell
+def __(effect_input, export_filtered_tsv, filtered_tsv_button, minimum_score_input, mo):
+    mo.stop(not filtered_tsv_button.value, mo.md("Choose filters in section 16, then press the export button."))
+    export_filtered_tsv(minimum_score_input.value, effect_input.value)
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 30. Download the Filtered TSV
+    After exporting the filtered TSV in section 29, use the download button to save
+    the compressed file directly.
+    """)
+    return
+
+
+@app.cell
+def __(mo, settings):
+    filtered_tsv_path = settings["workspace"] / "results" / "deltasvm_filtered.tsv.gz"
+
+    def open_filtered_tsv():
+        if not filtered_tsv_path.is_file() or not filtered_tsv_path.stat().st_size:
+            raise FileNotFoundError("Create the filtered TSV in section 29 before downloading it.")
+        return filtered_tsv_path.open("rb")
+
+    mo.download(data=open_filtered_tsv, filename="deltasvm_filtered.tsv.gz",
+                mimetype="application/gzip", label="Download filtered deltaSVM TSV")
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 31. Download Individual Reports and Tables
+    Use the buttons below to download available result files individually. Generate
+    an output in its section before downloading it.
+    """)
+    return
+
+
+@app.cell
+def __(mo, settings):
+    results_directory = settings["workspace"] / "results"
+    download_files = (
+        ("deltasvm_qc_report.tsv", "text/tab-separated-values"),
+        ("deltasvm_tf_summary.tsv", "text/tab-separated-values"),
+        ("deltasvm_top_variants_by_tf.tsv", "text/tab-separated-values"),
+        ("deltasvm_skipped_variants.tsv", "text/tab-separated-values"),
+        ("deltasvm_skipped_variant_summary.tsv", "text/tab-separated-values"),
+        ("deltasvm_filtered.parquet", "application/octet-stream"),
+        ("deltasvm_run_manifest.json", "application/json"),
+        (f"{settings['single']}_run_record.json", "application/json"),
+        ("README.txt", "text/plain"),
+    )
+    download_buttons = []
+    for filename, mimetype in download_files:
+        path = results_directory / filename
+
+        def open_result(path=path):
+            if not path.is_file() or not path.stat().st_size:
+                raise FileNotFoundError(f"Generate {path.name} in its pipeline section before downloading it.")
+            return path.open("rb")
+
+        download_buttons.append(mo.download(data=open_result, filename=filename,
+                                            mimetype=mimetype, label=f"Download {filename}"))
+    mo.vstack(download_buttons)
     return
 
 
