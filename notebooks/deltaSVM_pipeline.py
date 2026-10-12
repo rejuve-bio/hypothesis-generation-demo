@@ -1661,6 +1661,7 @@ def __(file_digest, json, record_source, settings):
             "deltasvm_skipped_variant_summary.tsv",
             "deltasvm_bundle_validation.tsv",
             "deltasvm_selected_chromosomes.tsv.gz",
+            "deltasvm_filtered.tsv.gz",
             "README.txt",
         )
         files = [(results / name, f"results/{name}") for name in filenames if (results / name).is_file()]
@@ -2060,6 +2061,7 @@ Columns:
 
 Compressed text export
 deltasvm_selected_chromosomes.tsv.gz: tab-separated export of the combined prediction table, compressed with gzip.
+deltasvm_filtered.tsv.gz: optional effect and absolute-score filtered TSV export, compressed with gzip.
 
 Reports and derived files
 deltasvm_qc_report.tsv: per-chromosome result counts, effect counts, invalid scores, and missing identifier counts.
@@ -2259,6 +2261,84 @@ def __(mo, settings):
     mo.download(data=open_combined_tsv,
                 filename="deltasvm_selected_chromosomes.tsv.gz",
                 mimetype="application/gzip", label="Download compressed deltaSVM TSV")
+    return
+
+
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 29. Export Filtered Results as Compressed TSV
+    Applies the effect and minimum absolute score selected in section 16 and writes
+    matching rows to `results/deltasvm_filtered.tsv.gz`.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    filtered_tsv_button = mo.ui.run_button(label='Export filtered results as compressed TSV')
+    filtered_tsv_button
+    return (filtered_tsv_button,)
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def export_filtered_tsv(minimum_score_value, effect_choice):
+        import gzip
+        import math
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+
+        try:
+            minimum_score = float(minimum_score_value)
+        except (TypeError, ValueError):
+            raise ValueError("Enter a numeric minimum absolute score in section 16.")
+        if not math.isfinite(minimum_score) or minimum_score < 0:
+            raise ValueError("The minimum absolute score must be a finite number at least zero.")
+        if effect_choice not in ("Both", "Gain", "Loss"):
+            raise ValueError("Select Both, Gain, or Loss in section 16.")
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before creating a filtered TSV.")
+        parquet = pq.ParquetFile(source)
+        destination = settings["workspace"] / "results" / "deltasvm_filtered.tsv.gz"
+        temporary = destination.with_suffix(".gz.part")
+        rows = 0
+        first_batch = True
+        try:
+            with gzip.open(temporary, "wt", encoding="utf-8", newline="") as stream:
+                for batch in parquet.iter_batches(batch_size=50000):
+                    frame = pa.Table.from_batches([batch]).to_pandas()
+                    scores = pd.to_numeric(frame["Score"], errors="coerce")
+                    selected = scores.map(lambda score: math.isfinite(score) if not pd.isna(score) else False)
+                    selected &= scores.abs() >= minimum_score
+                    if effect_choice != "Both":
+                        selected &= frame["Effect"].eq(effect_choice)
+                    filtered = frame.loc[selected]
+                    if not filtered.empty:
+                        filtered.to_csv(stream, sep="\t", index=False, header=first_batch,
+                                        na_rep=".", lineterminator="\n")
+                        first_batch = False
+                        rows += len(filtered)
+            if not rows:
+                raise ValueError("No rows matched the selected effect and minimum score.")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("filtered_deltasvm_tsv_gzip", destination,
+                      source=str(source), source_sha256=file_digest(source),
+                      minimum_absolute_score=minimum_score, effect=effect_choice,
+                      rows=rows, sha256=file_digest(destination))
+        print(f"Exported {rows:,} filtered rows to {destination}")
+
+    return (export_filtered_tsv,)
+
+
+@app.cell
+def __(effect_input, export_filtered_tsv, filtered_tsv_button, minimum_score_input, mo):
+    mo.stop(not filtered_tsv_button.value, mo.md("Choose filters in section 16, then press the export button."))
+    export_filtered_tsv(minimum_score_input.value, effect_input.value)
     return
 
 
