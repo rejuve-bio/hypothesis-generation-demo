@@ -1367,5 +1367,86 @@ def __(mo, summarize_tf_scores, tf_summary_button):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 16. Export Results Using Effect and Score Filters
+    Creates `results/deltasvm_filtered.parquet` from the combined results. Choose Gain,
+    Loss, or both effects and set the minimum absolute deltaSVM score.
+    """)
+    return
+
+
+@app.cell
+def __(mo):
+    minimum_score_input = mo.ui.text(value="0", label="Minimum absolute deltaSVM score")
+    effect_input = mo.ui.dropdown(options=["Both", "Gain", "Loss"], value="Both", label="Effect")
+    filtered_export_button = mo.ui.run_button(label='Create filtered Parquet export')
+    mo.vstack([minimum_score_input, effect_input, filtered_export_button])
+    return effect_input, filtered_export_button, minimum_score_input
+
+
+@app.cell
+def __(file_digest, record_source, settings):
+    def export_filtered_results(minimum_score, effect_choice):
+        import math
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+
+        try:
+            minimum_score = float(minimum_score)
+        except (TypeError, ValueError):
+            raise ValueError("Enter a numeric minimum absolute score.")
+        if not math.isfinite(minimum_score) or minimum_score < 0:
+            raise ValueError("The minimum absolute score must be a finite number at least zero.")
+        if effect_choice not in ("Both", "Gain", "Loss"):
+            raise ValueError("Select Both, Gain, or Loss for the effect filter.")
+        source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
+        if not source.is_file() or not source.stat().st_size:
+            raise FileNotFoundError("Combine the selected chromosome results before creating a filtered export.")
+        parquet = pq.ParquetFile(source)
+        required = {"Effect", "Score"}
+        missing = sorted(required - set(parquet.schema_arrow.names))
+        if missing:
+            raise ValueError("Combined results are missing required columns: " + ", ".join(missing))
+        destination = settings["workspace"] / "results" / "deltasvm_filtered.parquet"
+        temporary = destination.with_suffix(".parquet.part")
+        rows = 0
+        try:
+            with pq.ParquetWriter(temporary, parquet.schema_arrow) as writer:
+                for batch in parquet.iter_batches(batch_size=50000):
+                    frame = pa.Table.from_batches([batch]).to_pandas()
+                    scores = pd.to_numeric(frame["Score"], errors="coerce")
+                    selected = scores.map(lambda score: math.isfinite(score) if not pd.isna(score) else False)
+                    selected &= scores.abs() >= minimum_score
+                    if effect_choice != "Both":
+                        selected &= frame["Effect"].eq(effect_choice)
+                    filtered = frame.loc[selected]
+                    if not filtered.empty:
+                        writer.write_table(pa.Table.from_pandas(filtered, schema=parquet.schema_arrow,
+                                                               preserve_index=False))
+                        rows += len(filtered)
+            if not rows:
+                raise ValueError("No rows matched the selected effect and minimum score.")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        record_source("filtered_deltasvm_results", destination,
+                      source=str(source), source_sha256=file_digest(source),
+                      minimum_absolute_score=minimum_score, effect=effect_choice,
+                      rows=rows, sha256=file_digest(destination))
+        print(f"Saved {rows:,} filtered rows to {destination}")
+
+    return (export_filtered_results,)
+
+
+@app.cell
+def __(effect_input, export_filtered_results, filtered_export_button, minimum_score_input, mo):
+    mo.stop(not filtered_export_button.value, mo.md("Choose filters above, then press the export button."))
+    export_filtered_results(minimum_score_input.value, effect_input.value)
+    return
+
+
 if __name__ == "__main__":
     app.run()
