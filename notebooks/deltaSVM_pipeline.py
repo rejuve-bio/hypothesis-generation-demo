@@ -2237,5 +2237,30 @@ def __(export_combined_tsv, mo, tsv_export_button):
     return
 
 
+@app.cell
+def __(mo):
+    mo.md(r"""
+    ## 28. Download the Compressed TSV
+    After creating the compressed TSV in section 27, use the download button to save
+    it directly without downloading the full results bundle.
+    """)
+    return
+
+
+@app.cell
+def __(mo, settings):
+    tsv_path = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.tsv.gz"
+
+    def open_combined_tsv():
+        if not tsv_path.is_file() or not tsv_path.stat().st_size:
+            raise FileNotFoundError("Create the compressed TSV in section 27 before downloading it.")
+        return tsv_path.open("rb")
+
+    mo.download(data=open_combined_tsv,
+                filename="deltasvm_selected_chromosomes.tsv.gz",
+                mimetype="application/gzip", label="Download compressed deltaSVM TSV")
+    return
+
+
 if __name__ == "__main__":
     app.run()
