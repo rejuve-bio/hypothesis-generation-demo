@@ -481,8 +481,9 @@ def __(Path, download_file, file_digest, json, record_source, settings, urllib):
             for url in urls:
                 download_file(url, directory / Path(urllib.parse.urlparse(url).path).name)
             files = sorted(directory.glob("*.parquet"))
+        opentargets_digests = {f.name: file_digest(f) for f in files}
         record_source("opentargets", directory, configured_url=settings["ot_url"],
-                      files={f.name: file_digest(f) for f in files}, assembly="GRCh38")
+                      files=opentargets_digests, assembly="GRCh38")
         index = settings["workspace"] / "opentargets.sqlite"
         temporary = index.with_suffix(".sqlite.part")
         if temporary.exists():
@@ -506,7 +507,10 @@ def __(Path, download_file, file_digest, json, record_source, settings, urllib):
                             output.write(line)
                             kept += 1
                 temporary_output.replace(destination)
-                destination.with_suffix(".inputs.json").write_text(json.dumps({"source_sha256": file_digest(source)}) + "\n")
+                destination.with_suffix(".inputs.json").write_text(json.dumps({
+                    "source_sha256": file_digest(source),
+                    "opentargets_sha256": opentargets_digests,
+                }) + "\n")
                 print(f"{chrom}: {kept:,} SNPs retained")
         temporary.replace(index)
 
@@ -546,8 +550,16 @@ def __(Path, execute, file_digest, json, load_thresholds, settings, shutil, supp
         if settings["use_ot"]:
             metadata = source.with_suffix(".inputs.json")
             raw = source.with_name(f"{chrom}.tsv")
-            if not metadata.is_file() or json.loads(metadata.read_text())["source_sha256"] != file_digest(raw):
+            current_opentargets = {
+                path.name: file_digest(path)
+                for path in sorted(settings["ot_dir"].glob("*.parquet"))
+            }
+            if not metadata.is_file():
                 raise RuntimeError(f"{chrom}: Open Targets intersection is missing or stale; run section 2 again.")
+            recorded = json.loads(metadata.read_text())
+            if (recorded.get("source_sha256") != file_digest(raw)
+                    or recorded.get("opentargets_sha256") != current_opentargets):
+                raise RuntimeError(f"{chrom}: Open Targets inputs changed or the intersection is stale; run section 2 again.")
         return source
 
     def run_signature(chrom):
