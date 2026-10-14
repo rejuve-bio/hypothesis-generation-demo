@@ -23,10 +23,27 @@ from src.tasks import (
     finemap_region_batch_worker,
     cleanup_sumstats_file,
     save_analysis_state_task,
+    save_opentargets_provenance_task,
     create_analysis_result_task,
     get_results_from_opentargets_task,
 )
 from src.db.credible_sets_handler import CredibleSetsHandler
+
+
+def _record_ot_provenance(user_id, project_id, study_id, used, reason, ot_version):
+    """Record on the project which OpenTargets release this run used. Never fails the run."""
+    version = ot_version or {}
+    provenance = {
+        "study_id": study_id,
+        "used": used,
+        "reason": reason,
+        "ot_release": version.get("ot_release"),
+        "ot_loaded_at": version.get("loaded_at"),
+    }
+    try:
+        save_opentargets_provenance_task.submit(user_id, project_id, provenance).result()
+    except Exception as exc:
+        logger.warning(f"[PIPELINE] Could not record OpenTargets provenance for {project_id}: {exc}")
 
 
 
@@ -136,22 +153,32 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         if opentargets_study_id:
             _ot_check = CredibleSetsHandler()
             try:
-                has_ot_results = _ot_check.study_has_credible_sets(opentargets_study_id)
-                if not has_ot_results:
-                    _ot_load_state = _ot_check.get_load_state()
-                    if _ot_load_state is None:
-                        logger.warning(
-                            f"[PIPELINE] OpenTargets DB is not loaded or unreachable — cannot use "
-                            f"precomputed credible sets for {opentargets_study_id}; falling back to "
-                            f"full fine-mapping (check the ot-db-bootstrap service)"
-                        )
-                    else:
-                        logger.info(
-                            f"[PIPELINE] Study {opentargets_study_id} has no credible sets in "
-                            f"OpenTargets release {_ot_load_state['ot_release']} — running full fine-mapping"
-                        )
+                has_ot_results, _ot_version = _ot_check.check_study_with_version(opentargets_study_id)
             finally:
                 _ot_check.close()
+            if _ot_version is None:
+                logger.warning(
+                    f"[PIPELINE] OpenTargets DB is not loaded or unreachable — cannot use "
+                    f"precomputed credible sets for {opentargets_study_id}; falling back to "
+                    f"full fine-mapping (check the ot-db-bootstrap service)"
+                )
+                _record_ot_provenance(
+                    user_id, project_id, opentargets_study_id, False,
+                    "OpenTargets DB not loaded or unreachable", None,
+                )
+            elif not has_ot_results:
+                logger.info(
+                    f"[PIPELINE] Study {opentargets_study_id} has no credible sets in "
+                    f"OpenTargets release {_ot_version['ot_release']} — running full fine-mapping"
+                )
+                _record_ot_provenance(
+                    user_id, project_id, opentargets_study_id, False,
+                    "study has no credible sets in this release", _ot_version,
+                )
+        else:
+            _record_ot_provenance(
+                user_id, project_id, None, False, "GWAS file is not an OpenTargets study", None,
+            )
 
         cojo_output_path = None
         region_batches = []
@@ -173,11 +200,17 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             }
             save_analysis_state_task.submit(user_id, project_id, ot_state).result()
 
-            combined_results = get_results_from_opentargets_task.submit(
+            combined_results, _ot_version = get_results_from_opentargets_task.submit(
                 user_id, project_id, opentargets_study_id, coverage=coverage,
                 harmonized_file=harmonized_file
             ).result()
             successful_batches = 1 if combined_results is not None and len(combined_results) > 0 else 0
+            _record_ot_provenance(
+                user_id, project_id, opentargets_study_id, bool(successful_batches),
+                "used precomputed credible sets" if successful_batches
+                else "no credible sets returned for study",
+                _ot_version,
+            )
         else:
             # Update analysis state after harmonization
             harmonization_state = {

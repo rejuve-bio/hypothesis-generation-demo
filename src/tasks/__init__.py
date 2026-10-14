@@ -47,6 +47,7 @@ from src.tasks.gene_expression import (
 from src.tasks.project import (
     prepare_gwas_file_task,
     save_analysis_state_task,
+    save_opentargets_provenance_task,
     create_analysis_result_task,
     get_project_analysis_path_task,
     count_gwas_records,

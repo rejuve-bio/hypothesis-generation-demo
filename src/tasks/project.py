@@ -120,6 +120,15 @@ def save_analysis_state_task(user_id, project_id, state_data):
 
 
 @task()
+def save_opentargets_provenance_task(user_id, project_id, provenance):
+    """Record on the project which OpenTargets release this analysis run used."""
+    deps = get_deps()
+    deps["projects"].set_opentargets_provenance(user_id, project_id, provenance)
+    logger.info(f"Saved OpenTargets provenance for project {project_id}: {provenance}")
+    return True
+
+
+@task()
 def create_analysis_result_task(user_id, project_id, combined_results, output_dir):
     """Create and save analysis results"""
     try:
@@ -340,6 +349,9 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
             # Analysis state and parameters  
             "analysis_state": analysis_state_for_public_api(analysis_state),
             "analysis_parameters": analysis_parameters,
+
+            # Which OpenTargets release the latest run used (None = run predates tracking)
+            "opentargets": project.get("opentargets"),
             
             # Credible sets data
             "credible_sets": credible_sets_data,
