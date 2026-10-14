@@ -1691,7 +1691,9 @@ def __(file_digest, json, record_source, settings):
         outputs = {}
         if results.is_dir():
             for path in sorted(results.iterdir()):
-                if path.is_file() and path.name != "deltasvm_run_manifest.json":
+                if path.is_file() and path.name not in {
+                    "deltasvm_run_manifest.json", "deltasvm_manifest_validation.tsv"
+                }:
                     outputs[path.name] = {"size_bytes": path.stat().st_size,
                                           "sha256": file_digest(path)}
         normalized_settings = {
@@ -1751,14 +1753,25 @@ def __(file_digest, json, record_source, settings):
             raise FileNotFoundError("Write the reproducibility manifest in section 21 first.")
         manifest = json.loads(manifest_path.read_text())
         findings = []
-        saved_chromosomes = manifest.get("settings", {}).get("chromosomes")
-        if saved_chromosomes != list(settings["chromosomes"]):
-            findings.append("selected chromosome list differs from the manifest")
+        current_settings = {
+            key: [str(item) for item in value] if isinstance(value, tuple)
+            else str(value) if hasattr(value, "as_posix") else value
+            for key, value in settings.items()
+        }
+        if manifest.get("settings") != current_settings:
+            findings.append("run settings differ from the manifest")
         expected_outputs = manifest.get("outputs", {})
+        excluded_outputs = {"deltasvm_run_manifest.json", "deltasvm_manifest_validation.tsv"}
+        actual_outputs = {path.name for path in results.iterdir()
+                          if path.is_file() and path.name not in excluded_outputs}
+        for name in sorted(set(expected_outputs) - actual_outputs):
+            findings.append(f"output is missing: {name}")
+        for name in sorted(actual_outputs - set(expected_outputs)):
+            findings.append(f"output is not recorded in the manifest: {name}")
         for name, details in sorted(expected_outputs.items()):
             path = results / name
-            if not path.is_file() or not path.stat().st_size:
-                findings.append(f"output is missing or empty: {name}")
+            if not path.is_file():
+                continue
             elif file_digest(path) != details.get("sha256"):
                 findings.append(f"output checksum differs from the manifest: {name}")
         status = "current" if not findings else "stale"
