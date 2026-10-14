@@ -258,13 +258,31 @@ def __(mo):
 def __(mo, software_button, clone_source, execute, settings, shutil, sys):
     mo.stop(not software_button.value, mo.md("Press the button above to run this step."))
     import importlib.util
+    import os
     import platform
+    import shlex
+    import subprocess
 
     if platform.system() != "Linux":
         raise RuntimeError("The supplied gkm-SVM tools require Linux; use Linux or WSL.")
     _missing_tools = [name for name in ("git", "make", "gcc", "g++") if not shutil.which(name)]
     if _missing_tools:
         raise RuntimeError("Install these system tools first: " + ", ".join(_missing_tools))
+    _cxx = shlex.split(os.environ.get("CXX") or "g++")
+    _conda_include = os.path.join(sys.prefix, "include")
+    _conda_library = os.path.join(sys.prefix, "lib")
+    if os.path.isfile(os.path.join(_conda_include, "zlib.h")):
+        _cxx.extend([f"-I{_conda_include}", f"-L{_conda_library}"])
+    _zlib_check = subprocess.run(
+        _cxx + ["-E", "-x", "c++", "-"], input="#include <zlib.h>\n",
+        text=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    )
+    if _zlib_check.returncode:
+        raise RuntimeError(
+            "lsgkm requires the zlib development header zlib.h. Install zlib with "
+            "`conda install -c conda-forge zlib` or `sudo apt-get install zlib1g-dev`, "
+            "then rerun this section."
+        )
     _packages = {"pysam": "pysam>=0.23,<0.24", "pandas": "pandas>=2.2,<3", "pyarrow": "pyarrow>=17,<22"}
     _missing_packages = [package for module, package in _packages.items() if importlib.util.find_spec(module) is None]
     if _missing_packages:
@@ -273,7 +291,7 @@ def __(mo, software_button, clone_source, execute, settings, shutil, sys):
     _lsgkm = clone_source("lsgkm", "https://github.com/Dongwon-Lee/lsgkm.git", settings["lsgkm_revision"])
     _scripts = settings["workspace"] / "scripts"
     _scripts.mkdir(parents=True, exist_ok=True)
-    execute(["make"], cwd=_lsgkm / "src")
+    execute(["make", f"CXX={shlex.join(_cxx)}"], cwd=_lsgkm / "src")
     shutil.copy2(_lsgkm / "bin/gkmpredict", _scripts / "gkmpredict")
     execute(["g++", "-std=c++11", "-O3", "-o", _scripts / "deltasvm_subset_multi", _ren / "scripts/deltasvm_subset_multi.cpp"])
     print("Software ready.")
