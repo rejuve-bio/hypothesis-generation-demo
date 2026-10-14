@@ -23,19 +23,16 @@ def __(mo):
 def __(mo):
     mo.md(r"""
     ## Configuration and Sources
-    The workspace defaults to `~/deltaSVM-work`; use `DELTASVM_*` variables to configure paths, sources, filters, chromosomes, and worker counts.
+    Workspace: `~/deltaSVM-work` by default; set `DELTASVM_WORK_DIR` or other `DELTASVM_*` variables to customize the run.
 
-    | Input | Public source | Local override |
-    |---|---|---|
-    | GRCh38 reference | [NCBI GRCh38 no-alt analysis set](https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz) | `DELTASVM_REFERENCE` (uncompressed FASTA) |
-    | Human dbSNP variants | [NCBI dbSNP build 156, GRCh38 VCF](https://ftp.ncbi.nih.gov/snp/archive/b156/VCF/GCF_000001405.40.gz) | `DELTASVM_VCF` (gzip-compressed VCF) |
-    | Models and code | [Ren lab repository](https://github.com/ren-lab/deltaSVM) | `DELTASVM_MODELS_DIR` |
-    | Weights and thresholds | [Ren lab resource links](https://github.com/ren-lab/deltaSVM#models) | `DELTASVM_WEIGHTS`, `DELTASVM_OBS_THRESHOLDS`, `DELTASVM_PBS_THRESHOLDS` |
-    | Human TF identifiers | [HGNC complete set](https://hgnc.genenames.org/download/) | `DELTASVM_HGNC_FILE` (TSV) |
-    | Optional variant intersection | [Open Targets 25.03 GRCh38 variants](https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/25.03/output/variant/) | `DELTASVM_OT_DIR` |
-    | gkmpredict | [Dongwon-Lee/lsgkm](https://github.com/Dongwon-Lee/lsgkm) | built in the workspace |
+    - Reference: [NCBI GRCh38](https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz) · `DELTASVM_REFERENCE`
+    - Variants: [NCBI dbSNP 156 GRCh38](https://ftp.ncbi.nih.gov/snp/archive/b156/VCF/GCF_000001405.40.gz) · `DELTASVM_VCF`; `COMMON=1` by default
+    - Models and weights: [Ren Lab deltaSVM](https://github.com/ren-lab/deltaSVM) · `DELTASVM_MODELS_DIR`, `DELTASVM_WEIGHTS`, `DELTASVM_OBS_THRESHOLDS`, `DELTASVM_PBS_THRESHOLDS`
+    - TF identifiers: [HGNC complete set](https://hgnc.genenames.org/download/) · `DELTASVM_HGNC_FILE`
+    - Optional variant filter: [Open Targets 25.03](https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/25.03/output/variant/) · `DELTASVM_OT_DIR`
+    - Prediction tool: [Dongwon-Lee/lsgkm](https://github.com/Dongwon-Lee/lsgkm) · built in the workspace
 
-    By default, dbSNP 156 GRCh38 variants are filtered to `COMMON=1`; Open Targets 25.03 filtering is optional, and source URLs, checksums, revisions, and settings are recorded in `provenance.json`.
+    Source URLs, revisions, checksums, and run settings are saved in `provenance.json`.
     """)
     return
 
