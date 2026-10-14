@@ -563,10 +563,17 @@ def __(Path, execute, file_digest, json, load_thresholds, settings, shutil, supp
         return source
 
     def run_signature(chrom):
-        paths = [batch_path(chrom), settings["reference"], settings["weights"], settings["obs"], settings["pbs"]]
+        paths = [
+            batch_path(chrom), settings["reference"], settings["weights"], settings["obs"], settings["pbs"],
+            settings["workspace"] / "scripts" / "deltasvm_subset_multi",
+            settings["workspace"] / "scripts" / "gkmpredict",
+        ]
         obs, _ = load_thresholds()
         paths += [settings["models"] / (row[2] + ".model.txt") for row in obs]
-        return {str(path): file_digest(path) for path in paths}
+        signature = {str(path): file_digest(path) for path in paths}
+        signature["deltaSVM_revision"] = settings["ren_revision"]
+        signature["lsgkm_revision"] = settings["lsgkm_revision"]
+        return signature
 
     def validate_run(chrom):
         directory = settings["workspace"] / "runs" / chrom
