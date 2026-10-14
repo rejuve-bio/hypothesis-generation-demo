@@ -57,6 +57,8 @@ The pipeline reuses OpenTargets' precomputed credible sets (Postgres service `cr
 
 Loads go into an `ot_staging` schema and are swapped into place in one transaction, so a crashed or partial load never replaces good data and is retried on the next run.
 
+Each analysis records which release it used: the project gets an `opentargets` block (`used`, `reason`, `ot_release`, `ot_loaded_at`, `study_id`, returned by the project API), and every OpenTargets credible set carries `ot_release` in its `metadata`. Projects analysed before this was added have no block (release unknown).
+
 | Variable | Meaning |
 |---|---|
 | `OT_RELEASE` | **Required.** Pinned OpenTargets release, e.g. `25.09` (`latest` is rejected). Must include FinnGen R12 studies. |
