@@ -14,17 +14,7 @@ def __():
 def __(mo):
     mo.md(r"""
     # deltaSVM Pipeline
-    Human autosomal SNP allelic effects on transcription-factor binding, using the
-    94 high-confidence human TF models from [ren-lab/deltaSVM](https://github.com/ren-lab/deltaSVM).
-    The models were trained on [Yin et al., 2017](https://pubmed.ncbi.nlm.nih.gov/28473536/)
-    and evaluated with [Yan et al., 2021](https://doi.org/10.1038/s41586-021-03211-0).
-    This notebook does not supply fly TF models.
-
-    Use Linux or WSL with Python 3.10 or later, Git, Make, GCC and G++.
-    Install the notebook runner with `python -m pip install marimo`, then open it with
-    `python -m marimo edit notebooks/deltaSVM_pipeline.py`.
-    Run setup and input preparation first. Sections 4 and 5 are alternative scoring
-    paths; sections 6–8 resume prepared runs. Opening this notebook starts no downloads or jobs.
+    Predicts human autosomal SNP effects with 94 Ren Lab TF models ([Yin et al., 2017](https://pubmed.ncbi.nlm.nih.gov/28473536/); [Yan et al., 2021](https://doi.org/10.1038/s41586-021-03211-0)); fly TF models are not included. On Linux/WSL with Python 3.10+, Git, Make, GCC, and G++, install and open with `python -m pip install marimo` and `python -m marimo edit notebooks/deltaSVM_pipeline.py`; jobs start only when triggered.
     """)
     return
 
@@ -33,38 +23,16 @@ def __(mo):
 def __(mo):
     mo.md(r"""
     ## Configuration and Sources
-    The default workspace is `~/deltaSVM-work`. Set `DELTASVM_WORK_DIR` before opening
-    the notebook to choose another location. All generated data stay in that workspace.
+    Workspace: `~/deltaSVM-work` by default; set `DELTASVM_WORK_DIR` or other `DELTASVM_*` variables to customize the run.
 
-    | Input | Public source | Local override |
-    |---|---|---|
-    | GRCh38 reference | [NCBI GRCh38 no-alt analysis set](https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz) | `DELTASVM_REFERENCE` (uncompressed FASTA) |
-    | Human dbSNP variants | [NCBI dbSNP build 156, GRCh38 VCF](https://ftp.ncbi.nih.gov/snp/archive/b156/VCF/GCF_000001405.40.gz) | `DELTASVM_VCF` (gzip-compressed VCF) |
-    | Models and code | [Ren lab repository](https://github.com/ren-lab/deltaSVM) | `DELTASVM_MODELS_DIR` |
-    | Weights and thresholds | [Ren lab resource links](https://github.com/ren-lab/deltaSVM#models) | `DELTASVM_WEIGHTS`, `DELTASVM_OBS_THRESHOLDS`, `DELTASVM_PBS_THRESHOLDS` |
-    | Human TF identifiers | [HGNC complete set](https://hgnc.genenames.org/download/) | `DELTASVM_HGNC_FILE` (TSV) |
-    | Optional variant intersection | [Open Targets 25.03 GRCh38 variants](https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/25.03/output/variant/) | `DELTASVM_OT_DIR` |
-    | gkmpredict | [Dongwon-Lee/lsgkm](https://github.com/Dongwon-Lee/lsgkm) | built in the workspace |
+    - Reference: [NCBI GRCh38](https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz) · `DELTASVM_REFERENCE`
+    - Variants: [NCBI dbSNP 156 GRCh38](https://ftp.ncbi.nih.gov/snp/archive/b156/VCF/GCF_000001405.40.gz) · `DELTASVM_VCF`; `COMMON=1` by default
+    - Models and weights: [Ren Lab deltaSVM](https://github.com/ren-lab/deltaSVM) · `DELTASVM_MODELS_DIR`, `DELTASVM_WEIGHTS`, `DELTASVM_OBS_THRESHOLDS`, `DELTASVM_PBS_THRESHOLDS`
+    - TF identifiers: [HGNC complete set](https://hgnc.genenames.org/download/) · `DELTASVM_HGNC_FILE`
+    - Optional variant filter: [Open Targets 25.03](https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/25.03/output/variant/) · `DELTASVM_OT_DIR`
+    - Prediction tool: [Dongwon-Lee/lsgkm](https://github.com/Dongwon-Lee/lsgkm) · built in the workspace
 
-    Each download URL can be overridden with the corresponding `DELTASVM_*_URL`
-    variable shown in the configuration below. The historical Ren lab resource server
-    may be unavailable: supply existing weights and threshold files or working mirror
-    URLs. Download errors stop the step; they never silently produce placeholder models.
-
-    The default NCBI input is the fixed dbSNP build 156 GRCh38 VCF. The default
-    filter retains variants marked `COMMON=1`, matching the common-variant intent of
-    the original `00-common_all.vcf.gz` input. Set `DELTASVM_COMMON_ONLY=0` to include
-    all biallelic SNVs. Set `DELTASVM_MAX_SNPS=1000` for a small first run; `0` processes the
-    entire VCF. The full VCF is about 28 GB compressed and the reference is
-    about 3 GB uncompressed; Open Targets adds several GB. The notebook records source
-    URLs, software revisions, checksums and run settings in `provenance.json`.
-
-    Set `DELTASVM_USE_OT=1` to restrict dbSNP variants to those represented in the
-    Open Targets variant dataset. This is a selective phenotype-associated subset,
-    not a comprehensive variant catalog, and its download is optional.
-    `DELTASVM_CHROMOSOMES=1,2,3` selects chromosomes; the default is all 22 autosomes.
-    `DELTASVM_CHROMOSOME=1` chooses the single-chromosome sections.
-    `DELTASVM_TF_JOBS`, `DELTASVM_THREADS` and `DELTASVM_CHROM_JOBS` default to 1, 2 and 1.
+    Source URLs, revisions, checksums, and run settings are saved in `provenance.json`.
     """)
     return
 
@@ -256,6 +224,14 @@ def __(Path, settings):
             execute(["git", "clone", url, directory])
             execute(["git", "checkout", revision], cwd=directory)
         actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=directory, text=True).strip()
+        try:
+            expected = subprocess.check_output(
+                ["git", "rev-parse", f"{revision}^{{commit}}"], cwd=directory, text=True
+            ).strip()
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(f"Requested revision {revision} is unavailable in {directory}; remove or update this checkout, or set the revision to an available commit.") from error
+        if actual != expected:
+            raise RuntimeError(f"Source checkout {directory} is at {actual}, but revision {revision} resolves to {expected}; update the checkout or set the matching revision.")
         record_source(name, directory, url=url, requested_revision=revision, commit=actual)
         return directory
 
@@ -266,10 +242,7 @@ def __(Path, settings):
 def __(mo):
     mo.md(r"""
     ## 0a. Download and Build Software
-    This step installs missing Python libraries in the notebook's interpreter, clones
-    the two upstream repositories at pinned commits and compiles Linux binaries.
-    Software revision overrides are supported; the resolved commits are recorded.
-    It leaves existing source checkouts in place.
+    Installs required Python libraries, checks out pinned upstream sources, and builds the needed binaries.
     """)
     return
 
@@ -285,13 +258,31 @@ def __(mo):
 def __(mo, software_button, clone_source, execute, settings, shutil, sys):
     mo.stop(not software_button.value, mo.md("Press the button above to run this step."))
     import importlib.util
+    import os
     import platform
+    import shlex
+    import subprocess
 
     if platform.system() != "Linux":
         raise RuntimeError("The supplied gkm-SVM tools require Linux; use Linux or WSL.")
     _missing_tools = [name for name in ("git", "make", "gcc", "g++") if not shutil.which(name)]
     if _missing_tools:
         raise RuntimeError("Install these system tools first: " + ", ".join(_missing_tools))
+    _cxx = shlex.split(os.environ.get("CXX") or "g++")
+    _conda_include = os.path.join(sys.prefix, "include")
+    _conda_library = os.path.join(sys.prefix, "lib")
+    if os.path.isfile(os.path.join(_conda_include, "zlib.h")):
+        _cxx.extend([f"-I{_conda_include}", f"-L{_conda_library}"])
+    _zlib_check = subprocess.run(
+        _cxx + ["-E", "-x", "c++", "-"], input="#include <zlib.h>\n",
+        text=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    )
+    if _zlib_check.returncode:
+        raise RuntimeError(
+            "lsgkm requires the zlib development header zlib.h. Install zlib with "
+            "`conda install -c conda-forge zlib` or `sudo apt-get install zlib1g-dev`, "
+            "then rerun this section."
+        )
     _packages = {"pysam": "pysam>=0.23,<0.24", "pandas": "pandas>=2.2,<3", "pyarrow": "pyarrow>=17,<22"}
     _missing_packages = [package for module, package in _packages.items() if importlib.util.find_spec(module) is None]
     if _missing_packages:
@@ -300,7 +291,7 @@ def __(mo, software_button, clone_source, execute, settings, shutil, sys):
     _lsgkm = clone_source("lsgkm", "https://github.com/Dongwon-Lee/lsgkm.git", settings["lsgkm_revision"])
     _scripts = settings["workspace"] / "scripts"
     _scripts.mkdir(parents=True, exist_ok=True)
-    execute(["make"], cwd=_lsgkm / "src")
+    execute(["make", f"CXX={shlex.join(_cxx)}"], cwd=_lsgkm / "src")
     shutil.copy2(_lsgkm / "bin/gkmpredict", _scripts / "gkmpredict")
     execute(["g++", "-std=c++11", "-O3", "-o", _scripts / "deltasvm_subset_multi", _ren / "scripts/deltasvm_subset_multi.cpp"])
     print("Software ready.")
@@ -311,12 +302,7 @@ def __(mo, software_button, clone_source, execute, settings, shutil, sys):
 def __(mo):
     mo.md(r"""
     ## 0b. Download Reference, Weights and Thresholds
-    The reference is GRCh38 with UCSC chromosome names. Downloaded gzip data are
-    expanded once and indexed with pysam. Existing files supplied in Configuration
-    are reused. Interrupted downloads resume when the server supports byte ranges;
-    otherwise the downloader restarts the file. Download progress and integrity checks
-    are reported. The model and threshold checks require 94 matching human TFs.
-    The order of the PBS thresholds defines the columns of the deltaSVM weight table.
+    Downloads or reuses the GRCh38 reference, deltaSVM weights, and thresholds, then verifies the 94 TF models.
     """)
     return
 
@@ -385,11 +371,7 @@ def __(mo, resources_button, download_file, fetch_input, file_digest, gzip, load
 def __(mo):
     mo.md(r"""
     ## 1. Download dbSNP and Prepare Chromosome Batches
-    Downloads the GRCh38 dbSNP VCF when no local VCF is supplied. For the default NCBI
-    source, its published MD5 is verified. RefSeq accession names are converted to
-    `chr1`–`chr22`. Only biallelic A/C/G/T SNVs on selected autosomes are kept.
-    The VCF header must identify GRCh38. SNP batches and rsID mappings are generated
-    together; outputs are published only after successful extraction.
+    Downloads dbSNP build 156 or uses a local GRCh38 VCF, filters selected autosomal SNVs, and builds chromosome batches with rsID mappings.
     """)
     return
 
@@ -478,11 +460,7 @@ def __(mo, snps_button, prepare_snps):
 def __(mo):
     mo.md(r"""
     ## 2. Download and Filter Against Open Targets
-    Downloads all Parquet partitions from the pinned 25.03 variant directory, or
-    uses `DELTASVM_OT_DIR`. Only the `variantId` column is read. A disk-backed SQLite
-    index avoids loading the whole dataset into memory. Variant IDs are converted
-    from `1_position_ref_alt` to `chr1_position_ref_alt` before intersection.
-    With `DELTASVM_USE_OT=0`, this step is skipped and raw dbSNP batches are used.
+    Optionally intersects selected dbSNP variants with Open Targets 25.03 using a disk-backed index.
     """)
     return
 
@@ -521,8 +499,9 @@ def __(Path, download_file, file_digest, json, record_source, settings, urllib):
             for url in urls:
                 download_file(url, directory / Path(urllib.parse.urlparse(url).path).name)
             files = sorted(directory.glob("*.parquet"))
+        opentargets_digests = {f.name: file_digest(f) for f in files}
         record_source("opentargets", directory, configured_url=settings["ot_url"],
-                      files={f.name: file_digest(f) for f in files}, assembly="GRCh38")
+                      files=opentargets_digests, assembly="GRCh38")
         index = settings["workspace"] / "opentargets.sqlite"
         temporary = index.with_suffix(".sqlite.part")
         if temporary.exists():
@@ -546,7 +525,10 @@ def __(Path, download_file, file_digest, json, record_source, settings, urllib):
                             output.write(line)
                             kept += 1
                 temporary_output.replace(destination)
-                destination.with_suffix(".inputs.json").write_text(json.dumps({"source_sha256": file_digest(source)}) + "\n")
+                destination.with_suffix(".inputs.json").write_text(json.dumps({
+                    "source_sha256": file_digest(source),
+                    "opentargets_sha256": opentargets_digests,
+                }) + "\n")
                 print(f"{chrom}: {kept:,} SNPs retained")
         temporary.replace(index)
 
@@ -571,11 +553,7 @@ def __(mo, ot_button, filter_opentargets):
 def __(mo):
     mo.md(r"""
     ## 3. Prepare a Chromosome and Compute deltaSVM Scores
-    Select the chromosome with `DELTASVM_CHROMOSOME`. Resources are read from the
-    shared workspace, avoiding a full genome copy per run. REF alleles must match
-    GRCh38. Boundary variants and sequences containing ambiguous bases are reported
-    in `data/skipped.tsv` and excluded before scoring. Inputs and settings are hashed
-    so changing them cannot silently reuse an old run.
+    Prepares one chromosome, validates variants against GRCh38, creates score inputs, and records input fingerprints.
     """)
     return
 
@@ -590,15 +568,30 @@ def __(Path, execute, file_digest, json, load_thresholds, settings, shutil, supp
         if settings["use_ot"]:
             metadata = source.with_suffix(".inputs.json")
             raw = source.with_name(f"{chrom}.tsv")
-            if not metadata.is_file() or json.loads(metadata.read_text())["source_sha256"] != file_digest(raw):
+            current_opentargets = {
+                path.name: file_digest(path)
+                for path in sorted(settings["ot_dir"].glob("*.parquet"))
+            }
+            if not metadata.is_file():
                 raise RuntimeError(f"{chrom}: Open Targets intersection is missing or stale; run section 2 again.")
+            recorded = json.loads(metadata.read_text())
+            if (recorded.get("source_sha256") != file_digest(raw)
+                    or recorded.get("opentargets_sha256") != current_opentargets):
+                raise RuntimeError(f"{chrom}: Open Targets inputs changed or the intersection is stale; run section 2 again.")
         return source
 
     def run_signature(chrom):
-        paths = [batch_path(chrom), settings["reference"], settings["weights"], settings["obs"], settings["pbs"]]
+        paths = [
+            batch_path(chrom), settings["reference"], settings["weights"], settings["obs"], settings["pbs"],
+            settings["workspace"] / "scripts" / "deltasvm_subset_multi",
+            settings["workspace"] / "scripts" / "gkmpredict",
+        ]
         obs, _ = load_thresholds()
         paths += [settings["models"] / (row[2] + ".model.txt") for row in obs]
-        return {str(path): file_digest(path) for path in paths}
+        signature = {str(path): file_digest(path) for path in paths}
+        signature["deltaSVM_revision"] = settings["ren_revision"]
+        signature["lsgkm_revision"] = settings["lsgkm_revision"]
+        return signature
 
     def validate_run(chrom):
         directory = settings["workspace"] / "runs" / chrom
@@ -691,9 +684,7 @@ def __(mo, setup_button, settings, setup_chromosome):
 def __(mo):
     mo.md(r"""
     ## 4. Run Selected Chromosomes in Parallel
-    Prepares, scores and exports each nonempty selected SNP batch. Chromosome jobs
-    and TF jobs are bounded by Configuration. Every worker failure is propagated.
-    Completed runs are reused only when their input fingerprints match.
+    Runs preparation, scoring, and Parquet export for selected chromosomes in parallel with bounded worker counts.
     """)
     return
 
@@ -847,8 +838,7 @@ def __(mo, parallel_button, run_parallel):
 def __(mo):
     mo.md(r"""
     ## 5. Single Chromosome Full Run
-    Runs preparation, deltaSVM, all 94 gkm-SVM models, summary and Parquet export
-    for the configured chromosome. No existing run directories are deleted.
+    Runs the complete preparation-to-Parquet workflow for the configured chromosome.
     """)
     return
 
@@ -871,8 +861,7 @@ def __(mo, single_button, complete_chromosome, settings):
 def __(mo):
     mo.md(r"""
     ## 6. Resume gkmpredict Across Selected Chromosomes
-    Requires completed deltaSVM scoring from section 3. Missing or failed score files
-    produce an error immediately. Completed nonempty TF prediction files are reused.
+    Resumes missing gkm-SVM TF predictions for selected chromosomes after deltaSVM scoring.
     """)
     return
 
@@ -896,8 +885,7 @@ def __(mo, gkm_button, ThreadPoolExecutor, predict_chromosome, selected_nonempty
 def __(mo):
     mo.md(r"""
     ## 7. Restart and Complete a Chromosome Run
-    Validates the prepared run, fills missing TF predictions, then rebuilds its
-    summary and Parquet output. Source inputs must still match the prepared run.
+    Validates a prepared chromosome, completes missing TF predictions, and rebuilds its summary and Parquet output.
     """)
     return
 
@@ -922,8 +910,7 @@ def __(mo, restart_button, export_chromosome, predict_chromosome, settings, summ
 def __(mo):
     mo.md(r"""
     ## 8. Orchestrate Full Pipeline Sequentially
-    Completes every selected nonempty chromosome batch in order. Each chromosome
-    is prepared if necessary; failures stop the pipeline before starting the next one.
+    Runs the full workflow sequentially for every selected nonempty chromosome batch.
     """)
     return
 
@@ -947,8 +934,7 @@ def __(mo, pipeline_button, complete_chromosome, selected_nonempty):
 def __(mo):
     mo.md(r"""
     ## 9. Check Pipeline Progress
-    Shows prepared score files, TF prediction counts, exported results and whether
-    the run's input fingerprint still matches the selected source data.
+    Reports per-chromosome TF prediction, scoring, export, and input-fingerprint status.
     """)
     return
 
@@ -981,10 +967,7 @@ def __(mo, progress_button, json, run_signature, settings):
 def __(mo):
     mo.md(r"""
     ## 10. Convert the Selected Chromosome Results to Parquet
-    Exports Gain/Loss predictions from `runs/chrN/out/summary.pred.tsv` in bounded
-    chunks. The next section can attach dbSNP rsIDs from `rsid_map.tsv`. `TfId` remains
-    `.` because the Ren Lab models do not supply stable TF identifiers. Predictions describe the supplied human
-    TF models and do not provide fly-specific biological validation.
+    Exports Gain/Loss predictions from the selected chromosome summary to Parquet.
     """)
     return
 
@@ -1007,9 +990,7 @@ def __(mo, export_button, export_chromosome, settings):
 def __(mo):
     mo.md(r"""
     ## 11. Attach dbSNP rsIDs to the Selected Chromosome Results
-    Uses the rsID map produced during variant preparation to replace placeholder rsIDs
-    in the selected chromosome's Parquet file. The mapping is indexed in SQLite on
-    disk, and Parquet row groups are processed in bounded batches.
+    Adds dbSNP rsIDs to the selected chromosome Parquet output in bounded batches.
     """)
     return
 
@@ -1089,9 +1070,7 @@ def __(Path, file_digest, json, mo, rsid_button, settings):
 def __(mo):
     mo.md(r"""
     ## 12. Add Ensembl Gene IDs for Human TFs
-    Downloads the HGNC complete set and maps approved TF symbols to Ensembl gene IDs.
-    The selected chromosome's Parquet file is updated in bounded batches; symbols
-    without an HGNC Ensembl ID remain `.` and are listed in `tf_id_unmapped.tsv`.
+    Maps human TF symbols to HGNC Ensembl gene IDs and lists unmapped symbols.
     """)
     return
 
@@ -1151,11 +1130,7 @@ def __(Path, download_file, file_digest, mo, record_source, settings, tf_id_butt
 def __(mo):
     mo.md(r"""
     ## 13. Combine Selected Chromosome Results
-    Combines the per-chromosome Parquet exports into
-    `results/deltasvm_selected_chromosomes.parquet` using bounded batches. Every
-    selected chromosome must have an export, and all files must have the same columns
-    and types. Run annotation consistently across chromosomes before combining if you
-    want rsID and Ensembl ID columns in the combined file.
+    Combines selected chromosome Parquet files after verifying that their schemas match.
     """)
     return
 
@@ -1168,11 +1143,11 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, mo, record_source, settings):
+def __(file_digest, mo, record_source, selected_nonempty, settings):
     def combine_chromosome_results():
         import pyarrow.parquet as pq
 
-        chromosomes = settings["chromosomes"]
+        chromosomes = selected_nonempty()
         sources = [settings["workspace"] / "runs" / chrom / "out" / f"{chrom}_deltasvm.parquet"
                    for chrom in chromosomes]
         missing = [str(path) for path in sources if not path.is_file() or not path.stat().st_size]
@@ -1217,9 +1192,7 @@ def __(combine_button, combine_chromosome_results, mo):
 def __(mo):
     mo.md(r"""
     ## 14. Validate and Summarize the Combined Results
-    Streams the combined Parquet file and writes chromosome-level quality metrics to
-    `results/deltasvm_qc_report.tsv`. The report includes row and effect counts,
-    distinct TF symbols, invalid scores, and missing rsID or Ensembl ID annotations.
+    Reports chromosome-level row and effect counts, invalid scores, TF counts, and missing annotations.
     """)
     return
 
@@ -1299,8 +1272,7 @@ def __(mo, qc_button, validate_combined_results):
 def __(mo):
     mo.md(r"""
     ## 15. Summarize Scores by Transcription Factor
-    Streams the combined results and writes per-TF row counts, Gain/Loss counts, mean
-    score, and maximum absolute score to `results/deltasvm_tf_summary.tsv`.
+    Summarizes per-TF row and effect counts, mean score, and maximum absolute score.
     """)
     return
 
@@ -1371,8 +1343,7 @@ def __(mo, summarize_tf_scores, tf_summary_button):
 def __(mo):
     mo.md(r"""
     ## 16. Export Results Using Effect and Score Filters
-    Creates `results/deltasvm_filtered.parquet` from the combined results. Choose Gain,
-    Loss, or both effects and set the minimum absolute deltaSVM score.
+    Filters combined Parquet results by effect and minimum absolute deltaSVM score.
     """)
     return
 
@@ -1452,9 +1423,7 @@ def __(effect_input, export_filtered_results, filtered_export_button, minimum_sc
 def __(mo):
     mo.md(r"""
     ## 17. Export Top Variants for Each TF
-    Selects the variants with the largest absolute deltaSVM scores for each
-    transcription factor and writes them to `results/deltasvm_top_variants_by_tf.tsv`.
-    The ranking keeps only the requested number of rows per TF in memory.
+    Exports the requested number of highest absolute-score variants for each TF.
     """)
     return
 
@@ -1542,9 +1511,7 @@ def __(export_top_variants_per_tf, mo, top_variants_button, top_variants_input):
 def __(mo):
     mo.md(r"""
     ## 18. Check Combined Results Are Current
-    Checks the combined Parquet checksum, selected chromosome list, and source file
-    checksums against the provenance manifest. Results are written to
-    `results/deltasvm_combined_validation.tsv`.
+    Checks whether combined results and source exports still match their recorded checksums.
     """)
     return
 
@@ -1557,7 +1524,7 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, json, record_source, settings):
+def __(file_digest, json, record_source, selected_nonempty, settings):
     def validate_combined_provenance():
         from pathlib import Path
 
@@ -1572,8 +1539,8 @@ def __(file_digest, json, record_source, settings):
         if not isinstance(record, dict):
             findings.append("combined result provenance record is missing")
         else:
-            if record.get("chromosomes") != list(settings["chromosomes"]):
-                findings.append("selected chromosome list differs from the combined result")
+            if record.get("chromosomes") != selected_nonempty():
+                findings.append("nonempty selected chromosome list differs from the combined result")
             expected_output_digest = record.get("sha256")
             if not combined_path.is_file() or not combined_path.stat().st_size:
                 findings.append("combined Parquet file is missing or empty")
@@ -1619,9 +1586,7 @@ def __(combined_validation_button, mo, validate_combined_provenance):
 def __(mo):
     mo.md(r"""
     ## 19. Package Results for Sharing
-    Bundles the combined Parquet file, available summary reports, and the current
-    provenance manifest into `results/deltasvm_results_bundle.zip`. The archive
-    includes a manifest with file sizes and SHA-256 checksums.
+    Packages combined results, available reports, and provenance into a checksummed ZIP archive.
     """)
     return
 
@@ -1647,6 +1612,10 @@ def __(file_digest, json, record_source, settings):
             raise FileNotFoundError("Combine chromosome results before packaging the result bundle.")
         if not provenance.is_file() or not provenance.stat().st_size:
             raise FileNotFoundError("The provenance manifest is missing. Run the combine section first.")
+        provenance_manifest = json.loads(provenance.read_text())
+        combined_record = provenance_manifest.get("sources", {}).get("combined_deltasvm_results")
+        if not isinstance(combined_record, dict):
+            raise RuntimeError("Combined result provenance is missing. Run the combine section before packaging.")
         filenames = (
             "deltasvm_selected_chromosomes.parquet",
             "deltasvm_qc_report.tsv",
@@ -1670,7 +1639,7 @@ def __(file_digest, json, record_source, settings):
                       "sha256": file_digest(path)} for path, arcname in files]
         bundle_manifest = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
-            "chromosomes": list(settings["chromosomes"]),
+            "chromosomes": combined_record["chromosomes"],
             "files": inventory,
         }
         destination = results / "deltasvm_results_bundle.zip"
@@ -1702,8 +1671,7 @@ def __(bundle_button, create_results_bundle, mo):
 def __(mo):
     mo.md(r"""
     ## 20. Download the Results Bundle
-    After creating the bundle in section 19, use the download button to save the ZIP
-    archive to your computer. The file is streamed from disk when the download starts.
+    Downloads the results ZIP created in section 19.
     """)
     return
 
@@ -1726,8 +1694,7 @@ def __(mo, settings):
 def __(mo):
     mo.md(r"""
     ## 21. Write a Reproducibility Manifest
-    Records the selected configuration, software versions, source provenance, and
-    checksums for available result files in `results/deltasvm_run_manifest.json`.
+    Records software versions, settings, provenance, and output checksums in a reproducibility manifest.
     """)
     return
 
@@ -1761,7 +1728,9 @@ def __(file_digest, json, record_source, settings):
         outputs = {}
         if results.is_dir():
             for path in sorted(results.iterdir()):
-                if path.is_file() and path.name != "deltasvm_run_manifest.json":
+                if path.is_file() and path.name not in {
+                    "deltasvm_run_manifest.json", "deltasvm_manifest_validation.tsv"
+                }:
                     outputs[path.name] = {"size_bytes": path.stat().st_size,
                                           "sha256": file_digest(path)}
         normalized_settings = {
@@ -1800,8 +1769,7 @@ def __(mo, run_manifest_button, write_run_manifest):
 def __(mo):
     mo.md(r"""
     ## 22. Validate the Reproducibility Manifest
-    Checks that the selected chromosome list and recorded result checksums still match
-    the current workspace. The check is saved to `results/deltasvm_manifest_validation.tsv`.
+    Checks selected chromosomes and output checksums against the reproducibility manifest.
     """)
     return
 
@@ -1822,14 +1790,25 @@ def __(file_digest, json, record_source, settings):
             raise FileNotFoundError("Write the reproducibility manifest in section 21 first.")
         manifest = json.loads(manifest_path.read_text())
         findings = []
-        saved_chromosomes = manifest.get("settings", {}).get("chromosomes")
-        if saved_chromosomes != list(settings["chromosomes"]):
-            findings.append("selected chromosome list differs from the manifest")
+        current_settings = {
+            key: [str(item) for item in value] if isinstance(value, tuple)
+            else str(value) if hasattr(value, "as_posix") else value
+            for key, value in settings.items()
+        }
+        if manifest.get("settings") != current_settings:
+            findings.append("run settings differ from the manifest")
         expected_outputs = manifest.get("outputs", {})
+        excluded_outputs = {"deltasvm_run_manifest.json", "deltasvm_manifest_validation.tsv"}
+        actual_outputs = {path.name for path in results.iterdir()
+                          if path.is_file() and path.name not in excluded_outputs}
+        for name in sorted(set(expected_outputs) - actual_outputs):
+            findings.append(f"output is missing: {name}")
+        for name in sorted(actual_outputs - set(expected_outputs)):
+            findings.append(f"output is not recorded in the manifest: {name}")
         for name, details in sorted(expected_outputs.items()):
             path = results / name
-            if not path.is_file() or not path.stat().st_size:
-                findings.append(f"output is missing or empty: {name}")
+            if not path.is_file():
+                continue
             elif file_digest(path) != details.get("sha256"):
                 findings.append(f"output checksum differs from the manifest: {name}")
         status = "current" if not findings else "stale"
@@ -1865,9 +1844,7 @@ def __(manifest_validation_button, mo, validate_run_manifest):
 def __(mo):
     mo.md(r"""
     ## 23. Export a Selected Chromosome Run Record
-    Saves the current input fingerprints, run settings, completed TF count, and
-    checksums for available chromosome outputs to `results/chrN_run_record.json`.
-    The record is created only when the run inputs still match their saved fingerprints.
+    Records one chromosome’s settings, input fingerprints, TF completion count, and output checksums.
     """)
     return
 
@@ -1945,9 +1922,7 @@ def __(export_chromosome_run_record, mo, run_record_button):
 def __(mo):
     mo.md(r"""
     ## 24. Summarize Skipped Variants
-    Combines `data/skipped.tsv` from each selected chromosome into
-    `results/deltasvm_skipped_variants.tsv` and writes exclusion counts by reason to
-    `results/deltasvm_skipped_variant_summary.tsv`.
+    Combines skipped variants across selected chromosomes and counts exclusions by reason.
     """)
     return
 
@@ -1960,13 +1935,14 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, record_source, settings):
+def __(file_digest, record_source, selected_nonempty, settings):
     def summarize_skipped_variants():
         import csv
         from collections import Counter
 
+        chromosomes = selected_nonempty()
         sources = [(chrom, settings["workspace"] / "runs" / chrom / "data" / "skipped.tsv")
-                   for chrom in settings["chromosomes"]]
+                   for chrom in chromosomes]
         missing = [str(path) for _, path in sources if not path.is_file() or not path.stat().st_size]
         if missing:
             raise FileNotFoundError("Prepare every selected chromosome before summarizing skipped variants: " + ", ".join(missing))
@@ -2004,7 +1980,7 @@ def __(file_digest, record_source, settings):
             summary_temporary.unlink(missing_ok=True)
         source_digests = {str(path): file_digest(path) for _, path in sources}
         record_source("deltasvm_skipped_variants", detail_path,
-                      chromosomes=list(settings["chromosomes"]), source_sha256=source_digests,
+                      chromosomes=chromosomes, source_sha256=source_digests,
                       rows=rows, sha256=file_digest(detail_path))
         record_source("deltasvm_skipped_variant_summary", summary_path,
                       detail_file=str(detail_path), sha256=file_digest(summary_path))
@@ -2025,8 +2001,7 @@ def __(mo, skipped_variants_button, summarize_skipped_variants):
 def __(mo):
     mo.md(r"""
     ## 25. Write a Data Dictionary for the Results
-    Creates `results/README.txt` with the result column definitions, identifier
-    conventions, effect labels, and a guide to the generated reports.
+    Writes a data dictionary for result columns and generated reports.
     """)
     return
 
@@ -2039,14 +2014,20 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, record_source, settings):
+def __(file_digest, json, record_source, settings):
     def write_results_data_dictionary():
         results = settings["workspace"] / "results"
         results.mkdir(parents=True, exist_ok=True)
+        provenance_path = settings["workspace"] / "provenance.json"
+        if not provenance_path.is_file() or not provenance_path.stat().st_size:
+            raise FileNotFoundError("Combine chromosome results before writing the data dictionary.")
+        combined_record = json.loads(provenance_path.read_text()).get("sources", {}).get("combined_deltasvm_results")
+        if not isinstance(combined_record, dict):
+            raise RuntimeError("Combined result provenance is missing. Run the combine section first.")
         destination = results / "README.txt"
         content = f"""deltaSVM result files
 
-Selected chromosomes: {', '.join(settings['chromosomes'])}
+Selected chromosomes: {', '.join(combined_record['chromosomes'])}
 Genome build: GRCh38
 
 Combined prediction table
@@ -2101,8 +2082,7 @@ def __(data_dictionary_button, mo, write_results_data_dictionary):
 def __(mo):
     mo.md(r"""
     ## 26. Verify the Results Bundle
-    Checks each packaged file against the SHA-256 checksum and size recorded in the
-    bundle manifest, then writes `results/deltasvm_bundle_validation.tsv`.
+    Verifies ZIP contents against the embedded file sizes and SHA-256 checksums.
     """)
     return
 
@@ -2181,8 +2161,7 @@ def __(bundle_validation_button, mo, validate_results_bundle):
 def __(mo):
     mo.md(r"""
     ## 27. Export the Combined Results as Compressed TSV
-    Writes `results/deltasvm_selected_chromosomes.tsv.gz` in bounded batches for
-    analysis tools that do not read Parquet files.
+    Exports combined results as gzip-compressed TSV in bounded batches.
     """)
     return
 
@@ -2195,7 +2174,7 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, record_source, settings):
+def __(file_digest, json, record_source, settings):
     def export_combined_tsv():
         import gzip
         import pyarrow.parquet as pq
@@ -2203,6 +2182,12 @@ def __(file_digest, record_source, settings):
         source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
         if not source.is_file() or not source.stat().st_size:
             raise FileNotFoundError("Combine the selected chromosome results before creating a TSV export.")
+        provenance_path = settings["workspace"] / "provenance.json"
+        if not provenance_path.is_file() or not provenance_path.stat().st_size:
+            raise FileNotFoundError("Combined result provenance is missing. Run the combine section first.")
+        combined_record = json.loads(provenance_path.read_text()).get("sources", {}).get("combined_deltasvm_results")
+        if not isinstance(combined_record, dict):
+            raise RuntimeError("Combined result provenance is missing. Run the combine section first.")
         parquet = pq.ParquetFile(source)
         if not parquet.metadata.num_rows:
             raise ValueError("The combined Parquet file contains no rows to export.")
@@ -2225,7 +2210,7 @@ def __(file_digest, record_source, settings):
             temporary.unlink(missing_ok=True)
         record_source("combined_deltasvm_tsv_gzip", destination,
                       source=str(source), source_sha256=file_digest(source),
-                      chromosomes=list(settings["chromosomes"]), rows=rows,
+                      chromosomes=combined_record["chromosomes"], rows=rows,
                       sha256=file_digest(destination))
         print(f"Exported {rows:,} rows to {destination}")
 
@@ -2243,8 +2228,7 @@ def __(export_combined_tsv, mo, tsv_export_button):
 def __(mo):
     mo.md(r"""
     ## 28. Download the Compressed TSV
-    After creating the compressed TSV in section 27, use the download button to save
-    it directly without downloading the full results bundle.
+    Downloads the gzip-compressed TSV created in section 27.
     """)
     return
 
@@ -2268,8 +2252,7 @@ def __(mo, settings):
 def __(mo):
     mo.md(r"""
     ## 29. Export Filtered Results as Compressed TSV
-    Applies the effect and minimum absolute score selected in section 16 and writes
-    matching rows to `results/deltasvm_filtered.tsv.gz`.
+    Exports rows matching the section 16 filters as gzip-compressed TSV.
     """)
     return
 
@@ -2346,8 +2329,7 @@ def __(effect_input, export_filtered_tsv, filtered_tsv_button, minimum_score_inp
 def __(mo):
     mo.md(r"""
     ## 30. Download the Filtered TSV
-    After exporting the filtered TSV in section 29, use the download button to save
-    the compressed file directly.
+    Downloads the filtered gzip-compressed TSV created in section 29.
     """)
     return
 
@@ -2370,8 +2352,7 @@ def __(mo, settings):
 def __(mo):
     mo.md(r"""
     ## 31. Download Individual Reports and Tables
-    Use the buttons below to download available result files individually. Generate
-    an output in its section before downloading it.
+    Provides direct downloads for generated reports and result tables.
     """)
     return
 
