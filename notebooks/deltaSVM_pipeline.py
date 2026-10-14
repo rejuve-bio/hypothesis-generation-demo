@@ -227,6 +227,14 @@ def __(Path, settings):
             execute(["git", "clone", url, directory])
             execute(["git", "checkout", revision], cwd=directory)
         actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=directory, text=True).strip()
+        try:
+            expected = subprocess.check_output(
+                ["git", "rev-parse", f"{revision}^{{commit}}"], cwd=directory, text=True
+            ).strip()
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(f"Requested revision {revision} is unavailable in {directory}; remove or update this checkout, or set the revision to an available commit.") from error
+        if actual != expected:
+            raise RuntimeError(f"Source checkout {directory} is at {actual}, but revision {revision} resolves to {expected}; update the checkout or set the matching revision.")
         record_source(name, directory, url=url, requested_revision=revision, commit=actual)
         return directory
 
@@ -1101,11 +1109,11 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, mo, record_source, settings):
+def __(file_digest, mo, record_source, selected_nonempty, settings):
     def combine_chromosome_results():
         import pyarrow.parquet as pq
 
-        chromosomes = settings["chromosomes"]
+        chromosomes = selected_nonempty()
         sources = [settings["workspace"] / "runs" / chrom / "out" / f"{chrom}_deltasvm.parquet"
                    for chrom in chromosomes]
         missing = [str(path) for path in sources if not path.is_file() or not path.stat().st_size]
@@ -1482,7 +1490,7 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, json, record_source, settings):
+def __(file_digest, json, record_source, selected_nonempty, settings):
     def validate_combined_provenance():
         from pathlib import Path
 
@@ -1497,8 +1505,8 @@ def __(file_digest, json, record_source, settings):
         if not isinstance(record, dict):
             findings.append("combined result provenance record is missing")
         else:
-            if record.get("chromosomes") != list(settings["chromosomes"]):
-                findings.append("selected chromosome list differs from the combined result")
+            if record.get("chromosomes") != selected_nonempty():
+                findings.append("nonempty selected chromosome list differs from the combined result")
             expected_output_digest = record.get("sha256")
             if not combined_path.is_file() or not combined_path.stat().st_size:
                 findings.append("combined Parquet file is missing or empty")
@@ -1570,6 +1578,10 @@ def __(file_digest, json, record_source, settings):
             raise FileNotFoundError("Combine chromosome results before packaging the result bundle.")
         if not provenance.is_file() or not provenance.stat().st_size:
             raise FileNotFoundError("The provenance manifest is missing. Run the combine section first.")
+        provenance_manifest = json.loads(provenance.read_text())
+        combined_record = provenance_manifest.get("sources", {}).get("combined_deltasvm_results")
+        if not isinstance(combined_record, dict):
+            raise RuntimeError("Combined result provenance is missing. Run the combine section before packaging.")
         filenames = (
             "deltasvm_selected_chromosomes.parquet",
             "deltasvm_qc_report.tsv",
@@ -1593,7 +1605,7 @@ def __(file_digest, json, record_source, settings):
                       "sha256": file_digest(path)} for path, arcname in files]
         bundle_manifest = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
-            "chromosomes": list(settings["chromosomes"]),
+            "chromosomes": combined_record["chromosomes"],
             "files": inventory,
         }
         destination = results / "deltasvm_results_bundle.zip"
@@ -1876,13 +1888,14 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, record_source, settings):
+def __(file_digest, record_source, selected_nonempty, settings):
     def summarize_skipped_variants():
         import csv
         from collections import Counter
 
+        chromosomes = selected_nonempty()
         sources = [(chrom, settings["workspace"] / "runs" / chrom / "data" / "skipped.tsv")
-                   for chrom in settings["chromosomes"]]
+                   for chrom in chromosomes]
         missing = [str(path) for _, path in sources if not path.is_file() or not path.stat().st_size]
         if missing:
             raise FileNotFoundError("Prepare every selected chromosome before summarizing skipped variants: " + ", ".join(missing))
@@ -1920,7 +1933,7 @@ def __(file_digest, record_source, settings):
             summary_temporary.unlink(missing_ok=True)
         source_digests = {str(path): file_digest(path) for _, path in sources}
         record_source("deltasvm_skipped_variants", detail_path,
-                      chromosomes=list(settings["chromosomes"]), source_sha256=source_digests,
+                      chromosomes=chromosomes, source_sha256=source_digests,
                       rows=rows, sha256=file_digest(detail_path))
         record_source("deltasvm_skipped_variant_summary", summary_path,
                       detail_file=str(detail_path), sha256=file_digest(summary_path))
