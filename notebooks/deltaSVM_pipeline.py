@@ -1967,14 +1967,20 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, record_source, settings):
+def __(file_digest, json, record_source, settings):
     def write_results_data_dictionary():
         results = settings["workspace"] / "results"
         results.mkdir(parents=True, exist_ok=True)
+        provenance_path = settings["workspace"] / "provenance.json"
+        if not provenance_path.is_file() or not provenance_path.stat().st_size:
+            raise FileNotFoundError("Combine chromosome results before writing the data dictionary.")
+        combined_record = json.loads(provenance_path.read_text()).get("sources", {}).get("combined_deltasvm_results")
+        if not isinstance(combined_record, dict):
+            raise RuntimeError("Combined result provenance is missing. Run the combine section first.")
         destination = results / "README.txt"
         content = f"""deltaSVM result files
 
-Selected chromosomes: {', '.join(settings['chromosomes'])}
+Selected chromosomes: {', '.join(combined_record['chromosomes'])}
 Genome build: GRCh38
 
 Combined prediction table
@@ -2121,7 +2127,7 @@ def __(mo):
 
 
 @app.cell
-def __(file_digest, record_source, settings):
+def __(file_digest, json, record_source, settings):
     def export_combined_tsv():
         import gzip
         import pyarrow.parquet as pq
@@ -2129,6 +2135,12 @@ def __(file_digest, record_source, settings):
         source = settings["workspace"] / "results" / "deltasvm_selected_chromosomes.parquet"
         if not source.is_file() or not source.stat().st_size:
             raise FileNotFoundError("Combine the selected chromosome results before creating a TSV export.")
+        provenance_path = settings["workspace"] / "provenance.json"
+        if not provenance_path.is_file() or not provenance_path.stat().st_size:
+            raise FileNotFoundError("Combined result provenance is missing. Run the combine section first.")
+        combined_record = json.loads(provenance_path.read_text()).get("sources", {}).get("combined_deltasvm_results")
+        if not isinstance(combined_record, dict):
+            raise RuntimeError("Combined result provenance is missing. Run the combine section first.")
         parquet = pq.ParquetFile(source)
         if not parquet.metadata.num_rows:
             raise ValueError("The combined Parquet file contains no rows to export.")
@@ -2151,7 +2163,7 @@ def __(file_digest, record_source, settings):
             temporary.unlink(missing_ok=True)
         record_source("combined_deltasvm_tsv_gzip", destination,
                       source=str(source), source_sha256=file_digest(source),
-                      chromosomes=list(settings["chromosomes"]), rows=rows,
+                      chromosomes=combined_record["chromosomes"], rows=rows,
                       sha256=file_digest(destination))
         print(f"Exported {rows:,} rows to {destination}")
 
