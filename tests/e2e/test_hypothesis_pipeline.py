@@ -1,6 +1,8 @@
 from copy import deepcopy
 from unittest.mock import MagicMock
 
+import pandas as pd
+
 from src.flows import enrichment as enrichment_flow_module
 from src.flows import hypothesis as hypothesis_flow_module
 from src.tasks import enrichment as enrichment_tasks
@@ -125,6 +127,21 @@ def test_variant_to_persisted_hypothesis_component_e2e(
     enrichr.is_ensembl_id.side_effect = lambda value: str(value).upper().startswith("ENSG")
     enrichr.annotate_graph_gene_names.side_effect = deepcopy
     enrichr.run.return_value = [{"Term": "Inflammatory response"}]
+    enrichr.run_with_tables.return_value = (
+        [{"Term": "Inflammatory response"}],
+        pd.DataFrame(
+            [
+                {
+                    "ID": "GO:0006954",
+                    "Term": "Inflammatory response",
+                    "Desc": "inflammatory response",
+                    "Adjusted P-value": 1e-6,
+                    "Genes": "STAT1;IRF1",
+                    "Term Size": 120,
+                }
+            ]
+        ),
+    )
     llm = MagicMock()
     llm.get_relevant_go.return_value = [
         {"id": "GO:0006954", "name": "inflammatory response", "genes": ["STAT1", "IRF1"]}

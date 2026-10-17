@@ -58,6 +58,15 @@ class Config:
         self.catlas_celltype_cl_mapping_json = (
             "data/catlas_celltype_cl_mapping.json"
         )
+        self.go_llm_url = ""
+        self.go_llm_key = "ollama"
+        self.go_llm_model = "gemma4"
+        self.go_openai_llm_model = "gpt-4o"
+        self.go_llm_backend = "local"
+        self.go_llm_max_candidates = 250
+        self.go_llm_prefilter_k = 250
+        self.go_llm_prefilter_pvalue_k = 150
+        self.go_semantic_strategy = "llm"
         self.mail_username = ""
         self.mail_password = ""
         self.mail_from = ""
@@ -142,6 +151,17 @@ class Config:
             "CATLAS_CELLTYPE_CL_MAPPING_JSON",
             "data/catlas_celltype_cl_mapping.json",
         )
+        config.go_llm_url = os.getenv("GO_LLM_URL", "")
+        config.go_llm_key = os.getenv("GO_LLM_KEY", "ollama")
+        config.go_llm_model = os.getenv("GO_LLM_MODEL", "gemma4")
+        config.go_openai_llm_model = os.getenv("GO_OPENAI_LLM_MODEL", "gpt-4o")
+        config.go_llm_backend = os.getenv("GO_LLM_BACKEND", "local")
+        config.go_llm_max_candidates = int(os.getenv("GO_LLM_MAX_CANDIDATES", "250"))
+        config.go_llm_prefilter_k = int(os.getenv("GO_LLM_PREFILTER_K", "250"))
+        config.go_llm_prefilter_pvalue_k = int(
+            os.getenv("GO_LLM_PREFILTER_PVALUE_K", "150")
+        )
+        config.go_semantic_strategy = os.getenv("GO_SEMANTIC_STRATEGY", "llm")
         config.mail_username = os.getenv("MAIL_USERNAME", "")
         config.mail_password = os.getenv("MAIL_PASSWORD", "")
         config.mail_from = os.getenv("MAIL_FROM", "")

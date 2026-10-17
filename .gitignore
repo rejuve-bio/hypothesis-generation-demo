@@ -259,3 +259,9 @@ tests/fixtures/*
 
 #images
 src/static/*
+
+# Derived cache of GO term gene counts; regenerated from the Enrichr library on demand.
+data/go_term_sizes.json
+
+# GO ranking evaluation snapshots written when GO_EVAL_LOG=1.
+data/go_eval/
