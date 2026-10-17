@@ -41,7 +41,7 @@ def _run_with_background(monkeypatch, query, tissue_genes):
     }
     enrich.get_coexpression_net = MagicMock(return_value=(query, tissue_genes))
     enrich._process_enrichment_results = MagicMock(
-        return_value=pd.DataFrame({"ID": ["GO:1"]})
+        return_value=pd.DataFrame({"ID": ["GO:1"], "Adjusted P-value": [0.001]})
     )
     api = MagicMock()
     api.return_value.results = pd.DataFrame()
@@ -132,7 +132,30 @@ def test_no_significant_go_terms_raises_with_gene_count(monkeypatch):
     assert "2 genes are co-expressed with GENE1 in 'Liver'" in str(exc.value)
 
 
-def test_run_with_tables_returns_filtered_and_full_tables(monkeypatch):
+def test_no_significant_go_terms_message_reports_the_configured_floor(monkeypatch):
+    monkeypatch.setenv("GO_SIGNIFICANCE_MAX_P", "0.01")
+    enrich = _enrich()
+    api = MagicMock()
+    api.return_value.results = pd.DataFrame(
+        {
+            "Gene_set": ["GO_Biological_Process_2023"],
+            "Term": ["some process (GO:1)"],
+            "Adjusted P-value": [0.03],
+            "Genes": ["GENE1;GENE2"],
+        }
+    )
+    monkeypatch.setattr(service.gp, "enrichr", api)
+
+    with pytest.raises(service.NoEnrichmentFoundError) as exc:
+        enrich.run(
+            "GENE1", tissue_name="Liver",
+            coexpression_data=([("ENSG1", 0.9), ("ENSG2", 0.8)], [], ["ENSG1", "ENSG2"]),
+        )
+
+    assert "adjusted p < 0.01" in str(exc.value)
+
+
+def test_run_returns_only_the_significant_terms(monkeypatch):
     enrich = _enrich()
     enrich.get_coexpression_net = MagicMock(return_value=(["ENSG1"], ["ENSG1", "ENSG2"]))
     raw = pd.DataFrame(
@@ -145,18 +168,29 @@ def test_run_with_tables_returns_filtered_and_full_tables(monkeypatch):
     )
     monkeypatch.setattr(service.gp, "enrichr", MagicMock(return_value=MagicMock(results=raw)))
 
-    filtered, all_terms = enrich.run_with_tables("GENE1", tissue_name="Liver")
+    filtered = enrich.run("GENE1", tissue_name="Liver")
 
     assert list(filtered["ID"]) == ["GO:1"]
-    assert list(all_terms["ID"]) == ["GO:1", "GO:2"]
+
+
+def test_process_results_falls_back_to_NA_for_terms_missing_from_go_map():
+    enrich = _enrich()
+    raw = pd.DataFrame(
+        {
+            "Gene_set": ["s", "s"],
+            "Term": ["known (GO:1)", "unknown (GO:2)"],
+            "Adjusted P-value": [0.01, 0.5],
+            "Genes": ["GENE1;GENE2", "GENE1"],
+        }
+    )
+
+    out = enrich._process_enrichment_results(raw)
+
     # go_map only knows GO:1; GO:2 must fall back to "NA", not raise.
-    assert dict(zip(all_terms["ID"], all_terms["Desc"])) == {
-        "GO:1": "description",
-        "GO:2": "NA",
-    }
+    assert dict(zip(out["ID"], out["Desc"])) == {"GO:1": "description", "GO:2": "NA"}
 
 
-def test_run_with_tables_raises_when_no_coexpressed_genes():
+def test_run_raises_when_no_coexpressed_genes():
     """No co-expression is reported, not silently returned as empty tables."""
     enrich = _enrich()
     enrich.get_coexpression_net = MagicMock(return_value=([], []))
@@ -164,7 +198,7 @@ def test_run_with_tables_raises_when_no_coexpressed_genes():
     service.gp.enrichr = MagicMock()
     try:
         with pytest.raises(service.NoEnrichmentFoundError):
-            enrich.run_with_tables("GENE1", tissue_name="Liver")
+            enrich.run("GENE1", tissue_name="Liver")
         service.gp.enrichr.assert_not_called()
     finally:
         service.gp.enrichr = original
@@ -192,10 +226,14 @@ def test_enrichr_retry_shrinks_background_until_success(monkeypatch):
 
     assert result == "results"
     # full background first, then shrink; nothing below 2000, where the
-    # Enrichr endpoint cannot succeed
+    # Enrichr endpoint cannot succeed. Each rung carries the query genes,
+    # hence the +1 over the plain slice sizes.
     assert [len(entry.kwargs["background"]) for entry in api.call_args_list] == [
-        6000, 5000, 2000
+        6001, 5001, 2001
     ]
+    # a shrinking background must never drop the genes being tested
+    for entry in api.call_args_list:
+        assert "GENE1" in entry.kwargs["background"]
 
 
 def test_enrichr_retry_raises_typed_error_after_exhaustion(monkeypatch):
@@ -288,25 +326,27 @@ def test_process_results_falls_back_to_library_sizes_without_overlap(monkeypatch
         },
     ])
 
-    out = enrich._process_enrichment_results(raw, p_threshold=None)
+    out = enrich._process_enrichment_results(raw)
 
     assert out["Term Size"].tolist() == [1922, 15]
 
 
-def test_process_results_filters_at_the_shared_significance_floor(monkeypatch):
+def test_shortlist_honours_the_shared_significance_floor(monkeypatch):
     monkeypatch.setenv("GO_SIGNIFICANCE_MAX_P", "0.01")
     enrich = _enrich()
     enrich.go_map = {"GO:1": {"desc": "a"}, "GO:2": {"desc": "b"}}
+    enrich.get_coexpression_net = MagicMock(return_value=(["ENSG1"], ["ENSG1", "ENSG2"]))
     raw = pd.DataFrame([
         {"Gene_set": "GO", "Term": "kept (GO:1)", "Adjusted P-value": 0.005,
          "Genes": "A", "Overlap": "1/10"},
         {"Gene_set": "GO", "Term": "dropped (GO:2)", "Adjusted P-value": 0.03,
          "Genes": "B", "Overlap": "1/20"},
     ])
+    monkeypatch.setattr(service.gp, "enrichr", MagicMock(return_value=MagicMock(results=raw)))
 
-    out = enrich._process_enrichment_results(raw)
+    filtered = enrich.run("GENE1", tissue_name="Liver")
 
-    assert list(out["ID"]) == ["GO:1"]
+    assert list(filtered["ID"]) == ["GO:1"]
 
 
 # --- GO id parsing: names contain their own parentheses -------------------------
@@ -351,3 +391,18 @@ def test_process_results_never_emits_a_malformed_go_id(monkeypatch):
     out = enrich._process_enrichment_results(raw)
 
     assert list(out["ID"]) == ["GO:0060211", "GO:2000342"]
+
+
+def test_go_term_sizes_retries_after_a_failed_load(monkeypatch):
+    monkeypatch.setattr(service, "_GO_TERM_SIZES", None)
+    loader = MagicMock(
+        side_effect=[
+            {"sizes": {}, "corpus_genes": 0},
+            {"sizes": {"GO:1": 42}, "corpus_genes": 100},
+        ]
+    )
+    monkeypatch.setattr(service, "_load_go_term_sizes", loader)
+
+    assert service.go_term_sizes() == {}
+    assert service.go_term_sizes() == {"GO:1": 42}
+    assert loader.call_count == 2
