@@ -217,7 +217,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                     coexpression_data = get_coexpression_matrix_for_tissue.submit(
                         ensembl_gene, selected_tissue, k=500
                     ).result()
-                    enrich_tbl, enrich_tbl_all = enrichr.run_with_tables(
+                    enrich_tbl = enrichr.run(
                         this_causal_gene, tissue_name=selected_tissue,
                         coexpression_data=coexpression_data
                     )
@@ -287,34 +287,21 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                     })
                     continue
 
-                semantic_input = enrich_tbl
-                if enrich_tbl_all is not None and len(enrich_tbl_all) > 0:
-                    semantic_input = enrich_tbl_all
-
-                # Check if enrichment table is empty
-                if semantic_input is None or len(semantic_input) == 0:
-                    logger.warning(f"No enrichment results found for gene {this_causal_gene}. Skipping GO relevance scoring.")
-                    relevant_gos = []
-                else:
-                    # Resilient: normal ranking, then an opt-in second model,
-                    # then a model-free ranking. Every tier keeps the
-                    # significance floor and the specificity quota, so a
-                    # degraded answer is weaker but never unsupported.
-                    relevant_gos = rank_go_terms_resilient(
-                        phenotype,
-                        semantic_input,
-                        k=10,
-                        strategy=config.go_semantic_strategy,
-                        causal_gene=this_causal_gene,
-                        max_candidates=config.go_llm_prefilter_k,
-                        llm=llm,
+                relevant_gos = rank_go_terms_resilient(
+                    phenotype,
+                    enrich_tbl,
+                    k=10,
+                    strategy=config.go_semantic_strategy,
+                    causal_gene=this_causal_gene,
+                    max_candidates=config.go_llm_prefilter_k,
+                    llm=llm,
+                )
+                if any(g.get("ranking_degraded") for g in relevant_gos or []):
+                    logger.warning(
+                        f"GO terms for gene {this_causal_gene} were ranked "
+                        "without a language model; results are marked "
+                        "ranking_degraded."
                     )
-                    if any(g.get("ranking_degraded") for g in relevant_gos or []):
-                        logger.warning(
-                            f"GO terms for gene {this_causal_gene} were ranked "
-                            "without a language model; results are marked "
-                            "ranking_degraded."
-                        )
 
                 # Cache if shared
                 if use_shared_enrichment:

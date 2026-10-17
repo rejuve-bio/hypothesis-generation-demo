@@ -14,41 +14,24 @@ from src.config import Config
 from src.tasks.gene_expression import get_coexpression_matrix_for_tissue
 
 
-
-# Fits the tissue-filtered set (~15k) while staying clear of the all-NaN
-# response Enrichr returns for genome-scale backgrounds.
 _ENSG_RE = re.compile(r"^ENSG\d+$", re.IGNORECASE)
 
+# Enrichr returns all-NaN p-values for genome-scale backgrounds (~60k genes).
 _MAX_BACKGROUND_SIZE = 20000
-
-_SIGNIFICANCE_DEFAULT = object()
 
 
 def significance_floor() -> float:
-    """Max adjusted p-value for a GO term to count as a real enrichment hit.
-
-    Single source of truth: the enrichment filter and the ranking layer's
-    floor must agree, or lowering GO_SIGNIFICANCE_MAX_P silently tightens one
-    and not the other.
-    """
+    """Max adjusted p-value for a GO term to count as a real enrichment hit."""
     return float(os.getenv("GO_SIGNIFICANCE_MAX_P", "0.05"))
 
 
 _GO_ID_IN_TERM_RE = re.compile(r"\((GO:\d+)\)")
-# Enrichr labels terms "<name> (GO:0001234)", but plenty of GO names contain
-# their own parentheses -- "Poly(A) Tail Shortening", "Chemokine (C-X-C Motif)
-# Ligand 2". Anchoring to the trailing id is the only safe split; taking the
-# first "(" yields ids like "A" and names truncated mid-word.
+# GO names can contain their own parentheses, so anchor to the trailing id.
 _GO_ID_SUFFIX_RE = re.compile(r"^(?P<name>.*?)\s*\((?P<go_id>GO:\d+)\)\s*$")
 
 
 def split_term_and_go_id(term: str) -> tuple[str, str]:
-    """Split "<name> (GO:0001234)" into its name and id.
-
-    Falls back to the last parenthesised group, then to the whole string, so a
-    label in an unexpected shape degrades to a wrong-but-harmless name rather
-    than a wrong id.
-    """
+    """Split "<name> (GO:0001234)" into its name and id."""
     text = str(term).strip()
     match = _GO_ID_SUFFIX_RE.match(text)
     if match:
@@ -60,8 +43,7 @@ def split_term_and_go_id(term: str) -> tuple[str, str]:
     return text, text
 _GO_TERM_SIZES: dict | None = None
 _GO_TERM_SIZES_LOCK = threading.Lock()
-# Distinct genes in GO_Biological_Process_2023 (Human); fallback when a
-# cache predates the corpus count or the library cannot be reached.
+# Distinct genes in GO_Biological_Process_2023 (Human).
 _GO_CORPUS_GENES_DEFAULT = 14697
 
 
@@ -75,29 +57,25 @@ def _parse_term_size(overlap: pd.Series) -> pd.Series:
 def go_term_sizes(library: str = "GO_Biological_Process_2023") -> dict[str, int]:
     """Map GO id -> number of genes annotated to it, from the Enrichr library.
 
-    Enrichr's background-corrected endpoint (the one used whenever a custom
-    background is supplied, i.e. always here) omits the Overlap column, so the
-    term's size is not recoverable from the results themselves. Downstream
-    ranking needs it as a specificity signal, so it is read once from the same
-    gene-set library the enrichment was scored against and cached on disk.
-    Failure is non-fatal: callers fall back to size-agnostic ranking.
+    The background-corrected endpoint omits the Overlap column, so term size
+    is not recoverable from the results themselves.
     """
     global _GO_TERM_SIZES
     if _GO_TERM_SIZES is None:
-        # Dask runs tasks on threads; without this two workers can both miss
-        # the memo and fetch the library concurrently on first use.
         with _GO_TERM_SIZES_LOCK:
             if _GO_TERM_SIZES is None:
-                _GO_TERM_SIZES = _load_go_term_sizes(library)
+                record = _load_go_term_sizes(library)
+                if record["sizes"]:
+                    _GO_TERM_SIZES = record
+                else:
+                    return {}
     return _GO_TERM_SIZES["sizes"]
 
 
 def go_corpus_gene_count(library: str = "GO_Biological_Process_2023") -> int:
     """Distinct genes annotated anywhere in the library.
 
-    The denominator for information content. Fixed per library, so a term's
-    specificity does not depend on which other terms happen to be ranked
-    alongside it.
+    The denominator for a term's information content.
     """
     go_term_sizes(library)
     return (_GO_TERM_SIZES or {}).get("corpus_genes") or _GO_CORPUS_GENES_DEFAULT
@@ -146,8 +124,6 @@ def _load_go_term_sizes(library: str) -> dict[str, int]:
             "Ranking will fall back to size-agnostic scoring."
         )
         return {"sizes": {}, "corpus_genes": None}
-
-
 
 
 class EnrichrAPIUnavailableError(RuntimeError):
@@ -296,23 +272,13 @@ class Enrich:
         # Return both top genes and all genes for background
         return top_positive_genes, all_genes
 
-
-    def _process_enrichment_results(
-        self, res: pd.DataFrame, p_threshold=_SIGNIFICANCE_DEFAULT
-    ) -> pd.DataFrame:
-        """
-        Process and filter enrichment results from gseapy.
-        p_threshold=None keeps all rows returned by enrichr.
-        """
+    def _process_enrichment_results(self, res: pd.DataFrame) -> pd.DataFrame:
+        """Split the GO id out of each term, attach its description and size."""
         res = res.copy()  # Avoid SettingWithCopyWarning
         res.drop("Gene_set", axis=1, inplace=True)
         split = res["Term"].apply(split_term_and_go_id)
         res.insert(1, "ID", [go_id for _, go_id in split])
         res["Term"] = [name for name, _ in split]
-        if p_threshold is _SIGNIFICANCE_DEFAULT:
-            p_threshold = significance_floor()
-        if p_threshold is not None:
-            res = res[res["Adjusted P-value"] < p_threshold].copy()
         desc = []
         for _, row in res.iterrows():
             go_id = row["ID"]
@@ -332,11 +298,8 @@ class Enrich:
             res["Term Size"] = (
                 res["ID"].map(sizes).astype("Float64") if sizes else pd.NA
             )
-            # Enrichr's server-side library is not guaranteed to match the
-            # published one we read sizes from, so a term can be scored here
-            # and absent there. Unmatched terms fall back to neutral median
-            # specificity, which is safe but silent -- warn if it stops being
-            # a handful of terms.
+            # A term Enrichr scores may be absent from the published library
+            # we read sizes from. Unmatched terms score as the broadest.
             if sizes is not None and len(res):
                 matched = int(pd.to_numeric(res["Term Size"], errors="coerce").notna().sum())
                 if matched < len(res) * 0.9:
@@ -377,10 +340,16 @@ class Enrich:
                 logger.info(
                     f"Calling Enrichr with background size {background_size}"
                 )
+                # The query is unioned back in: it sits at the tail of the
+                # background, so a head slice would drop exactly the genes the
+                # caller added to stop Enrichr discarding them.
+                trimmed = list(
+                    dict.fromkeys(list(background[:background_size]) + list(gene_list))
+                )
                 return gp.enrichr(
                     gene_list=gene_list,
                     gene_sets=gene_sets,
-                    background=background[:background_size],
+                    background=trimmed,
                     organism=organism,
                     outdir=outdir,
                 ).results
@@ -396,11 +365,7 @@ class Enrich:
         ) from last_error
 
     def _run_enrichr(self, relevant_gene, tissue_name=None, coexpression_data=None):
-        """Raw enrichr output for a gene's co-expression network.
-
-        Shared by run() and run_with_tables() so the p-value filter is the only
-        difference between them.
-        """
+        """Raw enrichr output for a gene's co-expression network."""
         library = "GO_Biological_Process_2023"
         organism = "human"
         causal_gene_symbol = self.to_symbol(relevant_gene)
@@ -464,45 +429,30 @@ class Enrich:
         return res, causal_gene_symbol, gene_list
 
     def run(self, relevant_gene, tissue_name=None, coexpression_data=None):
-        """Enriched GO terms (adj p < 0.05) for a gene's co-expression network."""
+        """Significantly enriched GO terms for a gene's co-expression network."""
         res, causal_gene_symbol, gene_list = self._run_enrichr(
             relevant_gene, tissue_name, coexpression_data
         )
-        enriched = self._process_enrichment_results(res)
+        all_terms = self._process_enrichment_results(res)
+        floor = significance_floor()
+        enriched = all_terms[
+            pd.to_numeric(all_terms["Adjusted P-value"], errors="coerce") < floor
+        ].copy()
         if enriched.empty:
             raise NoEnrichmentFoundError(
                 f"{len(gene_list)} genes are co-expressed with {causal_gene_symbol} in "
                 f"'{tissue_name}', but no GO Biological Process term is significantly "
-                "enriched among them (adjusted p < 0.05). Selecting a different "
-                "tissue may give a result.",
-                reason="no_significant_go_terms",
-                gene=causal_gene_symbol,
-                tissue=tissue_name,
-            )
-        return enriched
-
-    def run_with_tables(self, relevant_gene, tissue_name=None, coexpression_data=None):
-        """Like run(), but also returns the full table with no p-value filter."""
-        res, causal_gene_symbol, gene_list = self._run_enrichr(
-            relevant_gene, tissue_name, coexpression_data
-        )
-        filtered = self._process_enrichment_results(res)
-        all_terms = self._process_enrichment_results(res, p_threshold=None)
-        if filtered.empty:
-            raise NoEnrichmentFoundError(
-                f"{len(gene_list)} genes are co-expressed with {causal_gene_symbol} in "
-                f"'{tissue_name}', but no GO Biological Process term is significantly "
-                "enriched among them (adjusted p < 0.05). Selecting a different "
-                "tissue may give a result.",
+                f"enriched among them (adjusted p < {floor:g}). Selecting a "
+                "different tissue may give a result.",
                 reason="no_significant_go_terms",
                 gene=causal_gene_symbol,
                 tissue=tissue_name,
             )
         logger.info(
             f"Enrichr returned {len(all_terms)} GO terms; "
-            f"{len(filtered)} pass adj p < 0.05"
+            f"{len(enriched)} pass adj p < {floor:g}"
         )
-        return filtered, all_terms
+        return enriched
 
     @staticmethod
     def _no_coexpressed_genes_error(

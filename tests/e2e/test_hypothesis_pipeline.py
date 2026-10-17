@@ -126,21 +126,17 @@ def test_variant_to_persisted_hypothesis_component_e2e(
     }.get(str(value).upper())
     enrichr.is_ensembl_id.side_effect = lambda value: str(value).upper().startswith("ENSG")
     enrichr.annotate_graph_gene_names.side_effect = deepcopy
-    enrichr.run.return_value = [{"Term": "Inflammatory response"}]
-    enrichr.run_with_tables.return_value = (
-        [{"Term": "Inflammatory response"}],
-        pd.DataFrame(
-            [
-                {
-                    "ID": "GO:0006954",
-                    "Term": "Inflammatory response",
-                    "Desc": "inflammatory response",
-                    "Adjusted P-value": 1e-6,
-                    "Genes": "STAT1;IRF1",
-                    "Term Size": 120,
-                }
-            ]
-        ),
+    enrichr.run.return_value = pd.DataFrame(
+        [
+            {
+                "ID": "GO:0006954",
+                "Term": "Inflammatory response",
+                "Desc": "inflammatory response",
+                "Adjusted P-value": 1e-6,
+                "Genes": "STAT1;IRF1",
+                "Term Size": 120,
+            }
+        ]
     )
     llm = MagicMock()
     llm.get_relevant_go.return_value = [

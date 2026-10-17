@@ -73,7 +73,8 @@ def test_rank_go_terms_by_strategy_dispatches_hybrid_to_hybrid_llm(monkeypatch):
     assert result == ["hybrid-result"]
     hybrid_mock.assert_called_once_with(
         "phenotype", tbl, k=5, causal_gene="GENE1", prefilter_k=100,
-        backend="local", embedding_model=None, hybrid_alpha=service.DEFAULT_HYBRID_ALPHA,
+        backend="local", embedding_model=None,
+        llm=None,
     )
 
 
@@ -155,10 +156,10 @@ def _patch_score_enrichment_table(monkeypatch, similarity_by_id):
     caller-controlled similarity/score column instead of calling OpenAI."""
 
     def fake_score(phenotype, enrich_tbl, causal_gene=None, embedding_model=None,
-                    hybrid_alpha=service.DEFAULT_HYBRID_ALPHA, strategy=None):
+                    strategy=None):
         data = enrich_tbl.copy()
         data["similarity"] = [similarity_by_id.get(row["ID"], 0.0) for _, row in data.iterrows()]
-        data["score"] = service.hybrid_score(data["similarity"], data["Adjusted P-value"], alpha=hybrid_alpha)
+        data["score"] = service.hybrid_score(data["similarity"], data["Adjusted P-value"])
         return data
 
     monkeypatch.setattr(service, "_score_enrichment_table", fake_score)
@@ -216,33 +217,7 @@ def test_prefilter_union_returns_input_unchanged_when_empty():
     assert service.prefilter_go_candidates_union("phenotype", empty, top_n=5) is empty
 
 
-# --- fixture / replay parsing utilities -------------------------------------------
-
-
-def test_parse_expected_go_ids_dedupes_and_preserves_order(tmp_path):
-    path = tmp_path / "gold.md"
-    path.write_text("GO:0006954 inflammatory response\nGO:0002250 immune\nGO:0006954 repeat")
-
-    ids = service.parse_expected_go_ids(str(path))
-
-    assert ids == ["GO:0006954", "GO:0002250"]
-
-
-def test_overlap_at_k_counts_intersection_within_top_k():
-    result_ids = ["GO:1", "GO:2", "GO:3", "GO:4"]
-    expected_ids = ["GO:2", "GO:4", "GO:9"]
-    assert service.overlap_at_k(result_ids, expected_ids, k=2) == 1
-    assert service.overlap_at_k(result_ids, expected_ids, k=4) == 2
-
-
-def test_load_enrich_table_from_csv_requires_expected_columns(tmp_path):
-    path = tmp_path / "table.csv"
-    pd.DataFrame({"ID": ["GO:1"]}).to_csv(path, index=False)
-    with pytest.raises(ValueError, match="missing columns"):
-        service.load_enrich_table(str(path))
-
-
-# --- specificity weighting: stop broad terms winning on size alone ---------------
+# --- term specificity -----------------------------------------------------------
 
 
 def test_normalize_specificity_favours_narrow_terms():
@@ -742,6 +717,25 @@ def test_unknown_size_is_scored_as_broad_not_average(monkeypatch):
     assert spec.iloc[2] == pytest.approx(0.0)   # broadest
 
 
+def test_specificity_scale_is_not_memoized_after_a_failed_size_load(monkeypatch):
+    monkeypatch.setattr(service, "_SPECIFICITY_SCALE", None)
+    monkeypatch.setattr(
+        "src.services.enrich.go_corpus_gene_count", lambda *a, **k: 10000
+    )
+    monkeypatch.setattr("src.services.enrich.go_term_sizes", lambda *a, **k: {})
+    service._specificity_scale()
+    assert service._SPECIFICITY_SCALE is None
+
+    monkeypatch.setattr(
+        "src.services.enrich.go_term_sizes",
+        lambda *a, **k: {"GO:wide": 1000, "GO:narrow": 10},
+    )
+    _, lo, hi = service._specificity_scale()
+    assert service._SPECIFICITY_SCALE is not None
+    assert lo == pytest.approx(1.0 / 4.0)   # ln(10)/ln(10000)
+    assert hi == pytest.approx(3.0 / 4.0)   # ln(1000)/ln(10000)
+
+
 def test_all_sizes_unknown_stays_neutral():
     """With nothing measurable at all, flat 0.5 is right -- demoting every
     term equally is the same ranking, but 0.0 would distort the blend."""
@@ -783,3 +777,21 @@ def test_embed_texts_batches_above_the_api_limit(monkeypatch):
     assert len(out) == 2591
     assert max(calls) <= 2048, f"a batch exceeded the API limit: {calls}"
     assert sum(calls) == 2591
+
+
+def test_resilient_does_not_retry_the_backend_the_caller_already_asked_for(monkeypatch):
+    """The guard must compare against the strategy passed in, not GO_SEMANTIC_STRATEGY."""
+    monkeypatch.setenv("GO_SEMANTIC_STRATEGY", "hybrid-local")
+    monkeypatch.setenv("GO_LLM_FALLBACK_BACKEND", "openai")
+    by_strategy = MagicMock(side_effect=RuntimeError("boom"))
+    degraded = MagicMock(return_value=["degraded"])
+    monkeypatch.setattr(service, "rank_go_terms_by_strategy", by_strategy)
+    monkeypatch.setattr(service, "rank_go_terms_degraded", degraded)
+    tbl = _enrich_tbl([("GO:1", "term", 0.01, "GENE1")])
+
+    result = service.rank_go_terms_resilient(
+        "phenotype", tbl, k=5, strategy=GoSemanticStrategy.HYBRID_OPENAI
+    )
+
+    assert result == ["degraded"]
+    assert by_strategy.call_count == 1

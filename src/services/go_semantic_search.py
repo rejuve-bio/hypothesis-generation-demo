@@ -1,31 +1,18 @@
 """Semantic ranking of enriched GO terms against a GWAS phenotype.
 
-Primary strategy: **hybrid** (GO_SEMANTIC_STRATEGY=llm or hybrid).
-    1. Score the full enrichment table (embedding similarity + p-value hybrid score).
-    2. Build a shortlist via `prefilter_go_candidates_union`: top-N by adjusted
-       p-value, topped up with the highest-scoring remaining terms that also
-       clear the significance floor. The cap is a ceiling, not a quota -- a gene
-       with 18 real hits yields a shortlist of 18, never padded out with noise.
-    3. Send the shortlist to an LLM (local gemma4 or OpenAI) for a single rerank call.
-    4. Enforce two guarantees in code, independent of the model: no sub-floor
-       term survives, and the highest-scoring candidates keep a share of the
-       returned slots.
-Switch model backend with GO_LLM_BACKEND=local|openai; no code change required.
-
-`baseline` / `improved` / `embedding` and the legacy `llm-local` / `llm-openai`
-(full-table batched map-reduce) strategies are kept for benchmarking via
-scripts/replay_go_semantic_search.py but are not the production default.
+Default strategy (GO_SEMANTIC_STRATEGY=llm or hybrid): score the enrichment
+table on similarity, significance and specificity, shortlist, then rerank the
+shortlist with one LLM call. The significance floor is applied in code, not by
+the model. GO_LLM_BACKEND picks local or openai; the other strategies are
+selectable through GO_SEMANTIC_STRATEGY for comparison runs.
 """
 
 from __future__ import annotations
 
 import math
-import json
 import os
-import re
 from enum import Enum
-from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
 import openai
@@ -42,22 +29,6 @@ DEFAULT_LLM_PREFILTER_PVALUE_K = 150
 DEFAULT_LLM_MODEL = "gemma4"
 DEFAULT_OPENAI_LLM_MODEL = "gpt-4o"
 _SPECIFICITY_SCALE: tuple[int, float, float] | None = None
-
-ALL_AB_STRATEGIES = (
-    "baseline",
-    "improved",
-    "embedding",
-    "hybrid-local",
-    "hybrid-openai",
-    "llm-local",
-    "llm-openai",
-)
-
-_FIXTURE_LINE_RE = re.compile(
-    r"^(?P<term>.+?)\s+\((?P<go_id>GO:\d+)\)\s+\|\s+adj_p=(?P<adj_p>[\d.eE+-]+)\s+\|\s+genes:\s*(?P<genes>.+)$"
-)
-_GO_ID_RE = re.compile(r"GO:\d+")
-
 
 class GoSemanticStrategy(str, Enum):
     BASELINE = "baseline"
@@ -145,30 +116,8 @@ def normalize_neg_log_p(pvalues: pd.Series) -> pd.Series:
 def normalize_specificity(term_sizes: pd.Series) -> pd.Series:
     """Information content from GO term size, on a fixed [0, 1] scale.
 
-    Resnik information content, IC(t) = -log(p(t)) with p(t) the share of the
-    annotation corpus the term covers, divided by log(N) to land in [0, 1].
-
-    The scale is deliberately fixed to the corpus rather than min-maxed over
-    the candidate pool. Pool-relative scaling made a term's specificity depend
-    on its neighbours: in a pool of uniformly broad terms the least-broad one
-    scored 1.0 and looked specific, and the same term scored differently from
-    one run to the next. Against the corpus, 1922 genes always scores 0.21 and
-    15 genes always scores 0.72.
-
-    Terms of unknown size are treated as the broadest the library knows of,
-    not as average. The asymmetry is deliberate: a term Enrichr scores but
-    does not publish a gene set for is unmeasurable here, and guessing
-    "average" hands it a reserved slot. GO:0006357 "regulation of
-    transcription by RNA polymerase II" -- absent from every published
-    Enrichr GO library -- took the top scored slot in both recorded cases on
-    nothing but that default. Wrongly demoting an unmeasurable term costs one
-    candidate; wrongly promoting one puts a truism in a slot reserved for
-    specific biology, which is the failure this weighting exists to prevent.
-
-    QuickGO was evaluated as a way to fill the gap properly and rejected: its
-    counts agree with the library for small terms but diverge unpredictably
-    for the rest (0.1x to 4.9x across sampled terms), so the two cannot be
-    mixed on one scale.
+    Anchored to the library's own size range, not min-maxed over the pool, so
+    a term's specificity does not depend on what it is ranked beside.
     """
     sizes = pd.to_numeric(term_sizes, errors="coerce")
     if sizes.notna().sum() == 0:
@@ -191,11 +140,7 @@ def normalize_specificity(term_sizes: pd.Series) -> pd.Series:
 def _specificity_scale() -> tuple[int, float, float]:
     """(corpus size, IC of the broadest term, IC of the narrowest term).
 
-    The endpoints come from the library's own size distribution, so they are
-    constant for a given library. Scaling to them keeps a term's specificity
-    independent of its pool while still using the full [0, 1] range -- raw IC
-    only spans about 0.21 to 0.83, which left specificity too compressed to
-    weigh against similarity and significance.
+    Constant for a given library, so specificity is comparable across runs.
     """
     global _SPECIFICITY_SCALE
     if _SPECIFICITY_SCALE is not None:
@@ -212,8 +157,12 @@ def _specificity_scale() -> tuple[int, float, float]:
         widest, narrowest = corpus, 1
     lo = np.log(corpus / widest) / np.log(corpus)
     hi = np.log(corpus / narrowest) / np.log(corpus)
-    _SPECIFICITY_SCALE = (corpus, float(lo), float(hi))
-    return _SPECIFICITY_SCALE
+    scale = (corpus, float(lo), float(hi))
+    # Same rule as go_term_sizes: memoizing the fallback after a failed load
+    # would pin it for the worker's lifetime.
+    if observed:
+        _SPECIFICITY_SCALE = scale
+    return scale
 
 
 def hybrid_score(
@@ -254,12 +203,7 @@ def _resolve_score_weights() -> tuple[float, float, float]:
 
 
 def significance_floor() -> float:
-    """Max adjusted p-value for a term to count as a real enrichment hit.
-
-    Delegates to the enrichment layer so the shortlist filter and this floor
-    cannot drift apart. Imported lazily, as the other cross-service imports in
-    this module are, to keep import cost off the module path.
-    """
+    """Max adjusted p-value for a term to count as a real enrichment hit."""
     from src.services.enrich import significance_floor as _floor
 
     return _floor()
@@ -305,7 +249,6 @@ def rank_go_terms(
     strategy: GoSemanticStrategy = GoSemanticStrategy.IMPROVED,
     causal_gene: Optional[str] = None,
     embedding_model: Optional[str] = None,
-    hybrid_alpha: float = DEFAULT_HYBRID_ALPHA,
 ) -> list[dict]:
     if enrich_tbl is None or len(enrich_tbl) == 0:
         logger.warning("Empty enrichment table provided for GO semantic search")
@@ -316,7 +259,6 @@ def rank_go_terms(
         enrich_tbl,
         causal_gene=causal_gene,
         embedding_model=embedding_model,
-        hybrid_alpha=hybrid_alpha,
         strategy=strategy,
     )
     if len(data) == 0:
@@ -334,7 +276,6 @@ def _score_enrichment_table(
     enrich_tbl: pd.DataFrame,
     causal_gene: Optional[str] = None,
     embedding_model: Optional[str] = None,
-    hybrid_alpha: float = DEFAULT_HYBRID_ALPHA,
     strategy: GoSemanticStrategy = GoSemanticStrategy.IMPROVED,
 ) -> pd.DataFrame:
     """Attach similarity and hybrid score columns to an enrichment table."""
@@ -355,7 +296,6 @@ def _score_enrichment_table(
     data["score"] = hybrid_score(
         data["similarity"],
         data["Adjusted P-value"],
-        alpha=hybrid_alpha,
         term_sizes=data["Term Size"] if "Term Size" in data.columns else None,
     )
     return data
@@ -367,21 +307,12 @@ def prefilter_go_candidates_union(
     top_n: int,
     causal_gene: Optional[str] = None,
     embedding_model: Optional[str] = None,
-    hybrid_alpha: float = DEFAULT_HYBRID_ALPHA,
     pvalue_k: Optional[int] = None,
 ) -> pd.DataFrame:
-    """Union shortlist: guaranteed top enrichment terms plus semantic top-ups.
-
-    Two arms are merged so the LLM sees both worlds:
-      - `pvalue_k` terms with the strongest raw enrichment signal (adj p-value),
-        guaranteed regardless of how well they embed against the phenotype text.
-      - The remaining slots (up to `top_n`) filled by highest hybrid score
-        (embedding similarity blended with p-value) among terms not already picked.
-    """
+    """Shortlist: `pvalue_k` terms by adjusted p-value, the rest by hybrid score."""
     if enrich_tbl is None or len(enrich_tbl) == 0:
         return enrich_tbl
 
-    top_n = min(top_n, len(enrich_tbl))
     if pvalue_k is None:
         default_pvalue_k = max(top_n // 2, top_n - 100)
         pvalue_k = int(
@@ -389,17 +320,23 @@ def prefilter_go_candidates_union(
         )
     pvalue_k = min(max(pvalue_k, 0), top_n)
 
+    # Score only what can survive the floor. Embedding the whole pool meant
+    # ~2,500 requests per run to then discard all but ~40 of them.
+    floor = significance_floor()
+    pvalues = pd.to_numeric(enrich_tbl["Adjusted P-value"], errors="coerce")
+    candidates = enrich_tbl[pvalues < floor]
+    if len(candidates) == 0:
+        candidates = enrich_tbl
+
     data = _score_enrichment_table(
         phenotype,
-        enrich_tbl,
+        candidates,
         causal_gene=causal_gene,
         embedding_model=embedding_model,
-        hybrid_alpha=hybrid_alpha,
     )
     if len(data) == 0:
         return data
 
-    floor = significance_floor()
     above = data[data["Adjusted P-value"] < floor]
     pool = above if len(above) > 0 else data
     top_n = min(top_n, len(pool))
@@ -440,69 +377,6 @@ def prefilter_go_candidates_union(
         )
     )
     return shortlisted
-
-
-def _go_eval_log_enabled() -> bool:
-    return os.getenv("GO_EVAL_LOG", "").strip().lower() in {"1", "true", "yes"}
-
-
-def _go_eval_log_dir() -> Path:
-    return Path(os.getenv("GO_EVAL_LOG_DIR", "data/go_eval"))
-
-
-def _maybe_log_go_eval_snapshot(
-    *,
-    phenotype: str,
-    causal_gene: Optional[str],
-    full_tbl: pd.DataFrame,
-    shortlisted_tbl: pd.DataFrame,
-    results: list[dict],
-    error: Optional[str] = None,
-) -> None:
-    """Opt-in (GO_EVAL_LOG=1) audit trail for judging ranking quality.
-
-    Writes the full candidate pool, the shortlist sent to the LLM and what it
-    picked to one JSON file per call. Off by default, so it costs nothing in
-    production. It also fires on the failure path, which is what makes a silent
-    fallback to embedding-only ranking visible after the fact.
-    """
-    if not _go_eval_log_enabled():
-        return
-    out_dir = _go_eval_log_dir()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stem = _safe_snapshot_part(f"{phenotype}_{causal_gene or 'nogene'}")
-    ts = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
-    path = out_dir / f"{ts}_{stem}.json"
-    base_cols = ["ID", "Term", "Desc", "Adjusted P-value", "Genes"]
-    diag_cols = ["Term Size", "similarity", "score"]
-
-    def _rows(df: pd.DataFrame) -> list[dict]:
-        if not len(df):
-            return []
-        cols = base_cols + [c for c in diag_cols if c in df.columns]
-        return df[cols].to_dict(orient="records")
-
-    payload = {
-        "phenotype": phenotype,
-        "causal_gene": causal_gene,
-        "full_pool_size": len(full_tbl),
-        "shortlist_size": len(shortlisted_tbl),
-        "full_pool": _rows(full_tbl),
-        "shortlist": _rows(shortlisted_tbl),
-        "llm_results": results,
-        "error": error,
-    }
-    if error:
-        path = path.with_name(f"{path.stem}_FAILED{path.suffix}")
-    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    status = f"FAILED ({error})" if error else "ok"
-    logger.info(f"[GO_EVAL_LOG] wrote {path} (full_pool={len(full_tbl)}, shortlist={len(shortlisted_tbl)}, status={status})")
-
-
-def _safe_snapshot_part(value: str | None, fallback: str = "unknown") -> str:
-    if not value or not str(value).strip():
-        return fallback
-    return re.sub(r"[^\w.-]", "_", str(value).strip()).strip("_") or fallback
 
 
 def enforce_significance_floor(
@@ -576,7 +450,10 @@ def specificity_quota(k: int) -> int:
     try:
         fraction = float(raw)
     except ValueError:
-        fraction = 0.4
+        logger.warning(
+            f"Invalid GO_SPECIFICITY_QUOTA_FRACTION={raw!r}; leaving the quota off"
+        )
+        fraction = 0.0
     fraction = min(max(fraction, 0.0), 1.0)
     return int(math.floor(k * fraction))
 
@@ -651,12 +528,7 @@ def enforce_specificity_quota(
 
 
 def go_llm_fallback_backend() -> Optional[str]:
-    """Opt-in second-tier model, used only if the primary backend is unreachable.
-
-    Off by default: a local backend is usually chosen for cost or privacy
-    reasons, and silently spending on a hosted model every time that host
-    blinks is not a decision this code should make on its own.
-    """
+    """Opt-in second-tier backend, used only if the primary is unreachable."""
     raw = os.getenv("GO_LLM_FALLBACK_BACKEND", "").strip().lower()
     return raw or None
 
@@ -667,23 +539,8 @@ def rank_go_terms_degraded(
     k: int = 10,
     causal_gene: Optional[str] = None,
     embedding_model: Optional[str] = None,
-    hybrid_alpha: float = DEFAULT_HYBRID_ALPHA,
 ) -> list[dict]:
-    """Rank without any LLM, keeping every guarantee the normal path gives.
-
-    The significance floor and the specificity quota are arithmetic; they do
-    not need a model. Only the *ordering within* the real hits, and the written
-    reasons, are lost when no model is reachable.
-
-    This exists because the previous fallback ranked the FULL unfiltered pool
-    by embedding similarity alone -- no floor, no quota. On a live ulcerative
-    colitis run that returned ten terms with adjusted p from 0.28 to 0.88,
-    including TNF and NF-kB signalling: flawless-sounding disease biology with
-    no statistical support whatsoever, reported as a successful run.
-
-    Results are marked `ranking_degraded` so a caller can tell this apart from
-    a real ranking.
-    """
+    """Rank without an LLM. Results are marked `ranking_degraded`."""
     if enrich_tbl is None or len(enrich_tbl) == 0:
         return []
     try:
@@ -696,7 +553,6 @@ def rank_go_terms_degraded(
             ),
             causal_gene=causal_gene,
             embedding_model=embedding_model,
-            hybrid_alpha=hybrid_alpha,
         )
     except Exception as exc:
         # Embeddings are a separate service and may be down too.
@@ -755,8 +611,8 @@ def rank_go_terms_resilient(
 ) -> list[dict]:
     """Normal ranking, then an opt-in second model, then a model-free ranking.
 
-    Every tier keeps the significance floor and the specificity quota, so a
-    degraded answer is weaker but never statistically unsupported.
+    Every tier keeps the significance floor, so a degraded answer is weaker
+    but never statistically unsupported.
     """
     try:
         return rank_go_terms_by_strategy(
@@ -773,8 +629,10 @@ def rank_go_terms_resilient(
 
     fallback = go_llm_fallback_backend()
     if fallback:
-        parsed = parse_go_semantic_strategy(
-            strategy if isinstance(strategy, str) else None
+        parsed = (
+            strategy
+            if isinstance(strategy, GoSemanticStrategy)
+            else parse_go_semantic_strategy(strategy)
         )
         if fallback != llm_backend_for_strategy(parsed):
             alt = (
@@ -810,9 +668,9 @@ def rank_go_terms_hybrid_llm(
     backend: str = "local",
     model: Optional[str] = None,
     embedding_model: Optional[str] = None,
-    hybrid_alpha: float = DEFAULT_HYBRID_ALPHA,
+    llm=None,
 ) -> list[dict]:
-    """Embedding+p-value union prefilter over the full pool, then one LLM rerank.
+    """Embedding+p-value union prefilter, then one LLM rerank.
 
     This is the production strategy behind GO_SEMANTIC_STRATEGY=llm/hybrid.
     """
@@ -820,7 +678,10 @@ def rank_go_terms_hybrid_llm(
         logger.warning("Empty enrichment table provided for hybrid LLM GO ranking")
         return []
 
-    from src.services.llm import LLM
+    if llm is None:
+        from src.services.llm import LLM
+
+        llm = LLM()
 
     if prefilter_k is None:
         prefilter_k = int(
@@ -838,7 +699,6 @@ def rank_go_terms_hybrid_llm(
         top_n=min(prefilter_k, pool_size),
         causal_gene=causal_gene,
         embedding_model=embedding_model,
-        hybrid_alpha=hybrid_alpha,
         pvalue_k=pvalue_k,
     )
     logger.info(
@@ -852,41 +712,22 @@ def rank_go_terms_hybrid_llm(
         else:
             model = os.getenv("GO_LLM_MODEL", DEFAULT_LLM_MODEL)
 
-    llm = LLM()
-    try:
-        results = llm.rank_relevant_go_by_llm(
-            phenotype=phenotype,
-            enrich_tbl=shortlisted,
-            k=k,
-            causal_gene=causal_gene,
-            max_candidates=len(shortlisted),
-            model=model,
-            backend=backend,
-            prefiltered=True,
-        )
-    except Exception as exc:
-        _maybe_log_go_eval_snapshot(
-            phenotype=phenotype,
-            causal_gene=causal_gene,
-            full_tbl=enrich_tbl,
-            shortlisted_tbl=shortlisted,
-            results=[],
-            error=str(exc),
-        )
-        raise
+    results = llm.rank_relevant_go_by_llm(
+        phenotype=phenotype,
+        enrich_tbl=shortlisted,
+        k=k,
+        causal_gene=causal_gene,
+        max_candidates=len(shortlisted),
+        model=model,
+        backend=backend,
+        prefiltered=True,
+    )
 
     results = enforce_significance_floor(results, shortlisted, k=k)
     results = enforce_specificity_quota(results, shortlisted, k=k)
     for entry in results:
         entry["prefilter"] = "pvalue_embedding_union"
         entry["prefilter_pool"] = pool_size
-    _maybe_log_go_eval_snapshot(
-        phenotype=phenotype,
-        causal_gene=causal_gene,
-        full_tbl=enrich_tbl,
-        shortlisted_tbl=shortlisted,
-        results=results,
-    )
     return results
 
 
@@ -934,7 +775,6 @@ def rank_go_terms_by_strategy(
     strategy: GoSemanticStrategy | str | None = None,
     causal_gene: Optional[str] = None,
     embedding_model: Optional[str] = None,
-    hybrid_alpha: float = DEFAULT_HYBRID_ALPHA,
     max_candidates: Optional[int] = None,
     llm=None,
 ) -> list[dict]:
@@ -950,7 +790,7 @@ def rank_go_terms_by_strategy(
             prefilter_k=max_candidates,
             backend=llm_backend_for_strategy(strategy),
             embedding_model=embedding_model,
-            hybrid_alpha=hybrid_alpha,
+            llm=llm,
         )
     if strategy in (
         GoSemanticStrategy.LLM,
@@ -978,71 +818,4 @@ def rank_go_terms_by_strategy(
         strategy=strategy,
         causal_gene=causal_gene,
         embedding_model=embedding_model,
-        hybrid_alpha=hybrid_alpha,
     )
-
-
-def parse_fixture_go_terms(path: str) -> pd.DataFrame:
-    rows = []
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line or line.startswith("Total GO terms:"):
-                continue
-            match = _FIXTURE_LINE_RE.match(line)
-            if not match:
-                continue
-            rows.append(
-                {
-                    "ID": match.group("go_id"),
-                    "Term": match.group("term").strip(),
-                    "Desc": match.group("term").strip(),
-                    "Adjusted P-value": float(match.group("adj_p")),
-                    "Genes": match.group("genes").strip(),
-                }
-            )
-    if not rows:
-        raise ValueError(f"No GO terms parsed from fixture: {path}")
-    return pd.DataFrame(rows)
-
-
-def load_enrich_table(path: str) -> pd.DataFrame:
-    if path.lower().endswith(".csv"):
-        table = pd.read_csv(path)
-        required = {"ID", "Term", "Desc", "Adjusted P-value", "Genes"}
-        missing = required - set(table.columns)
-        if missing:
-            raise ValueError(f"CSV missing columns: {sorted(missing)}")
-        return table
-    return parse_fixture_go_terms(path)
-
-
-def load_snapshot_metadata(path: str) -> dict[str, Any]:
-    csv_path = Path(path)
-    if csv_path.suffix == ".json":
-        meta_path = csv_path
-    elif csv_path.name.endswith("_enrich_tbl.csv"):
-        meta_path = csv_path.with_name(
-            csv_path.name[: -len("_enrich_tbl.csv")] + "_metadata.json"
-        )
-    else:
-        meta_path = csv_path.with_suffix(".json")
-    if not meta_path.is_file():
-        raise FileNotFoundError(f"Metadata not found: {meta_path}")
-    return json.loads(meta_path.read_text(encoding="utf-8"))
-
-
-def parse_expected_go_ids(path: str) -> list[str]:
-    with open(path, encoding="utf-8") as handle:
-        content = handle.read()
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for go_id in _GO_ID_RE.findall(content):
-        if go_id not in seen:
-            seen.add(go_id)
-            ordered.append(go_id)
-    return ordered
-
-
-def overlap_at_k(result_ids: list[str], expected_ids: list[str], k: int = 10) -> int:
-    return len(set(result_ids[:k]) & set(expected_ids))

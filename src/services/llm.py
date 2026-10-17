@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from typing import List
 
 import openai
@@ -22,10 +21,7 @@ _DEFAULT_LLM_MAX_OUTPUT_TOKENS = 4096
 def _make_go_llm_client() -> openai.OpenAI:
     """OpenAI-compatible client for the local GO ranking model (e.g. Ollama).
 
-    There is no baked-in default host: the local LLM endpoint is specific to
-    each environment. GO_LLM_URL must be set whenever GO_LLM_BACKEND=local
-    (the default); this raises immediately with a clear message otherwise,
-    rather than silently pointing at a fixed personal/lab host.
+    GO_LLM_URL is required; there is no default host.
     """
     url = os.getenv("GO_LLM_URL", "").strip()
     if not url:
@@ -437,7 +433,10 @@ class LLM:
             parsed = json.loads(raw)
 
         results = []
-        for item in parsed.get("terms", [])[:k]:
+        seen_ids: set[str] = set()
+        for item in parsed.get("terms", []):
+            if len(results) >= k:
+                break
             go_id = str(item.get("go_id", "")).strip()
             name = str(item.get("name", "")).strip()
             row = id_lookup.get(go_id)
@@ -446,11 +445,17 @@ class LLM:
             if row is None:
                 logger.warning(f"LLM picked unknown GO term: {go_id} / {name}")
                 continue
+            # Small models sometimes repeat a pick; a repeat would take a slot.
+            row_id = str(row["ID"]).strip()
+            if row_id in seen_ids:
+                logger.warning(f"LLM picked {row_id} more than once; keeping the first")
+                continue
+            seen_ids.add(row_id)
             genes_raw = str(row.get("Genes", ""))
             genes = [g.strip() for g in genes_raw.replace(",", ";").split(";") if g.strip()]
             results.append(
                 {
-                    "id": str(row["ID"]).strip(),
+                    "id": row_id,
                     "name": str(row["Term"]).strip(),
                     "genes": genes,
                     "p": float(row["Adjusted P-value"]),

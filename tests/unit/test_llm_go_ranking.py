@@ -116,6 +116,30 @@ def test_rank_relevant_go_by_llm_once_skips_unknown_go_id_without_crashing():
     assert [r["id"] for r in results] == ["GO:2"]
 
 
+def test_rank_relevant_go_by_llm_once_drops_a_repeated_pick():
+    llm = _llm()
+    client = MagicMock()
+    client.chat.completions.create.return_value = _chat_response(
+        json.dumps(
+            {
+                "terms": [
+                    {"rank": 1, "go_id": "GO:1", "name": "inflammatory response", "reason": "ok"},
+                    {"rank": 2, "go_id": "GO:1", "name": "inflammatory response", "reason": "again"},
+                    {"rank": 3, "go_id": "GO:2", "name": "cell cycle", "reason": "ok"},
+                ]
+            }
+        )
+    )
+
+    results = llm._rank_relevant_go_by_llm_once(
+        "phenotype", _candidates(), k=2, causal_gene=None,
+        llm_model="gemma4", client=client, llm_backend="local",
+    )
+
+    assert [r["id"] for r in results] == ["GO:1", "GO:2"]
+    assert [r["rank"] for r in results] == [1, 2]
+
+
 def test_rank_relevant_go_by_llm_once_wraps_client_errors():
     llm = _llm()
     client = MagicMock()
