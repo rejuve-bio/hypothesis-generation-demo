@@ -42,7 +42,6 @@ jobs:
         OPENAI_API_KEY: dummy-key-for-ci
         ANTHROPIC_API_KEY: dummy-key-for-ci
         HF_TOKEN: dummy-token-for-ci
-        JWT_SECRET_KEY: test-secret-key
         JWT_SECRET: test-secret
       run: |
         uv run --with pytest-cov pytest tests/ \
