@@ -74,6 +74,9 @@ services:
       - SKIP_SEED=true
       - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
+      - MONGODB_URI=${MONGODB_URI}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
       - CREDIBLE_SETS_DB_PORT=5432
       - CREDIBLE_SETS_DB_NAME=${CREDIBLE_SETS_DB_NAME}
@@ -129,6 +132,11 @@ services:
       - SWIPL_HOST=prolog-service
       - SWIPL_PORT=4242
       - OPENAI_API_KEY=${OpenAI}
+      - MONGODB_URI=${MONGODB_URI}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - MAIL_PASSWORD=${MAIL_PASSWORD}
       - REDIS_URL=redis://redis:6379
     env_file:
       - ../.env
@@ -319,6 +327,10 @@ services:
       - GO_MAP=/app/data/go_map.pkl
       - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
+      - MONGODB_URI=${MONGODB_URI}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MAIL_PASSWORD=${MAIL_PASSWORD}
       - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
       - CREDIBLE_SETS_DB_PORT=5432
       - CREDIBLE_SETS_DB_NAME=${CREDIBLE_SETS_DB_NAME}
