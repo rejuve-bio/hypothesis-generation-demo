@@ -37,6 +37,10 @@ def setup_deployments(config):
         "SWIPL_HOST": config.swipl_host,
         "SWIPL_PORT": str(config.swipl_port),
     })
+    if config.swipl_url:
+        os.environ["SWIPL_URL"] = config.swipl_url
+    if config.swipl_api_key:
+        os.environ["SWIPL_API_KEY"] = config.swipl_api_key
     
     job_vars = {"working_dir": "/app"}
     

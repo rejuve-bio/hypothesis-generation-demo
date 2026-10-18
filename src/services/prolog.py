@@ -31,10 +31,12 @@ class PrologNoEvidenceError(ValueError):
 
 class PrologQuery:
 
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, url: str | None = None, api_key: str | None = None):
         self.host = host
         self.port = port
-        self.server = f"http://{self.host}:{self.port}"
+        # SWIPL_URL  overrides host/port for remote access
+        self.server = url.rstrip("/") if url else f"http://{self.host}:{self.port}"
+        self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     def _get(self, path: str, params: dict, *, action: str):
         """GET against the Prolog server, converting connection-level
@@ -43,7 +45,7 @@ class PrologQuery:
         exception type regardless of what went wrong at the transport
         layer."""
         try:
-            return requests.get(f"{self.server}{path}", params=params)
+            return requests.get(f"{self.server}{path}", params=params, headers=self.headers)
         except requests.exceptions.RequestException as exc:
             logger.error(f"Prolog server unreachable for {action}: {exc}")
             raise PrologServiceError(

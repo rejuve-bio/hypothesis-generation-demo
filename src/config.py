@@ -20,6 +20,8 @@ class Config:
         self.go_map = None
         self.swipl_host = "localhost"
         self.swipl_port = 4242
+        self.swipl_url = None
+        self.swipl_api_key = None
         self.mongodb_uri = None
         self.db_name = None
         self.redis_url = None
@@ -74,6 +76,8 @@ class Config:
         config.go_map = args.go_map
         config.swipl_host = args.swipl_host
         config.swipl_port = args.swipl_port
+        config.swipl_url = os.getenv("SWIPL_URL") or None
+        config.swipl_api_key = os.getenv("SWIPL_API_KEY") or None
         config.embedding_model = getattr(args, 'embedding_model', config.embedding_model)
         # Flask-specific arguments (if present)
         config.host = getattr(args, 'host', config.host)
@@ -94,6 +98,8 @@ class Config:
         config.go_map = os.getenv("GO_MAP")
         config.swipl_host = os.getenv("SWIPL_HOST", "localhost")
         config.swipl_port = int(os.getenv("SWIPL_PORT", "4242"))
+        config.swipl_url = os.getenv("SWIPL_URL") or None
+        config.swipl_api_key = os.getenv("SWIPL_API_KEY") or None
         config.mongodb_uri = os.getenv("MONGODB_URI")
         config.db_name = os.getenv("DB_NAME")
         config.embedding_model = os.getenv("EMBEDDING_MODEL", "w601sxs/b1ade-embed-kd")
@@ -184,7 +190,9 @@ def create_dependencies(config):
     
     prolog_query = PrologQuery(
         host=config.swipl_host,
-        port=config.swipl_port
+        port=config.swipl_port,
+        url=config.swipl_url,
+        api_key=config.swipl_api_key,
     )
     
     # Use environment variables for MongoDB connection
