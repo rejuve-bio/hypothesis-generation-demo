@@ -74,6 +74,9 @@ services:
       - SKIP_SEED=true
       - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
+      - GO_LLM_URL=${GEMMA_BASE_URL}
+      - GO_LLM_KEY=${GEMMA_API_KEY}
+      - GO_LLM_MODEL=${GEMMA_MODEL}
       - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
       - CREDIBLE_SETS_DB_PORT=5432
       - CREDIBLE_SETS_DB_NAME=${CREDIBLE_SETS_DB_NAME}
@@ -129,6 +132,9 @@ services:
       - SWIPL_HOST=prolog-service
       - SWIPL_PORT=4242
       - OPENAI_API_KEY=${OpenAI}
+      - GO_LLM_URL=${GEMMA_BASE_URL}
+      - GO_LLM_KEY=${GEMMA_API_KEY}
+      - GO_LLM_MODEL=${GEMMA_MODEL}
       - REDIS_URL=redis://redis:6379
     env_file:
       - ../.env
@@ -319,6 +325,9 @@ services:
       - GO_MAP=/app/data/go_map.pkl
       - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
+      - GO_LLM_URL=${GEMMA_BASE_URL}
+      - GO_LLM_KEY=${GEMMA_API_KEY}
+      - GO_LLM_MODEL=${GEMMA_MODEL}
       - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
       - CREDIBLE_SETS_DB_PORT=5432
       - CREDIBLE_SETS_DB_NAME=${CREDIBLE_SETS_DB_NAME}
