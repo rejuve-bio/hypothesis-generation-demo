@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from loguru import logger
 import requests
 
@@ -34,7 +36,17 @@ class PrologQuery:
     def __init__(self, host: str, port: int, url: str | None = None, api_key: str | None = None):
         self.host = host
         self.port = port
-        # SWIPL_URL  overrides host/port for remote access
+        if url:
+            # SWIPL_URL overrides host/port for remote access
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                raise ValueError(
+                    f"Invalid Prolog server URL {url!r}; expected http(s)://host[:port][/path]"
+                )
+            if api_key and parsed.scheme != "https":
+                raise ValueError(
+                    "Refusing to send the Prolog API key over plain http; use an https SWIPL_URL"
+                )
         self.server = url.rstrip("/") if url else f"http://{self.host}:{self.port}"
         self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 

@@ -102,7 +102,7 @@ def main():
         raise ValueError("Missing required configuration: ensembl_hgnc_map, hgnc_ensembl_map, go_map")
     
     print(f" Starting Prefect deployment service...")
-    logger.info(f"- SWIPL Host: {config.swipl_host}:{config.swipl_port}")
+    logger.info(f"- SWIPL Server: {config.swipl_url or f'http://{config.swipl_host}:{config.swipl_port}'}")
     logger.info(f"- Data files: {config.ensembl_hgnc_map}")
     
     deployments = setup_deployments(config)
