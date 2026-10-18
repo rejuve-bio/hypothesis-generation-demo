@@ -40,8 +40,6 @@ jobs:
         MONGODB_URI: mongodb://localhost:27017
         DB_NAME: test
         OPENAI_API_KEY: dummy-key-for-ci
-        ANTHROPIC_API_KEY: dummy-key-for-ci
-        HF_TOKEN: dummy-token-for-ci
         JWT_SECRET: test-secret
       run: |
         uv run --with pytest-cov pytest tests/ \
