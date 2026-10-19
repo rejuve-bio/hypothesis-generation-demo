@@ -448,6 +448,7 @@ def child_enrichment_batch_flow(current_user_id, child_enrich_ids, parent_hypoth
     # Get parent hypothesis to extract project_id
     parent_hypothesis = hypotheses.get_hypotheses(current_user_id, parent_hypothesis_id)
     parent_project_id = parent_hypothesis.get('project_id') if parent_hypothesis else None
+    parent_thread_ids = parent_hypothesis.get('thread_ids') if parent_hypothesis else None
 
     for enrich_id in child_enrich_ids:
         logger.info(f"[CHILD_BATCH] Processing child enrichment {enrich_id}")
@@ -506,6 +507,8 @@ def child_enrichment_batch_flow(current_user_id, child_enrich_ids, parent_hypoth
 
             if parent_project_id:
                 hypothesis_data["project_id"] = parent_project_id
+            if parent_thread_ids:
+                hypothesis_data["thread_ids"] = list(parent_thread_ids)
 
             hypotheses.create_hypothesis(current_user_id, hypothesis_data)
             logger.info(f"[CHILD_BATCH] Created hypothesis record {new_hypothesis_id} for child enrichment {enrich_id}")

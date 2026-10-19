@@ -350,6 +350,11 @@ class DemoTemplateHandler(BaseHandler):
 
         mongo_payload = self._load_project_scoped_docs(source_user_id, project_id)
         mongo_payload["file_metadata.json"] = file_metadata_docs
+        # Chat threads belong to the source user, not to the shared demo.
+        mongo_payload["hypotheses.json"] = [
+            {k: v for k, v in doc.items() if k != "thread_ids"}
+            for doc in mongo_payload.get("hypotheses.json", [])
+        ]
 
         if source_user_id != demo_user_id:
             mongo_payload = {
@@ -361,6 +366,7 @@ class DemoTemplateHandler(BaseHandler):
             )
 
         project_raw = dict(project_raw)
+        project_raw.pop("thread_id", None)
         if source_user_id != demo_user_id:
             project_raw = self._rewrite_docs_for_demo_owner(project_raw, source_user_id)
         project_raw["is_demo"] = True
