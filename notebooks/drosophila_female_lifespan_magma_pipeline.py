@@ -167,6 +167,126 @@ def bfile_files(prefix: Path) -> list[Path]:
     return [Path(f"{prefix}{extension}") for extension in BFILE_EXTENSIONS]
 
 
+def validate_individual_inputs(
+    bfile: Path, phenotype: Path, trait: str, covariates: Path,
+    covariate_names: list[str],
+) -> dict:
+    """Validate individual data without silently dropping phenotype samples."""
+    require_files([*bfile_files(bfile), phenotype, covariates])
+    if not trait or trait in {"FID", "IID"}:
+        raise ValueError("Choose a phenotype column other than FID or IID")
+    if (
+        not covariate_names
+        or len(set(covariate_names)) != len(covariate_names)
+        or any(not name or name in {"FID", "IID"} for name in covariate_names)
+    ):
+        raise ValueError("Choose unique, nonempty covariate columns other than FID or IID")
+
+    def read_samples(path: Path, value_columns: list[str] | None) -> dict:
+        samples = {}
+        with path.open(encoding="utf-8") as source:
+            if value_columns is not None:
+                header = source.readline().split()
+                header = ["FID" if name == "#FID" else name for name in header]
+                if len(set(header)) != len(header):
+                    raise ValueError(f"Duplicate column names in {path}")
+                missing = {"FID", "IID", *value_columns} - set(header)
+                if missing:
+                    raise ValueError(f"Missing columns in {path}: {sorted(missing)}")
+            else:
+                header = ["FID", "IID", "father", "mother", "sex", "phenotype"]
+            for line_number, line in enumerate(source, start=2 if value_columns is not None else 1):
+                if not line.strip():
+                    continue
+                fields = line.split()
+                if len(fields) != len(header):
+                    raise ValueError(f"Invalid column count at {path}:{line_number}")
+                row = dict(zip(header, fields))
+                key = (row["FID"], row["IID"])
+                if any(value.upper() in {"", "NA", "NAN", ".", "-9"} for value in key):
+                    raise ValueError(f"Missing sample ID at {path}:{line_number}")
+                if key in samples:
+                    raise ValueError(f"Duplicate sample {key} in {path}")
+                values = []
+                for column in value_columns or []:
+                    try:
+                        value = float(row[column])
+                    except ValueError as error:
+                        raise ValueError(f"Nonnumeric {column} at {path}:{line_number}") from error
+                    if not math.isfinite(value) or value == -9:
+                        raise ValueError(f"Missing or nonfinite {column} at {path}:{line_number}")
+                    values.append(value)
+                samples[key] = values
+        if not samples:
+            raise ValueError(f"No samples found in {path}")
+        return samples
+
+    genotype_rows = read_samples(Path(f"{bfile}.fam"), None)
+    phenotype_rows = read_samples(phenotype, [trait])
+    covariate_rows = read_samples(covariates, covariate_names)
+    for label, rows in (("genotypes", genotype_rows), ("covariates", covariate_rows)):
+        missing_ids = phenotype_rows.keys() - rows.keys()
+        if missing_ids:
+            raise ValueError(
+                f"{len(missing_ids)} phenotype samples missing from {label}; "
+                f"examples: {sorted(missing_ids)[:5]}"
+            )
+    # Preserve genotype order for downstream exports; do not rely on input row order.
+    matched_ids = [key for key in genotype_rows if key in phenotype_rows]
+    if len(matched_ids) <= len(covariate_names) + 2:
+        raise ValueError("Too few matched samples for covariates and gene regression")
+    if len({phenotype_rows[key][0] for key in matched_ids}) < 2:
+        raise ValueError("The matched phenotype is constant")
+    for index, name in enumerate(covariate_names):
+        if len({covariate_rows[key][index] for key in matched_ids}) < 2:
+            raise ValueError(f"Covariate {name} is constant in the matched samples")
+    return {
+        "sample_ids": matched_ids,
+        "phenotype_values": [phenotype_rows[key][0] for key in matched_ids],
+        "covariate_values": [covariate_rows[key] for key in matched_ids],
+        "covariate_names": list(covariate_names),
+        "genotype_samples": len(genotype_rows),
+        "phenotype_samples": len(phenotype_rows),
+        "covariate_samples": len(covariate_rows),
+        "matched_samples": len(matched_ids),
+        "genotype_samples_without_phenotype": len(genotype_rows.keys() - phenotype_rows.keys()),
+    }
+
+
+def prepare_individual_files(
+    bfile: Path, phenotype: Path, trait: str, covariates: Path,
+    covariate_names: list[str], output_dir: Path,
+) -> dict:
+    """Revalidate sources and export matched MAGMA phenotype/covariate tables."""
+    matched = validate_individual_inputs(bfile, phenotype, trait, covariates, covariate_names)
+    paths = {
+        "phenotype": output_dir / "individual.phenotype.tsv",
+        "covariates": output_dir / "individual.covariates.tsv",
+    }
+    sources = {path.resolve() for path in [*bfile_files(bfile), phenotype, covariates]}
+    if any(path.resolve() in sources for path in paths.values()):
+        raise ValueError("Prepared output paths must not overwrite source inputs")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    # Stage both complete tables before replacing any previous exports.
+    with tempfile.TemporaryDirectory(prefix="individual-inputs-", dir=output_dir) as temp:
+        staged = {key: Path(temp) / path.name for key, path in paths.items()}
+        with staged["phenotype"].open("w", encoding="utf-8", newline="") as pheno_file, staged[
+            "covariates"
+        ].open("w", encoding="utf-8", newline="") as covar_file:
+            pheno_writer = csv.writer(pheno_file, delimiter="\t", lineterminator="\n")
+            covar_writer = csv.writer(covar_file, delimiter="\t", lineterminator="\n")
+            pheno_writer.writerow(["FID", "IID", trait])
+            covar_writer.writerow(["FID", "IID", *covariate_names])
+            for key, value, covar_values in zip(
+                matched["sample_ids"], matched["phenotype_values"], matched["covariate_values"]
+            ):
+                pheno_writer.writerow([*key, format(value, ".17g")])
+                covar_writer.writerow([*key, *(format(value, ".17g") for value in covar_values)])
+        for key, path in paths.items():
+            staged[key].replace(path)
+    return {**paths, "matched_samples": matched["matched_samples"]}
+
+
 def outputs_current(outputs: list[Path], inputs: list[Path], log: Path | None = None) -> bool:
     if any(not path.is_file() or path.stat().st_size == 0 for path in (*outputs, *inputs)):
         return False
@@ -419,6 +539,53 @@ def prepare_magma_bfile(source_prefix: Path, output_prefix: Path, force: bool = 
         temporary_bim.unlink(missing_ok=True)
     print(f"Prepared MAGMA PLINK reference with {count} SNPs: {output_prefix}")
     return output_prefix
+
+
+def run_individual_analysis(
+    magma_bin: Path, bfile: Path, gtf: Path, phenotype: Path, trait: str,
+    covariates: Path, covariate_names: list[str], output_dir: Path,
+) -> dict:
+    """Annotate fly genes and run principal-components regression in MAGMA."""
+    require_files([magma_bin, gtf, *bfile_files(bfile), phenotype, covariates])
+    if not os.access(magma_bin, os.X_OK):
+        raise PermissionError(f"MAGMA binary is not executable: {magma_bin}")
+    # Reserve generated names so preparation cannot replace any source input.
+    source_paths = {path.resolve() for path in [magma_bin, gtf, phenotype, covariates, *bfile_files(bfile)]}
+    if any(path.parent == output_dir.resolve() for path in source_paths):
+        raise ValueError("Use an output directory separate from the source input directories")
+    prepared = prepare_individual_files(
+        bfile, phenotype, trait, covariates, covariate_names, output_dir
+    )
+    gene_locations = write_gene_locations(gtf, output_dir / "gene_locations.tsv", force=True)
+    snp_locations = write_snp_locations(bfile, output_dir / "snp_locations.tsv", force=True)
+    prepared_bfile = prepare_magma_bfile(bfile, output_dir / "merged_qc_magma", force=True)
+    annotation = run_annotation(
+        magma_bin, snp_locations, gene_locations, output_dir / "dgrp_lifespan_female"
+    )
+    output_prefix = output_dir / "dgrp_lifespan_female_individual_gene"
+    command = [
+        str(magma_bin), "--bfile", str(prepared_bfile),
+        "--gene-annot", str(annotation),
+        "--pheno", f"file={prepared['phenotype']}", "use=1",
+        # DGRP observations are strain means; unknown FAM sex is not a covariate.
+        "--covar", f"file={prepared['covariates']}", "chrX-use-sex=0",
+        "--gene-model", "linreg", "--out", str(output_prefix),
+    ]
+    print("Running individual-level MAGMA:", " ".join(command), flush=True)
+    subprocess.run(command, check=True)
+    gene_results = Path(f"{output_prefix}.genes.raw")
+    gene_table = Path(f"{output_prefix}.genes.out")
+    require_files([gene_results, gene_table])
+    summary = summarize_magma_results(
+        gene_table, "GENE", output_dir / "gene_results_bonferroni.tsv",
+        gene_metadata=load_gene_metadata(gtf),
+        significant_output_path=output_dir / "gene_results_significant.tsv",
+    )
+    return {
+        "annotation": annotation, "gene_results": gene_results,
+        "gene_table": gene_table, "summary": summary,
+        "matched_samples": prepared["matched_samples"],
+    }
 
 
 def run_gene_analysis(
@@ -678,6 +845,152 @@ def run_gene_set_analysis(
         raise RuntimeError(f"MAGMA did not produce nonempty gene-set results: {output_path}")
     print(f"Saved MAGMA gene-set results: {output_path}")
     return output_path
+
+
+def run_individual_gene_sets(
+    magma_bin: Path, gene_results: Path, set_file: Path, output_dir: Path,
+    obo_path: Path | None = None,
+) -> dict:
+    """Run competitive gene-set tests and record the exact set definitions used."""
+    required = [magma_bin, gene_results, set_file]
+    if obo_path is not None:
+        required.append(obo_path)
+    require_files(required)
+    if not os.access(magma_bin, os.X_OK):
+        raise PermissionError(f"MAGMA binary is not executable: {magma_bin}")
+    if not gene_results.name.endswith(".genes.raw"):
+        raise ValueError("Gene-set analysis requires MAGMA .genes.raw results from Section 4")
+    gene_prefix = str(gene_results)[:-len(".genes.raw")]
+    gene_log = Path(f"{gene_prefix}.log")
+    require_files([gene_log, Path(f"{gene_prefix}.genes.out")])
+    log_text = gene_log.read_text(encoding="utf-8")
+    if "End time is" not in log_text or "using model: principal components regression" not in log_text:
+        raise ValueError("Complete the individual-level regression in Section 4 first")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    set_results = run_gene_set_analysis(
+        magma_bin, gene_results, set_file,
+        output_dir / "dgrp_lifespan_female_individual_geneset",
+    )
+    summary = summarize_magma_results(
+        set_results, "VARIABLE", output_dir / "gene_set_results_bonferroni.tsv",
+        go_names=load_go_names(obo_path) if obo_path is not None else None,
+        significant_output_path=output_dir / "gene_set_results_significant.tsv",
+    )
+    counts = count_summary_results(summary)
+    set_hash = hashlib.sha256(set_file.read_bytes()).hexdigest()
+    manifest = output_dir / "individual_gene_sets_manifest.json"
+    manifest.write_text(json.dumps({
+        "gene_results": str(gene_results.resolve()),
+        "gene_model": "linreg",
+        "gene_sets": str(set_file.resolve()),
+        "gene_sets_sha256": set_hash,
+        "go_obo": str(obo_path.resolve()) if obo_path is not None else None,
+        "multiple_testing": "Bonferroni", "alpha": 0.05,
+        **counts,
+    }, indent=2) + "\n", encoding="utf-8")
+    return {"set_results": set_results, "summary": summary, "manifest": manifest, **counts}
+
+
+def compare_magma_tables(
+    summary_table: Path, individual_table: Path, output_prefix: Path, top_n: int = 20,
+) -> dict:
+    """Describe agreement without treating correlated methods as independent tests."""
+    from scipy.stats import pearsonr, spearmanr
+
+    require_files([summary_table, individual_table])
+    if summary_table.resolve() == individual_table.resolve():
+        raise ValueError("Select results from two different analysis files")
+    if top_n < 1:
+        raise ValueError("Top-ranked overlap requires a positive top_n")
+
+    def read_results(path: Path) -> dict:
+        results = {}
+        with path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source, delimiter="\t")
+            required = {"ID", "P", "P_BONFERRONI", "SIGNIFICANT"}
+            if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+                raise ValueError(f"Missing comparison columns in {path}")
+            for row in reader:
+                identifier = row["ID"]
+                if not identifier or identifier in results:
+                    raise ValueError(f"Missing or duplicate result ID in {path}: {identifier}")
+                p_value, adjusted = float(row["P"]), float(row["P_BONFERRONI"])
+                if any(not math.isfinite(p) or not 0 <= p <= 1 for p in (p_value, adjusted)):
+                    raise ValueError(f"Invalid p-value for {identifier} in {path}")
+                if row["SIGNIFICANT"] not in {"true", "false"}:
+                    raise ValueError(f"Invalid significance flag for {identifier} in {path}")
+                results[identifier] = {
+                    "p": p_value, "adjusted": adjusted,
+                    "significant": row["SIGNIFICANT"] == "true",
+                    "label": row.get("GENE_NAME") or row.get("GO_TERM_NAME") or identifier,
+                }
+        if not results:
+            raise ValueError(f"No comparison results in {path}")
+        return results
+
+    summary_rows, individual_rows = read_results(summary_table), read_results(individual_table)
+    shared = sorted(summary_rows.keys() & individual_rows.keys())
+    summary_logp = [-math.log10(max(summary_rows[key]["p"], 1e-300)) for key in shared]
+    individual_logp = [-math.log10(max(individual_rows[key]["p"], 1e-300)) for key in shared]
+    variable_scores = len(shared) >= 2 and len(set(summary_logp)) > 1 and len(set(individual_logp)) > 1
+    summary_sig = {key for key in shared if summary_rows[key]["significant"]}
+    individual_sig = {key for key in shared if individual_rows[key]["significant"]}
+    significant_union = summary_sig | individual_sig
+    k = min(top_n, len(shared))
+    summary_top = set(sorted(shared, key=lambda key: (summary_rows[key]["p"], key))[:k])
+    individual_top = set(sorted(shared, key=lambda key: (individual_rows[key]["p"], key))[:k])
+    metrics = {
+        "summary_table": str(summary_table.resolve()),
+        "individual_table": str(individual_table.resolve()),
+        "summary_tested": len(summary_rows), "individual_tested": len(individual_rows),
+        "shared": len(shared),
+        "summary_only": len(summary_rows.keys() - individual_rows.keys()),
+        "individual_only": len(individual_rows.keys() - summary_rows.keys()),
+        "summary_significant_all": sum(row["significant"] for row in summary_rows.values()),
+        "individual_significant_all": sum(row["significant"] for row in individual_rows.values()),
+        "pearson_logp": float(pearsonr(summary_logp, individual_logp).statistic) if variable_scores else None,
+        "spearman_logp": float(spearmanr(summary_logp, individual_logp).statistic) if variable_scores else None,
+        "significant_both_shared": len(summary_sig & individual_sig),
+        "significant_summary_only_shared": len(summary_sig - individual_sig),
+        "significant_individual_only_shared": len(individual_sig - summary_sig),
+        "significant_neither_shared": len(shared) - len(significant_union),
+        "significant_jaccard_shared": len(summary_sig & individual_sig) / len(significant_union) if significant_union else None,
+        "top_requested": top_n, "top_compared_shared": k,
+        "top_overlap_shared": len(summary_top & individual_top),
+        "notes": [
+            "Descriptive agreement does not establish statistical equivalence or a significant difference between methods.",
+            "Correlations and top-ranked overlap use only shared IDs; ties are ordered by ID.",
+            "Bonferroni significance retains each original run's tested universe; it is not recomputed on shared IDs.",
+            "Zero p-values are clipped to 1e-300 for correlations; undefined metrics are null.",
+            "Historical identity of gene-set definitions and per-set gene membership is not verified by this table comparison.",
+        ],
+    }
+    table_path = Path(f"{output_prefix}.tsv")
+    metrics_path = Path(f"{output_prefix}.json")
+    if any(path.resolve() in {summary_table.resolve(), individual_table.resolve()} for path in (table_path, metrics_path)):
+        raise ValueError("Comparison outputs must not overwrite input results")
+    output_prefix.parent.mkdir(parents=True, exist_ok=True)
+    with table_path.open("w", encoding="utf-8", newline="") as destination:
+        writer = csv.writer(destination, delimiter="\t", lineterminator="\n")
+        writer.writerow([
+            "ID", "LABEL", "STATUS", "P_SUMMARY", "P_INDIVIDUAL",
+            "P_BONFERRONI_SUMMARY", "P_BONFERRONI_INDIVIDUAL",
+            "SIGNIFICANT_SUMMARY", "SIGNIFICANT_INDIVIDUAL",
+            "DELTA_LOGP_INDIVIDUAL_MINUS_SUMMARY",
+        ])
+        for key in sorted(summary_rows.keys() | individual_rows.keys()):
+            left, right = summary_rows.get(key), individual_rows.get(key)
+            status = "shared" if left and right else "summary_only" if left else "individual_only"
+            values = [key, (left or right)["label"], status]
+            for field in ("p", "adjusted", "significant"):
+                values.extend(
+                    "" if row is None else str(row[field]).lower() if field == "significant" else format(row[field], ".17g")
+                    for row in (left, right)
+                )
+            delta = math.log10(max(left["p"], 1e-300)) - math.log10(max(right["p"], 1e-300)) if left and right else None
+            writer.writerow([*values, "" if delta is None else format(delta, ".17g")])
+    metrics_path.write_text(json.dumps(metrics, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    return {"table": table_path, "metrics_file": metrics_path, "metrics": metrics}
 
 
 def summarize_magma_results(
