@@ -270,6 +270,17 @@ class ProjectHandler(BaseHandler):
             logger.error(f"Error deleting project data for {project_id}: {str(e)}")
             raise
     
+    def set_opentargets_provenance(self, user_id, project_id, provenance: dict):
+        """
+        Record which OpenTargets release the latest analysis run used (or why
+        it didn't use OpenTargets). Overwritten on every run.
+        """
+        provenance = {**provenance, "recorded_at": datetime.now(timezone.utc)}
+        self.projects_collection.update_one(
+            {"_id": ObjectId(project_id), "user_id": user_id},
+            {"$set": {"opentargets": provenance}},
+        )
+
     def get_project_analysis_path(self, user_id, project_id):
         """Get the analysis path for a project"""
         return os.path.abspath(f"data/projects/{user_id}/{project_id}/analysis")

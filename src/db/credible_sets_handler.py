@@ -8,9 +8,12 @@ pipeline can skip local SuSiE fine-mapping and return OpenTargets results direct
 import json
 import math
 import os
+from contextlib import contextmanager
 from typing import Optional
 
 from loguru import logger
+
+from src.db.credible_sets_schema import DATASET, connection_params_from_env
 
 try:
     import psycopg2
@@ -41,6 +44,32 @@ def _log_pvalue(mantissa, exponent) -> Optional[float]:
         return -(math.log10(float(mantissa)) + int(exponent))
     except (ValueError, TypeError, ZeroDivisionError):
         return None
+
+
+def _read_ot_version(cur) -> Optional[dict]:
+    """
+    The loaded OpenTargets release from ot_load_state (written by the OT DB
+    bootstrap), or None if the DB has never been fully loaded. *cur* must be
+    a RealDictCursor; run it inside the same transaction as the data query so
+    the version describes exactly the rows that were read.
+    """
+    cur.execute("SELECT to_regclass('public.ot_load_state') IS NOT NULL AS ok")
+    if not cur.fetchone()["ok"]:
+        return None
+    cur.execute(
+        "SELECT ot_release, schema_version, source, loaded_at FROM ot_load_state WHERE dataset = %s",
+        (DATASET,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    loaded_at = row["loaded_at"]
+    return {
+        "ot_release": row["ot_release"],
+        "schema_version": row["schema_version"],
+        "source": row["source"],
+        "loaded_at": loaded_at.isoformat() if loaded_at else None,
+    }
 
 
 def build_rsid_lookup_from_harmonized_file(harmonized_file: str) -> dict:
@@ -79,7 +108,12 @@ def build_rsid_lookup_from_harmonized_file(harmonized_file: str) -> dict:
     return lookup
 
 
-def convert_ot_row_to_credible_set(ot_row: dict, coverage: float = 0.95, rsid_lookup: Optional[dict] = None) -> dict:
+def convert_ot_row_to_credible_set(
+    ot_row: dict,
+    coverage: float = 0.95,
+    rsid_lookup: Optional[dict] = None,
+    ot_version: Optional[dict] = None,
+) -> dict:
     """
     Convert one OpenTargets credible set row (from credible_sets table) into the
     format expected by AnalysisHandler.save_credible_set().
@@ -87,6 +121,9 @@ def convert_ot_row_to_credible_set(ot_row: dict, coverage: float = 0.95, rsid_lo
     *rsid_lookup*, if given, is a {(chromosome, position): rsid} map (see
     build_rsid_lookup_from_harmonized_file) used to enrich OT variants, which
     otherwise carry no rsID at all.
+
+    *ot_version*, if given (see _read_ot_version), stamps the OpenTargets
+    release the row came from into the saved metadata.
     """
     rsid_lookup = rsid_lookup or {}
     locus = ot_row.get("locus") or []
@@ -142,6 +179,8 @@ def convert_ot_row_to_credible_set(ot_row: dict, coverage: float = 0.95, rsid_lo
             "confidence": ot_row.get("confidence"),
             "chr": ot_row.get("chromosome"),
             "position": ot_row.get("position"),
+            "ot_release": (ot_version or {}).get("ot_release"),
+            "ot_loaded_at": (ot_version or {}).get("loaded_at"),
         },
     }
 
@@ -156,14 +195,65 @@ class CredibleSetsHandler:
         if not _PSYCOPG2_OK:
             raise RuntimeError("psycopg2 is not installed")
         if self._conn is None or self._conn.closed:
-            self._conn = psycopg2.connect(
-                host=os.environ.get("CREDIBLE_SETS_DB_HOST", "localhost"),
-                port=int(os.environ.get("CREDIBLE_SETS_DB_PORT", "5411")),
-                dbname=os.environ.get("CREDIBLE_SETS_DB_NAME", "credible_sets"),
-                user=os.environ.get("CREDIBLE_SETS_DB_USER", "credsets"),
-                password=os.environ.get("CREDIBLE_SETS_DB_PASSWORD", ""),
-            )
+            self._conn = psycopg2.connect(**connection_params_from_env())
         return self._conn
+
+    @contextmanager
+    def _snapshot(self, *tables: str):
+        """
+        A read-only REPEATABLE READ transaction that ACCESS SHARE-locks
+        ot_load_state and *tables* before its first SELECT, so the version and
+        the data it reads always come from the same release.
+
+        The locks are what make this safe: the bootstrap swaps releases by
+        dropping the public tables and moving new ones in under the same names
+        (DDL, which REPEATABLE READ alone does not isolate). Holding the locks
+        means an in-progress swap finishes before our snapshot is taken, and a
+        later swap waits until we're done. Raises if a table doesn't exist.
+        """
+        conn = self._get_conn()
+        conn.rollback()  # end any implicit transaction left open by earlier reads
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                cur.execute(f"LOCK TABLE {', '.join(('ot_load_state',) + tables)} IN ACCESS SHARE MODE")
+                yield cur
+        finally:
+            conn.rollback()
+
+    def get_load_state(self) -> Optional[dict]:
+        """
+        The currently loaded OpenTargets release (ot_release, schema_version,
+        source, loaded_at), or None if the DB has never been fully loaded or is
+        unreachable.
+        """
+        if not _PSYCOPG2_OK:
+            return None
+        try:
+            with self._snapshot() as cur:
+                return _read_ot_version(cur)
+        except Exception as exc:
+            logger.warning(f"[CredibleSets] get_load_state: {exc}")
+            return None
+
+    def check_study_with_version(self, study_id: str) -> tuple:
+        """
+        (has_credible_sets, ot_version) read from one snapshot, so a "study not
+        in release X" answer names the release that was actually checked.
+        ot_version is None if the DB isn't loaded or is unreachable.
+        """
+        if not study_id or not _PSYCOPG2_OK:
+            return False, None
+        try:
+            with self._snapshot("gwas_study_index") as cur:
+                version = _read_ot_version(cur)
+                if version is None:
+                    return False, None
+                cur.execute("SELECT 1 FROM gwas_study_index WHERE study_id = %s LIMIT 1", (study_id,))
+                return cur.fetchone() is not None, version
+        except Exception as exc:
+            logger.warning(f"[CredibleSets] check_study_with_version({study_id}): {exc}")
+            return False, None
 
     def study_has_credible_sets(self, study_id: str) -> bool:
         """Fast check: does this GWAS study have credible sets in OpenTargets?"""
@@ -309,11 +399,18 @@ class CredibleSetsHandler:
         has full study-level credible sets. Returns raw rows as dicts — pass
         each through convert_ot_row_to_credible_set() before saving.
         """
+        return self.get_all_credible_sets_for_study_with_version(study_id)[0]
+
+    def get_all_credible_sets_for_study_with_version(self, study_id: str) -> tuple:
+        """
+        (rows, ot_version) read from one snapshot, so the version recorded with
+        the results is exactly the release the rows came from.
+        """
         if not study_id or not _PSYCOPG2_OK:
-            return []
+            return [], None
         try:
-            conn = self._get_conn()
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            with self._snapshot("credible_sets") as cur:
+                version = _read_ot_version(cur)
                 cur.execute(
                     """
                     SELECT study_locus_id, study_id, variant_id,
@@ -327,10 +424,10 @@ class CredibleSetsHandler:
                     """,
                     (study_id,),
                 )
-                return [dict(r) for r in cur.fetchall()]
+                return [dict(r) for r in cur.fetchall()], version
         except Exception as exc:
             logger.warning(f"[CredibleSets] get_all_credible_sets_for_study({study_id}): {exc}")
-            return []
+            return [], None
 
     def close(self):
         if self._conn and not self._conn.closed:
