@@ -35,9 +35,7 @@ This project is designed to generate hypotheses for the causal relationship betw
     MONGODB_URI=<your_mongodb_uri>
     DB_NAME=<your_db_name>
     OPENAI_API_KEY=<your_openai_api_key>
-    ANTHROPIC_API_KEY=<your_anthropic_api_key>
-    HF_TOKEN=<your_huggingface_token>
-    JWT_SECRET_KEY=<your_jwt_secret_key>
+    JWT_SECRET=<your_jwt_secret>
     ```
 
 4. Run the Docker containers:
