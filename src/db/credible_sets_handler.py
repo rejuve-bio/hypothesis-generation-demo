@@ -12,6 +12,8 @@ from typing import Optional
 
 from loguru import logger
 
+from src.db.credible_sets_schema import DATASET, connection_params_from_env
+
 try:
     import psycopg2
     import psycopg2.extras
@@ -156,14 +158,34 @@ class CredibleSetsHandler:
         if not _PSYCOPG2_OK:
             raise RuntimeError("psycopg2 is not installed")
         if self._conn is None or self._conn.closed:
-            self._conn = psycopg2.connect(
-                host=os.environ.get("CREDIBLE_SETS_DB_HOST", "localhost"),
-                port=int(os.environ.get("CREDIBLE_SETS_DB_PORT", "5411")),
-                dbname=os.environ.get("CREDIBLE_SETS_DB_NAME", "credible_sets"),
-                user=os.environ.get("CREDIBLE_SETS_DB_USER", "credsets"),
-                password=os.environ.get("CREDIBLE_SETS_DB_PASSWORD", ""),
-            )
+            self._conn = psycopg2.connect(**connection_params_from_env())
         return self._conn
+
+    def get_load_state(self) -> Optional[dict]:
+        """
+        The ot_load_state marker written by the OT DB bootstrap (release,
+        schema version, source, row counts), or None if the DB has never been
+        fully loaded or is unreachable.
+        """
+        if not _PSYCOPG2_OK:
+            return None
+        try:
+            conn = self._get_conn()
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT ot_release, schema_version, source, row_counts, loaded_at "
+                    "FROM ot_load_state WHERE dataset = %s",
+                    (DATASET,),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+        except Exception as exc:
+            logger.warning(f"[CredibleSets] get_load_state: {exc}")
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+            return None
 
     def study_has_credible_sets(self, study_id: str) -> bool:
         """Fast check: does this GWAS study have credible sets in OpenTargets?"""
