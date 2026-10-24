@@ -277,7 +277,18 @@ def retry_get_relevant_gene_proof(variant, hypothesis_id, seed):
 
 
 @task()
-def create_enrich_data(user_id, project_id, variant, phenotype, causal_gene, relevant_gos, causal_graph, hypothesis_id):
+def create_enrich_data(
+    user_id,
+    project_id,
+    variant,
+    phenotype,
+    causal_gene,
+    relevant_gos,
+    causal_graph,
+    hypothesis_id,
+    status=None,
+    skip_reason=None,
+):
     """Create enrichment data with project references"""
     try:
         emit_task_update(
@@ -289,9 +300,15 @@ def create_enrich_data(user_id, project_id, variant, phenotype, causal_gene, rel
         logger.info("Creating enrich data in the database with project context")
         deps = get_deps()
         enrichment = deps["enrichment"]
+        persistence_options = {}
+        if status is not None:
+            persistence_options["status"] = status
+        if skip_reason is not None:
+            persistence_options["skip_reason"] = skip_reason
         enrich_id = enrichment.create_enrich(
             user_id, project_id, variant,
-            phenotype, causal_gene, relevant_gos, causal_graph
+            phenotype, causal_gene, relevant_gos, causal_graph,
+            **persistence_options,
         )
 
         emit_task_update(

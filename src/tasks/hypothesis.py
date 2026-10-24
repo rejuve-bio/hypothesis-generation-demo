@@ -316,7 +316,18 @@ def summarize_graph(causal_graph, hypothesis_id):
 
 
 @task(retries=2)
-def create_hypothesis(enrich_id, go_id, variant_id, phenotype, causal_gene, causal_graph, summary, current_user_id, hypothesis_id):
+def create_hypothesis(
+    enrich_id,
+    go_id,
+    variant_id,
+    phenotype,
+    causal_gene,
+    causal_graph,
+    summary,
+    current_user_id,
+    hypothesis_id,
+    warnings=None,
+):
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -347,6 +358,7 @@ def create_hypothesis(enrich_id, go_id, variant_id, phenotype, causal_gene, caus
                 "summary": summary,
                 "biological_context": "",
                 "status": "Completed",
+                "warnings": warnings or [],
                 "task_history": limited_history,
             }
         deps = get_deps()

@@ -58,7 +58,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
 
     go_name = go_term[0]["name"]
     causal_gene = enrich_data['causal_gene']
-    variant_id = enrich_data['variant']
+    enrichment_variant_id = enrich_data['variant']
     phenotype = enrich_data['phenotype']
     coexpressed_gene_names = go_term[0]["genes"]
     causal_graph_data = enrich_data['causal_graph']
@@ -71,6 +71,7 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
     logger.info(f"Processing graph {graph_index + 1}/{total_graphs} with probability {graph_prob}")
 
     causal_graph = graph
+    warnings = []
 
     coexpressed_gene_ids = get_gene_ids.submit(
         [g.lower() for g in coexpressed_gene_names], hypothesis_id
@@ -91,17 +92,57 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
     variant_entities = [f"snp({id})" for id in variant_rsids]
     query = f"maplist(variant_id, {variant_entities}, X)".replace("'", "")
 
-    variant_ids = execute_variant_query.submit(query, hypothesis_id).result()
-    for variant_id, rsid, node in zip(variant_ids, variant_rsids, variant_nodes):
-        variant_id = variant_id.replace("'", "")
-        node["id"] = variant_id
+    variant_lookup_failed = False
+    try:
+        variant_ids = execute_variant_query.submit(query, hypothesis_id).result()
+    except Exception as exc:
+        variant_lookup_failed = True
+        variant_ids = []
+        logger.warning(
+            f"Variant ID lookup failed for {variant_rsids}; retaining rsIDs: {exc}"
+        )
+        warnings.append(
+            {
+                "code": "variant_id_lookup_failed",
+                "message": (
+                    "Variant ID lookup failed; original rsID node IDs were retained."
+                ),
+                "variants": variant_rsids,
+            }
+        )
+
+    if not isinstance(variant_ids, (list, tuple)):
+        variant_ids = [variant_ids] if variant_ids else []
+
+    for index, (rsid, node) in enumerate(zip(variant_rsids, variant_nodes)):
+        mapped_variant_id = variant_ids[index] if index < len(variant_ids) else None
+        if mapped_variant_id:
+            mapped_variant_id = str(mapped_variant_id).replace("'", "")
+        else:
+            mapped_variant_id = rsid
+            if not variant_lookup_failed:
+                logger.warning(
+                    f"No mapped variant ID returned for {rsid}; retaining rsID"
+                )
+                warnings.append(
+                    {
+                        "code": "variant_id_fallback",
+                        "message": (
+                            "No mapped variant ID was returned; the original rsID "
+                            "was retained."
+                        ),
+                        "variant": rsid,
+                    }
+                )
+
+        node["id"] = mapped_variant_id
         node["name"] = rsid
         source_edges = [e for e in edges if e["source"] == rsid]
         target_edges = [e for e in edges if e["target"] == rsid]
         for edge in source_edges:
-            edge["source"] = variant_id
+            edge["source"] = mapped_variant_id
         for edge in target_edges:
-            edge["target"] = variant_id
+            edge["target"] = mapped_variant_id
 
     gene_nodes = [n for n in nodes if n["type"] == "gene"]
     prolog_gene_nodes = []
@@ -118,18 +159,88 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
     if prolog_gene_ids:
         gene_entities = [f"gene({gene_id})" for gene_id in prolog_gene_ids]
         query = f"maplist(gene_name, {gene_entities}, X)".replace("'", "")
-        prolog_gene_names = execute_gene_query.submit(query, hypothesis_id).result()
-        for gene_id_node, prolog_name, node in zip(
-            prolog_gene_ids, prolog_gene_names, prolog_gene_nodes
-        ):
-            node["name"] = (
-                enrichr.to_symbol(prolog_name)
-                if prolog_name
-                else enrichr.to_symbol(node.get("name") or gene_id_node)
+        gene_lookup_failed = False
+        try:
+            prolog_gene_names = execute_gene_query.submit(query, hypothesis_id).result()
+        except Exception as exc:
+            gene_lookup_failed = True
+            prolog_gene_names = [None] * len(prolog_gene_ids)
+            logger.warning(
+                f"Gene name lookup failed for {prolog_gene_ids}; retaining existing names: {exc}"
+            )
+            warnings.append(
+                {
+                    "code": "gene_name_lookup_failed",
+                    "message": (
+                        "Gene name lookup failed; existing gene names were retained."
+                    ),
+                    "genes": prolog_gene_ids,
+                }
             )
 
-    phenotype_result = execute_phenotype_query.submit(phenotype, hypothesis_id).result()
-    phenotype_id = phenotype_result[0] if isinstance(phenotype_result, list) and phenotype_result else phenotype_result
+        if not isinstance(prolog_gene_names, (list, tuple)):
+            prolog_gene_names = [prolog_gene_names] if prolog_gene_names else []
+
+        for index, (gene_id_node, node) in enumerate(zip(prolog_gene_ids, prolog_gene_nodes)):
+            prolog_name = prolog_gene_names[index] if index < len(prolog_gene_names) else None
+            if prolog_name:
+                node["name"] = enrichr.to_symbol(prolog_name)
+            else:
+                node["name"] = enrichr.to_symbol(node.get("name") or gene_id_node)
+                if not gene_lookup_failed:
+                    logger.warning(
+                        f"No mapped gene name returned for {gene_id_node}; retaining existing name"
+                    )
+                    warnings.append(
+                        {
+                            "code": "gene_name_fallback",
+                            "message": (
+                                "No mapped gene name was returned; the existing "
+                                "gene identifier was used instead."
+                            ),
+                            "gene": gene_id_node,
+                        }
+                    )
+
+    phenotype_lookup_failed = False
+    try:
+        phenotype_result = execute_phenotype_query.submit(phenotype, hypothesis_id).result()
+    except Exception as exc:
+        phenotype_lookup_failed = True
+        phenotype_result = None
+        logger.warning(
+            f"Phenotype ID lookup failed for {phenotype!r}; retaining raw phenotype: {exc}"
+        )
+        warnings.append(
+            {
+                "code": "phenotype_id_lookup_failed",
+                "message": (
+                    "Phenotype ID lookup failed; the raw phenotype was used as "
+                    "the node ID."
+                ),
+                "phenotype": phenotype,
+            }
+        )
+
+    if isinstance(phenotype_result, list):
+        phenotype_id = phenotype_result[0] if phenotype_result else None
+    else:
+        phenotype_id = phenotype_result
+    if not phenotype_id:
+        phenotype_id = phenotype
+        if not phenotype_lookup_failed:
+            logger.warning(
+                f"No phenotype ID returned for {phenotype!r}; using raw phenotype"
+            )
+            warnings.append(
+                {
+                    "code": "phenotype_id_fallback",
+                    "message": (
+                        "No EFO ID was returned; the raw phenotype was used as the node ID."
+                    ),
+                    "phenotype": phenotype,
+                }
+            )
 
     if not any(n.get("id") == go_id for n in nodes):
         nodes.append({"id": go_id, "type": "go", "name": go_name})
@@ -151,8 +262,8 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
     summary = summarize_graph.submit({"nodes": nodes, "edges": edges}, hypothesis_id).result()
 
     create_hypothesis.submit(
-        enrich_id, go_id, variant_id, phenotype, causal_gene_symbol, final_causal_graph,
-        summary, current_user_id, hypothesis_id
+        enrich_id, go_id, enrichment_variant_id, phenotype, causal_gene_symbol,
+        final_causal_graph, summary, current_user_id, hypothesis_id, warnings
     ).result()
 
     return {"summary": summary, "graph": final_causal_graph}, 201

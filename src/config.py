@@ -20,6 +20,8 @@ class Config:
         self.go_map = None
         self.swipl_host = "localhost"
         self.swipl_port = 4242
+        self.swipl_url = None
+        self.swipl_api_key = None
         self.mongodb_uri = None
         self.db_name = None
         self.redis_url = None
@@ -27,6 +29,14 @@ class Config:
         self.plink_dir_38 = "./data/1000Genomes_phase3/plink_format_b38"
         self.data_dir = "./data"
         self.ontology_cache_dir = "./data/ontology"
+        # Disk cache for downloaded CellxGene Census co-expression matrices,
+        # keyed by tissue/cell-type — avoids re-downloading the same
+        # (cells x genes) raw-count matrix from Census for every gene queried
+        # against the same tissue.
+        self.census_cache_dir = "./data/census_cache"
+        # Size cap for census_cache_dir, in bytes — oldest (by mtime) cached
+        # tissues are evicted once the directory exceeds this. Default 20 GB.
+        self.census_cache_max_bytes = 20 * 1024 * 1024 * 1024
         self.host = "0.0.0.0"
         self.port = 5000
         # Harmonization workflow configuration
@@ -66,6 +76,8 @@ class Config:
         config.go_map = args.go_map
         config.swipl_host = args.swipl_host
         config.swipl_port = args.swipl_port
+        config.swipl_url = os.getenv("SWIPL_URL") or None
+        config.swipl_api_key = os.getenv("SWIPL_API_KEY") or None
         config.embedding_model = getattr(args, 'embedding_model', config.embedding_model)
         # Flask-specific arguments (if present)
         config.host = getattr(args, 'host', config.host)
@@ -86,12 +98,18 @@ class Config:
         config.go_map = os.getenv("GO_MAP")
         config.swipl_host = os.getenv("SWIPL_HOST", "localhost")
         config.swipl_port = int(os.getenv("SWIPL_PORT", "4242"))
+        config.swipl_url = os.getenv("SWIPL_URL") or None
+        config.swipl_api_key = os.getenv("SWIPL_API_KEY") or None
         config.mongodb_uri = os.getenv("MONGODB_URI")
         config.db_name = os.getenv("DB_NAME")
         config.embedding_model = os.getenv("EMBEDDING_MODEL", "w601sxs/b1ade-embed-kd")
         config.plink_dir_38 = os.getenv("PLINK_DIR_38", "./data/1000Genomes_phase3/plink_format_b38")
         config.data_dir = os.getenv("DATA_DIR", "./data")
         config.ontology_cache_dir = os.getenv("ONTOLOGY_CACHE_DIR", "./data/ontology")
+        config.census_cache_dir = os.getenv("CENSUS_CACHE_DIR", "./data/census_cache")
+        config.census_cache_max_bytes = int(
+            os.getenv("CENSUS_CACHE_MAX_BYTES", str(20 * 1024 * 1024 * 1024))
+        )
         # Harmonization workflow configuration
         config.harmonizer_ref_dir_37 = os.getenv("HARMONIZER_REF_DIR_37", "/app/data/harmonizer_ref/b37")
         config.harmonizer_ref_dir_38 = os.getenv("HARMONIZER_REF_DIR_38", "/app/data/harmonizer_ref/b38")
@@ -172,7 +190,9 @@ def create_dependencies(config):
     
     prolog_query = PrologQuery(
         host=config.swipl_host,
-        port=config.swipl_port
+        port=config.swipl_port,
+        url=config.swipl_url,
+        api_key=config.swipl_api_key,
     )
     
     # Use environment variables for MongoDB connection

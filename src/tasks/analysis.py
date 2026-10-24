@@ -111,18 +111,34 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
 
 # === NEXTFLOW HARMONIZATION ===
 @task()
-def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh37", 
+def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh37",
                                      ref_dir=None, code_repo=None, script_dir=None,
-                                     threshold=0.99, sample_size=None, timeout_seconds=14400, 
-                                     cleanup_upload=True, user_id=None, project_id=None):
+                                     threshold=0.99, sample_size=None, timeout_seconds=14400,
+                                     cleanup_upload=True, user_id=None, project_id=None,
+                                     opentargets_study_id=None):
     """
     Harmonize GWAS summary statistics using Nextflow-based harmonization pipeline.
+
+    The Nextflow subprocess is skipped entirely (the file is used as-is, minus
+    the shared column-validation / N / variant_id post-processing below, which
+    always still runs) only when *opentargets_study_id* resolves to a real
+    study in OpenTargets' own `opentargets_studies` or `gwas_study_index`
+    tables — i.e. this file is confirmed to have come from OpenTargets, which
+    pre-harmonizes everything it publishes. If no study_id is given, or it
+    isn't found in either table, harmonization proceeds as normal.
+
+    OpenTargets confirms provenance, not file format: some OT-confirmed
+    studies (e.g. FinnGen's native export) still ship non-SSF columns. In
+    that case the file is remapped to GWAS-SSF via the shared
+    `to_gwas_ssf()` column-remap (scripts/1000Genomes_phase3/ssf_remap.sh)
+    instead of a raw copy — a cheap rename/reshape with no allele-flipping,
+    strand-resolution, or reference-panel lookup, so it's still far cheaper
+    than running Nextflow.
     """
 
     deps = get_deps()
     storage = deps["storage"]
 
-    logger.info(f"[HARMONIZE] Starting Nextflow harmonization for {gwas_file_path}")
     start_time = datetime.now()
     
     # Convert gwas_file_path to absolute path
@@ -144,154 +160,213 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
     os.makedirs(log_dir, exist_ok=True)
     
     try:
-        # Path to harmonizer script
-        harmonizer_script = os.path.join(script_dir, "6_harmoniser.sh")
-        
-        if not os.path.exists(harmonizer_script):
-            raise FileNotFoundError(f"Harmonizer script not found: {harmonizer_script}")
-        
-        harmonizer_cmd = [
-            "bash", harmonizer_script,
-            "--input", gwas_file_path,
-            "--build", ref_genome,
-            "--threshold", str(threshold),
-            "--ref", ref_dir,
-            "--code-repo", code_repo
-        ]
-        
-        logger.info(f"[HARMONIZE] Running command: {' '.join(harmonizer_cmd)}")
-        
-        # Run harmonizer
-        result = subprocess.run(
-            harmonizer_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds
-        )
-        
-        if result.returncode != 0:
-            logger.error(f"[HARMONIZE] Harmonizer failed with exit code {result.returncode}")
-            logger.error(f"[HARMONIZE] STDOUT: {result.stdout}")
-            logger.error(f"[HARMONIZE] STDERR: {result.stderr}")
-            raise RuntimeError(f"Harmonization failed with exit code {result.returncode}")
-        
-        logger.info(f"[HARMONIZE] Harmonizer completed successfully")
-        logger.info(f"[HARMONIZE] Last 20 lines of output:")
-        for line in result.stdout.strip().split('\n')[-20:]:
-            logger.info(f"  {line}")
-        
-        harmonized_file_path = None
-        for line in result.stdout.strip().split('\n'):
-            if line.startswith('HARMONIZED_OUTPUT_PATH='):
-                harmonized_file_path = line.split('=', 1)[1]
-                logger.info(f"[HARMONIZE] Found harmonized file from script output: {harmonized_file_path}")
-                break
-        
-        if not harmonized_file_path:
-            logger.error(f"[HARMONIZE] Bash script did not output HARMONIZED_OUTPUT_PATH")
-            # Log the path to nextflow log for inspection
-            input_dir = os.path.dirname(gwas_file_path)
-            nextflow_log = os.path.join(input_dir, ".nextflow.log")
-            if os.path.exists(nextflow_log):
-                logger.error(f"[HARMONIZE] Nextflow log found at: {nextflow_log}")
-            else:
-                logger.error(f"[HARMONIZE] Nextflow log not found at: {nextflow_log}")
-            raise FileNotFoundError(
-                "Harmonizer script did not output harmonized file path. "
+        ot_confirmed = False
+        if opentargets_study_id:
+            from src.db.credible_sets_handler import CredibleSetsHandler
+            ot_handler = CredibleSetsHandler()
+            try:
+                ot_confirmed = ot_handler.is_study_known_to_opentargets(opentargets_study_id)
+            finally:
+                ot_handler.close()
+
+        if ot_confirmed:
+            logger.info(
+                f"[HARMONIZE] {gwas_file_path}: confirmed OpenTargets provenance "
+                f"(study_id={opentargets_study_id}) — skipping Nextflow harmonization"
             )
-        
-        if not os.path.exists(harmonized_file_path):
-            raise FileNotFoundError(f"Harmonized file not found at path: {harmonized_file_path}")
-        
-        harmonized_output_path = os.path.join(output_dir, os.path.basename(harmonized_file_path))
-        upload_dir = os.path.dirname(harmonized_file_path)
-        parent_upload_dir = os.path.dirname(gwas_file_path)
-        
-        if os.path.abspath(harmonized_file_path) != os.path.abspath(harmonized_output_path):
-            shutil.move(harmonized_file_path, harmonized_output_path)
-            logger.info(f"[HARMONIZE] Moved harmonized file to: {harmonized_output_path}")
-        
-        try:
-            gwas_basename = os.path.splitext(os.path.basename(gwas_file_path))[0]
-            
-            # 1. Remove SSF intermediate files (including .tbi tabix index files)
-            for pattern in [f"{gwas_basename}.tsv*", f"{gwas_basename}*-meta.yaml", f"{gwas_basename}*.tbi"]:
-                for f in glob.glob(os.path.join(upload_dir, pattern)):
-                    if os.path.exists(f) and f != gwas_file_path:
-                        os.remove(f)
-                        logger.info(f"[HARMONIZE] Cleaned up: {f}")
-                # Also check parent directory
-                for f in glob.glob(os.path.join(parent_upload_dir, pattern)):
-                    if os.path.exists(f) and f != gwas_file_path:
-                        os.remove(f)
-                        logger.info(f"[HARMONIZE] Cleaned up: {f}")
-            
-            # Delete logs on success 
-            for logs_base_dir in [upload_dir, parent_upload_dir]:
-                upload_log_dir = os.path.join(logs_base_dir, "logs")
-                if os.path.exists(upload_log_dir):
-                    shutil.rmtree(upload_log_dir)
-                    logger.info(f"[HARMONIZE] Deleted logs (harmonization successful): {upload_log_dir}")
-            
-            # 3. Remove Nextflow work directories 
-            nextflow_work_dir = os.path.join(upload_dir, "work")
-            if os.path.exists(nextflow_work_dir):
-                shutil.rmtree(nextflow_work_dir)
-                logger.info(f"[HARMONIZE] Removed Nextflow work directory: {nextflow_work_dir}")
-            # Also check parent directory for work dir
-            parent_work_dir = os.path.join(parent_upload_dir, "work")
-            if os.path.exists(parent_work_dir):
-                shutil.rmtree(parent_work_dir)
-                logger.info(f"[HARMONIZE] Removed Nextflow work directory: {parent_work_dir}")
-            
-            # 4. Remove Nextflow timestamp directories 
-            for cleanup_dir in [upload_dir, parent_upload_dir]:
-                if not os.path.exists(cleanup_dir):
-                    continue
-                    
-                for item in os.listdir(cleanup_dir):
-                    item_path = os.path.join(cleanup_dir, item)
-                    if os.path.isdir(item_path) and (
-                        len(item.split('_')) >= 2 or  
-                        item.startswith('2') or  
-                        item == '.nextflow' or  
-                        item.startswith('results') or
-                        item == os.path.splitext(os.path.basename(gwas_file_path))[0]  # Remove {basename} directory
-                    ):
-                        try:
-                            shutil.rmtree(item_path)
-                            logger.info(f"[HARMONIZE] Removed directory: {item_path}")
-                        except Exception as e:
-                            logger.warning(f"[HARMONIZE] Could not remove directory {item_path}: {e}")
-            
-            # 5. Remove .nextflow.log files from both upload_dir and parent_upload_dir
-            for log_dir in [upload_dir, parent_upload_dir]:
-                for f in glob.glob(os.path.join(log_dir, ".nextflow.log*")):
-                    try:
-                        os.remove(f)
-                        logger.info(f"[HARMONIZE] Removed: {f}")
-                    except Exception as e:
-                        logger.warning(f"[HARMONIZE] Could not remove {f}: {e}")
-            
-            # 6.  remove original uploaded file
-            if cleanup_upload and os.path.exists(gwas_file_path):
-                is_predefined = '/data/raw/' in gwas_file_path or '\\data\\raw\\' in gwas_file_path
-                
-                if is_predefined:
-                    logger.info(f"[HARMONIZE] Keeping predefined file: {gwas_file_path}")
+            required_ssf_cols = {
+                'chromosome', 'base_pair_location', 'effect_allele',
+                'other_allele', 'beta', 'standard_error', 'p_value',
+            }
+            peek_cols = set(pd.read_csv(
+                gwas_file_path, sep='\t', compression='infer', nrows=0, low_memory=False,
+            ).columns)
+
+            if required_ssf_cols.issubset(peek_cols):
+                harmonized_output_path = os.path.join(output_dir, os.path.basename(gwas_file_path))
+                if os.path.abspath(gwas_file_path) != os.path.abspath(harmonized_output_path):
+                    shutil.copy2(gwas_file_path, harmonized_output_path)
+                    logger.info(f"[HARMONIZE] Copied pre-harmonized file to: {harmonized_output_path}")
+            else:
+                # OpenTargets confirms provenance, not file format — some OT-confirmed
+                # studies (e.g. FinnGen's native export) still need their columns
+                # remapped to GWAS-SSF. This is a cheap column-rename (no allele-flip/
+                # strand-resolution/reference-panel lookup), so it's still far cheaper
+                # than running Nextflow, and downstream LDSC expects SSF columns anyway.
+                logger.info(
+                    f"[HARMONIZE] {gwas_file_path} is not in GWAS-SSF format — "
+                    "remapping columns instead of running Nextflow"
+                )
+                ssf_remap_script = os.path.join(script_dir, "ssf_remap.sh")
+                remap_cmd = (
+                    f"BASEDIR={shlex.quote(output_dir)} "
+                    f"SUMSTATS={shlex.quote(gwas_file_path)} "
+                    f"SUMSTATS_DIR={shlex.quote(output_dir)} "
+                    f"BUILD={shlex.quote(ref_genome)} "
+                    f"bash -c 'source {shlex.quote(ssf_remap_script)} && to_gwas_ssf'"
+                )
+                remap_result = subprocess.run(remap_cmd, shell=True, capture_output=True, text=True)
+                if remap_result.returncode != 0:
+                    logger.error(f"[HARMONIZE] SSF remap failed: {remap_result.stderr}")
+                    raise RuntimeError(f"SSF remap failed: {remap_result.stderr}")
+
+                harmonized_output_path = remap_result.stdout.strip().splitlines()[-1]
+                if not os.path.exists(harmonized_output_path):
+                    raise FileNotFoundError(
+                        f"SSF remap did not produce expected output: {harmonized_output_path}"
+                    )
+                logger.info(f"[HARMONIZE] Remapped to GWAS-SSF: {harmonized_output_path}")
+        else:
+            logger.info(f"[HARMONIZE] Starting Nextflow harmonization for {gwas_file_path}")
+
+            # Path to harmonizer script
+            harmonizer_script = os.path.join(script_dir, "6_harmoniser.sh")
+
+            if not os.path.exists(harmonizer_script):
+                raise FileNotFoundError(f"Harmonizer script not found: {harmonizer_script}")
+
+            harmonizer_cmd = [
+                "bash", harmonizer_script,
+                "--input", gwas_file_path,
+                "--build", ref_genome,
+                "--threshold", str(threshold),
+                "--ref", ref_dir,
+                "--code-repo", code_repo
+            ]
+
+            logger.info(f"[HARMONIZE] Running command: {' '.join(harmonizer_cmd)}")
+
+            # Run harmonizer
+            result = subprocess.run(
+                harmonizer_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds
+            )
+
+            if result.returncode != 0:
+                logger.error(f"[HARMONIZE] Harmonizer failed with exit code {result.returncode}")
+                logger.error(f"[HARMONIZE] STDOUT: {result.stdout}")
+                logger.error(f"[HARMONIZE] STDERR: {result.stderr}")
+                raise RuntimeError(f"Harmonization failed with exit code {result.returncode}")
+
+            logger.info(f"[HARMONIZE] Harmonizer completed successfully")
+            logger.info(f"[HARMONIZE] Last 20 lines of output:")
+            for line in result.stdout.strip().split('\n')[-20:]:
+                logger.info(f"  {line}")
+
+            harmonized_file_path = None
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith('HARMONIZED_OUTPUT_PATH='):
+                    harmonized_file_path = line.split('=', 1)[1]
+                    logger.info(f"[HARMONIZE] Found harmonized file from script output: {harmonized_file_path}")
+                    break
+
+            if not harmonized_file_path:
+                logger.error(f"[HARMONIZE] Bash script did not output HARMONIZED_OUTPUT_PATH")
+                # Log the path to nextflow log for inspection
+                input_dir = os.path.dirname(gwas_file_path)
+                nextflow_log = os.path.join(input_dir, ".nextflow.log")
+                if os.path.exists(nextflow_log):
+                    logger.error(f"[HARMONIZE] Nextflow log found at: {nextflow_log}")
                 else:
-                    os.remove(gwas_file_path)
-                    logger.info(f"[HARMONIZE] Removed original uploaded file: {gwas_file_path}")
-            elif not cleanup_upload:
-                logger.info(f"[HARMONIZE] Keeping original uploaded file: {gwas_file_path}")
-            
-            logger.info(f"[HARMONIZE] Cleanup complete for upload directory: {upload_dir}")
-            
-        except Exception as cleanup_error:
-            logger.warning(f"[HARMONIZE] Error during cleanup: {cleanup_error}")
-        
+                    logger.error(f"[HARMONIZE] Nextflow log not found at: {nextflow_log}")
+                raise FileNotFoundError(
+                    "Harmonizer script did not output harmonized file path. "
+                )
+
+            if not os.path.exists(harmonized_file_path):
+                raise FileNotFoundError(f"Harmonized file not found at path: {harmonized_file_path}")
+
+            harmonized_output_path = os.path.join(output_dir, os.path.basename(harmonized_file_path))
+            upload_dir = os.path.dirname(harmonized_file_path)
+            parent_upload_dir = os.path.dirname(gwas_file_path)
+
+            if os.path.abspath(harmonized_file_path) != os.path.abspath(harmonized_output_path):
+                shutil.move(harmonized_file_path, harmonized_output_path)
+                logger.info(f"[HARMONIZE] Moved harmonized file to: {harmonized_output_path}")
+
+            try:
+                gwas_basename = os.path.splitext(os.path.basename(gwas_file_path))[0]
+
+                # 1. Remove SSF intermediate files (including .tbi tabix index files)
+                for pattern in [f"{gwas_basename}.tsv*", f"{gwas_basename}*-meta.yaml", f"{gwas_basename}*.tbi"]:
+                    for f in glob.glob(os.path.join(upload_dir, pattern)):
+                        if os.path.exists(f) and f != gwas_file_path:
+                            os.remove(f)
+                            logger.info(f"[HARMONIZE] Cleaned up: {f}")
+                    # Also check parent directory
+                    for f in glob.glob(os.path.join(parent_upload_dir, pattern)):
+                        if os.path.exists(f) and f != gwas_file_path:
+                            os.remove(f)
+                            logger.info(f"[HARMONIZE] Cleaned up: {f}")
+
+                # Delete logs on success
+                for logs_base_dir in [upload_dir, parent_upload_dir]:
+                    upload_log_dir = os.path.join(logs_base_dir, "logs")
+                    if os.path.exists(upload_log_dir):
+                        shutil.rmtree(upload_log_dir)
+                        logger.info(f"[HARMONIZE] Deleted logs (harmonization successful): {upload_log_dir}")
+
+                # 3. Remove Nextflow work directories
+                nextflow_work_dir = os.path.join(upload_dir, "work")
+                if os.path.exists(nextflow_work_dir):
+                    shutil.rmtree(nextflow_work_dir)
+                    logger.info(f"[HARMONIZE] Removed Nextflow work directory: {nextflow_work_dir}")
+                # Also check parent directory for work dir
+                parent_work_dir = os.path.join(parent_upload_dir, "work")
+                if os.path.exists(parent_work_dir):
+                    shutil.rmtree(parent_work_dir)
+                    logger.info(f"[HARMONIZE] Removed Nextflow work directory: {parent_work_dir}")
+
+                # 4. Remove Nextflow timestamp directories
+                for cleanup_dir in [upload_dir, parent_upload_dir]:
+                    if not os.path.exists(cleanup_dir):
+                        continue
+
+                    for item in os.listdir(cleanup_dir):
+                        item_path = os.path.join(cleanup_dir, item)
+                        if os.path.isdir(item_path) and (
+                            len(item.split('_')) >= 2 or
+                            item.startswith('2') or
+                            item == '.nextflow' or
+                            item.startswith('results') or
+                            item == os.path.splitext(os.path.basename(gwas_file_path))[0]  # Remove {basename} directory
+                        ):
+                            try:
+                                shutil.rmtree(item_path)
+                                logger.info(f"[HARMONIZE] Removed directory: {item_path}")
+                            except Exception as e:
+                                logger.warning(f"[HARMONIZE] Could not remove directory {item_path}: {e}")
+
+                # 5. Remove .nextflow.log files from both upload_dir and parent_upload_dir
+                for log_dir in [upload_dir, parent_upload_dir]:
+                    for f in glob.glob(os.path.join(log_dir, ".nextflow.log*")):
+                        try:
+                            os.remove(f)
+                            logger.info(f"[HARMONIZE] Removed: {f}")
+                        except Exception as e:
+                            logger.warning(f"[HARMONIZE] Could not remove {f}: {e}")
+
+                # 6.  remove original uploaded file
+                if cleanup_upload and os.path.exists(gwas_file_path):
+                    is_predefined = '/data/raw/' in gwas_file_path or '\\data\\raw\\' in gwas_file_path
+
+                    if is_predefined:
+                        logger.info(f"[HARMONIZE] Keeping predefined file: {gwas_file_path}")
+                    else:
+                        os.remove(gwas_file_path)
+                        logger.info(f"[HARMONIZE] Removed original uploaded file: {gwas_file_path}")
+                elif not cleanup_upload:
+                    logger.info(f"[HARMONIZE] Keeping original uploaded file: {gwas_file_path}")
+
+                logger.info(f"[HARMONIZE] Cleanup complete for upload directory: {upload_dir}")
+
+            except Exception as cleanup_error:
+                logger.warning(f"[HARMONIZE] Error during cleanup: {cleanup_error}")
+
         harmonized_file_path = harmonized_output_path
-            
+
         # Load harmonized data
         # Read only 1 row — enough to validate columns and check the first value.
         # Never load the full 20M-row file into memory.
@@ -1207,12 +1282,10 @@ def finemap_region_batch_worker(batch_data):
 
     user_id = None
     project_id = None
-    opentargets_study_id = None
 
     if additional_params:
         user_id = additional_params.get('user_id', None)
         project_id = additional_params.get('project_id', None)
-        opentargets_study_id = additional_params.get('opentargets_study_id', None)
         finemap_params = additional_params.get('finemap_params', {})
         
         # Extract parameters
@@ -1239,31 +1312,6 @@ def finemap_region_batch_worker(batch_data):
     batch_results = []
     successful_regions = 0
     failed_regions = 0
-
-    # ── OpenTargets: one handler for the whole batch ──────────────────────────
-    ot_handler = None
-    if opentargets_study_id and analysis_handler and user_id and project_id:
-        try:
-            from src.db.credible_sets_handler import (
-                CredibleSetsHandler, convert_ot_row_to_credible_set,
-            )
-            ot_handler = CredibleSetsHandler()
-            if not ot_handler.study_has_credible_sets(opentargets_study_id):
-                logger.info(
-                    f"[BATCH-{batch_id}] OpenTargets: no credible sets for "
-                    f"{opentargets_study_id} — will run SuSiE for all regions"
-                )
-                ot_handler.close()
-                ot_handler = None
-            else:
-                logger.info(
-                    f"[BATCH-{batch_id}] OpenTargets: credible sets available for "
-                    f"{opentargets_study_id}"
-                )
-        except Exception as ot_init_exc:
-            logger.warning(f"[BATCH-{batch_id}] OpenTargets handler init failed: {ot_init_exc}")
-            ot_handler = None
-    # ─────────────────────────────────────────────────────────────────────────
 
     logger.info(f"[BATCH-{batch_id}] Initializing single R session for entire batch")
     
@@ -1311,61 +1359,6 @@ def finemap_region_batch_worker(batch_data):
         logger.info(f"[BATCH-{batch_id}] Processing region {region_idx+1}/{len(region_batch)}: {region_id}")
         
         try:
-            # ── OpenTargets pre-computed credible sets check ──────────────────
-            if ot_handler is not None:
-                try:
-                    ot_cs_rows = ot_handler.get_credible_sets_for_region(
-                        study_id=opentargets_study_id,
-                        chromosome=str(region['chr']),
-                        position_start=region['position'] - window * 1000,
-                        position_end=region['position'] + window * 1000,
-                    )
-                    if ot_cs_rows:
-                        logger.info(
-                            f"[BATCH-{batch_id}] OpenTargets: found {len(ot_cs_rows)} "
-                            f"credible set(s) for {region_id} — skipping SuSiE"
-                        )
-                        for ot_row in ot_cs_rows:
-                            cs = convert_ot_row_to_credible_set(ot_row, coverage=coverage)
-                            cs["completed_at"] = datetime.now().isoformat()
-                            analysis_handler.save_credible_set(user_id, project_id, cs)
-
-                        # Build a minimal DataFrame so all_results stays consistent
-                        import json as _json
-                        ot_rows_for_df = []
-                        for cs_idx, ot_row in enumerate(ot_cs_rows, 1):
-                            locus = ot_row.get("locus") or []
-                            if isinstance(locus, str):
-                                locus = _json.loads(locus)
-                            for v in locus:
-                                vid = v.get("variantId", "")
-                                parts = vid.split("_")
-                                ot_rows_for_df.append({
-                                    "variant_id": vid,
-                                    "chromosome": parts[0] if parts else str(region['chr']),
-                                    "position": int(parts[1]) if len(parts) > 1 else region['position'],
-                                    "beta": v.get("beta") or ot_row.get("beta"),
-                                    "PIP": float(v.get("posteriorProbability") or 0),
-                                    "cs": cs_idx,
-                                    "credible_set": cs_idx,
-                                    "source": "opentargets",
-                                })
-                        if ot_rows_for_df:
-                            import pandas as _pd
-                            ot_df = _pd.DataFrame(ot_rows_for_df)
-                            ot_df['batch_id'] = batch_id
-                            ot_df['region_idx'] = region_idx
-                            batch_results.append(ot_df)
-
-                        successful_regions += 1
-                        continue  # skip SuSiE for this region
-                except Exception as ot_exc:
-                    logger.warning(
-                        f"[BATCH-{batch_id}] OpenTargets lookup failed for {region_id} "
-                        f"({ot_exc}) — falling back to SuSiE"
-                    )
-            # ─────────────────────────────────────────────────────────────────
-
             # Use the shared R session with proper context management
             logger.info(f"[BATCH-{batch_id}] Running fine-mapping for {region_id} with shared R session")
 
@@ -1520,9 +1513,6 @@ def finemap_region_batch_worker(batch_data):
             logger.info(f"[BATCH-{batch_id}] Final R session cleanup completed")
         except Exception as final_cleanup_e:
             logger.warning(f"[BATCH-{batch_id}] Final cleanup error: {final_cleanup_e}")
-
-    if ot_handler is not None:
-        ot_handler.close()
 
     return batch_results
 

@@ -13,8 +13,17 @@ env:
   DOCKER_HUB_ORG: rejuvebio
 
 jobs:
+  # Unit test suite (reusable workflow, see run-tests.yml)
+  run-tests:
+    uses: ./.github/workflows/run-tests.yml
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
   # SonarQube Code Quality Analysis
   code-quality-analysis:
+    needs: [run-tests]
     runs-on: [self-hosted, dev-runner]
     if: github.event_name == 'pull_request' || github.event_name == 'push'
 
@@ -32,19 +41,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest pytest-cov pylint
+        pip install pylint
 
-    - name: Run tests with coverage
-      env:
-        MONGODB_URI: mongodb://localhost:27017
-        DB_NAME: test
-        OPENAI_API_KEY: dummy-key-for-ci
-        ANTHROPIC_API_KEY: dummy-key-for-ci
-        HF_TOKEN: dummy-token-for-ci
-        JWT_SECRET_KEY: test-secret-key
-        JWT_SECRET: test-secret
-      run: |
-        pytest --cov=. --cov-report=xml --cov-report=html . || echo "No tests found, skipping coverage"
+    - name: Download coverage report from run-tests
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: test-reports
 
     - name: Run pylint
       run: |
@@ -55,14 +58,15 @@ jobs:
       uses: sonarsource/sonarqube-scan-action@master
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: http://${{ secrets.HETZNER_IP }}:9000
+        SONAR_HOST_URL: https://dev.rejuve.bio:5058
       with:
         args: >
           -Dsonar.projectKey=hypothesis-generation-demo
           -Dsonar.sources=.
-          -Dsonar.host.url=http://${{ secrets.HETZNER_IP }}:9000
+          -Dsonar.host.url=https://dev.rejuve.bio:5058
           -Dsonar.token=${{ secrets.SONAR_TOKEN }}
           -Dsonar.python.pylint.reportPaths=pylint-report.json
+          -Dsonar.python.coverage.reportPaths=coverage.xml
           -Dsonar.exclusions=**/venv/**,**/__pycache__/**,**/data/**,**/pl/**,**/prolog_out_ci/**,**/external_data_ci/**,.github/**
 
     - name: SonarQube Quality Gate Check
@@ -73,22 +77,23 @@ jobs:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       continue-on-error: true
 
-    - name: Upload coverage reports
+    - name: Upload pylint report
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: coverage-reports
-        path: |
-          coverage.xml
-          htmlcov/
-          pylint-report.json
+        name: pylint-report
+        path: pylint-report.json
 
   build-and-test-all:
-    needs: [code-quality-analysis]
+    needs: [run-tests, code-quality-analysis]
     if: |
       (github.event_name == 'pull_request') ||
       (github.event_name == 'push')
     runs-on: [self-hosted, dev-runner]
+
+    env:
+      # New services in docker-compose.yml are picked up automatically.
+      COMPOSE: docker compose -p hgd-ci-staging --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.ci.override.yml
 
     outputs:
       validation-status: ${{ steps.validate.outcome }}
@@ -98,24 +103,12 @@ jobs:
     - name: Pre-cleanup workspace
       run: |
         echo "=== Cleaning workspace before checkout ==="
-        # Fix permissions from previous run
         docker run --rm -v "$GITHUB_WORKSPACE:/workspace" alpine:latest sh -c "chmod -R 777 /workspace" 2>/dev/null || true
-        # Remove old CI resources via compose file if it exists
-        docker compose -f docker-compose.ci.yml down -v --remove-orphans 2>/dev/null || true
-        # Explicitly remove known CI containers by name (handles case where compose file doesn't exist yet)
-        for container in mongo-ci-staging prolog-service-ci-staging prefect-postgres-ci-staging dask-scheduler-ci-staging dask-worker-ci-staging redis-ci-staging prefect-service-ci-staging prefect-deployment-ci-staging api-service-ci-staging; do
-          docker rm -f $container 2>/dev/null || true
-        done
-        # Remove dangling networks from previous runs
+        # $COMPOSE needs .env to exist just to parse
+        [ -f .env ] || touch .env
+        [ -f docker/docker-compose.yml ] && $COMPOSE down -v --remove-orphans 2>/dev/null || true
         docker network prune -f 2>/dev/null || true
-        # Wait for port release and kill any lingering processes
         sleep 2
-        # Force kill any process still holding CI ports if needed
-        if netstat -tuln 2>/dev/null | grep -q ':6399 '; then
-          echo "Port 6399 still in use, forcing cleanup..."
-          docker ps -a | grep -i redis | awk '{print $1}' | xargs docker rm -f 2>/dev/null || true
-          sleep 1
-        fi
         echo "[success] Pre-cleanup completed"
 
     - name: Checkout repository
@@ -168,510 +161,69 @@ jobs:
 
     - name: Create .env file for testing
       run: |
-        echo "=== Creating .env file from GitHub Secrets ==="
+        cp .env.ci.example .env
+        echo "=== .env created from .env.ci.example ==="
 
-        cat > .env << 'EOF'
-        # --- Mongo ---
-        MONGO_USER=admin
-        MONGO_PASSWORD=ci-mongo-password
-        MONGODB_URI=mongodb://admin:ci-mongo-password@mongo:27017/
-        DB_NAME=default
-
-        # --- API Keys (dummy for CI) ---
-        OPENAI_API_KEY=sk-test-dummy-key-for-ci-testing-only
-        OpenAI=sk-test-dummy-key-for-ci-testing-only
-        ANTHROPIC_API_KEY=sk-ant-test-dummy-key-for-ci-testing
-        HF_TOKEN=hf_dummy_token_for_testing_purposes
-
-        # --- Auth ---
-        JWT_SECRET_KEY=test-secret-key-for-ci-only-not-production
-        JWT_SECRET=test-secret-key-for-ci-only-not-production
-        PREFECT_SERVICE_TOKEN=ci-dummy-prefect-service-token
-
-        # --- Prefect DB ---
-        PREFECT_DB_USER=prefect
-        PREFECT_DB_PASSWORD=ci-prefect-db-password
-        PREFECT_DB_NAME=prefect
-
-        # --- Port mapping (CI-specific, different from prod) ---
-        MONGO_PORT_HOST=27098
-        MONGO_PORT_INTERNAL=27017
-        PREFECT_PORT_HOST=4293
-        PREFECT_PORT_INTERNAL=4200
-        PROLOG_PORT_HOST=4343
-        PROLOG_PORT_INTERNAL=4242
-        PROLOG_PORT=4242
-        FLASK_PORT_HOST=5009
-        FLASK_PORT_INTERNAL=5000
-
-        # --- SocketIO ---
-        SOCKETIO_PING_TIMEOUT=300
-        SOCKETIO_PING_INTERVAL=300
-        SOCKETIO_MAX_BUFFER_SIZE=100000000
-
-        # --- App config ---
-        ANNOTATION_URL=http://localhost:5004/query
-        SKIP_SEED=true
-        DATA_DIR=./data
-        ONTOLOGY_CACHE_DIR=./data/ontology
-
-        # --- Map file paths ---
-        ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
-        HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
-        GO_MAP=/app/data/go_map.pkl
-
-        # --- Harmonizer ---
-        HARMONIZER_REF_DIR=
-        HARMONIZER_CODE_REPO=/app/gwas-sumstats-harmoniser
-        HARMONIZER_SCRIPT_DIR=/app/scripts/1000Genomes_phase3
-        PLINK_DIR_37=/app/data/1000Genomes_phase3/plink_format_b38
-        HARMONIZER_REF_DIR_37=/app/data/harmonizer_ref/b38
-
-        # --- MinIO (CI dummy) ---
-        MINIO_ENDPOINT=localhost:9101
-        MINIO_ACCESS_KEY=ci-dummy-minio-access-key
-        MINIO_SECRET_KEY=ci-dummy-minio-secret-key
-        MINIO_BUCKET=hypothesis
-        MINIO_USE_SSL=false
-
-        # --- Seeding paths ---
-        GWAS_MANIFEST_PATH=/app/data/Manifest_201807.csv
-        FINNGEN_MANIFEST_PATH=/app/data/finngen_R12_manifest.tsv
-        PHENOTYPES_JSON_PATH=/app/data/gwas_catalog_phenotypes.json
-        EOF
-
-        echo "=== .env file created successfully ==="
-        cat .env
-
-    - name: Create test docker-compose
-      run: |
-        echo "=== Creating docker-compose.ci.yml ==="
-        cat > docker-compose.ci.yml << 'EOF'
-        version: '3.8'
-        services:
-          mongo:
-            image: mongo:latest
-            restart: unless-stopped
-            container_name: mongo-ci-staging
-            ports:
-              - "27098:27017"
-            environment:
-              MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
-              MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
-            volumes:
-              - mongo-data-ci:/data/db
-            networks:
-              - app_network_ci
-            healthcheck:
-              test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-              interval: 10s
-              timeout: 5s
-              retries: 5
-
-          prolog-service:
-            restart: unless-stopped
-            container_name: prolog-service-ci-staging
-            build:
-              context: .
-              dockerfile: docker/Dockerfile.prolog
-            ports:
-              - "4343:4242"
-            volumes:
-              - ./pl:/app/pl
-              - ./prolog_out_ci:/mnt/prolog_out_v2
-              - ./prolog_out_ci:/mnt/prolog_out_v3
-            networks:
-              - app_network_ci
-
-          prefect-postgres:
-            restart: unless-stopped
-            container_name: prefect-postgres-ci-staging
-            image: postgres:15-alpine
-            environment:
-              POSTGRES_USER: ${PREFECT_DB_USER}
-              POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD}
-              POSTGRES_DB: ${PREFECT_DB_NAME}
-            ports:
-              - "5419:5432"
-            volumes:
-              - prefect-postgres-data-ci:/var/lib/postgresql/data
-            networks:
-              - app_network_ci
-            healthcheck:
-              test: ["CMD-SHELL", "pg_isready -U ${PREFECT_DB_USER}"]
-              interval: 10s
-              timeout: 5s
-              retries: 5
-
-          dask-scheduler:
-            restart: unless-stopped
-            container_name: dask-scheduler-ci-staging
-            build:
-              context: .
-              dockerfile: docker/Dockerfile
-            hostname: dask-scheduler
-            ports:
-              - "8796:8786"
-              - "8797:8787"
-            environment:
-              - PYTHONPATH=/app
-              - SKIP_SEED=true
-            volumes:
-              - .:/app
-            entrypoint: []
-            command: >
-              sh -c "uv run dask scheduler --host 0.0.0.0 --port 8786 --dashboard-address :8787"
-            healthcheck:
-              test: ["CMD", "python", "-c", "from dask.distributed import Client; c = Client('tcp://127.0.0.1:8786', connection_limit=1, timeout='5s'); c.close()"]
-              interval: 5s
-              timeout: 10s
-              retries: 20
-              start_period: 10s
-            networks:
-              - app_network_ci
-
-          dask-worker:
-            restart: unless-stopped
-            container_name: dask-worker-ci-staging
-            build:
-              context: .
-              dockerfile: docker/Dockerfile
-            environment:
-              - DASK_ADDRESS=tcp://dask-scheduler:8786
-              - PREFECT_API_URL=http://prefect-service:4200/api
-              - PYTHONPATH=/app:/app/src
-              - SWIPL_HOST=prolog-service
-              - SWIPL_PORT=4242
-              - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
-              - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
-              - GO_MAP=/app/data/go_map.pkl
-              - SKIP_SEED=true
-              - API_HOST=api-service
-              - API_PORT=5000
-              - OPENAI_API_KEY=dummy-key-for-ci
-              - REDIS_URL=redis://redis:6379
-            env_file:
-              - .env
-            volumes:
-              - .:/app
-              - ./data:/app/data
-              - ./external_data_ci:/app/data/external_data
-            entrypoint: []
-            depends_on:
-              dask-scheduler:
-                condition: service_healthy
-              mongo:
-                condition: service_healthy
-              prolog-service:
-                condition: service_started
-              redis:
-                condition: service_healthy
-            command: >
-              uv run dask worker tcp://dask-scheduler:8786
-              --nworkers 2
-              --nthreads 1
-              --memory-limit 8GB
-              --preload src.dask_preload
-            deploy:
-              mode: replicated
-              replicas: 1
-              resources:
-                limits:
-                  cpus: '4.0'
-                  memory: 16G
-            networks:
-              - app_network_ci
-
-          redis:
-            restart: unless-stopped
-            container_name: redis-ci-staging
-            image: redis:7-alpine
-            ports:
-              - "6399:6379"
-            networks:
-              - app_network_ci
-            healthcheck:
-              test: ["CMD", "redis-cli", "ping"]
-              interval: 10s
-              timeout: 5s
-              retries: 5
-
-          prefect-service:
-            restart: unless-stopped
-            container_name: prefect-service-ci-staging
-            build:
-              context: .
-              dockerfile: docker/Dockerfile.prefect
-            ports:
-              - "4293:4200"
-            volumes:
-              - .:/app
-              - prefect-data-ci:/root/.prefect
-            environment:
-              - PREFECT_API_URL=http://prefect-service:4200/api
-              - PREFECT_UI_API_URL=http://localhost:4293/api
-              - UV_PROJECT_ENVIRONMENT=/opt/prefect-venv
-              - DASK_ADDRESS=tcp://dask-scheduler:8786
-              - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-postgres:5432/${PREFECT_DB_NAME}
-            depends_on:
-              prefect-postgres:
-                condition: service_healthy
-            env_file:
-              - .env
-            command: >
-              sh -c "uv run prefect server start --host 0.0.0.0"
-            networks:
-              - app_network_ci
-            healthcheck:
-              test: ["CMD", "curl", "-f", "http://localhost:4200/api/health"]
-              interval: 30s
-              timeout: 15s
-              retries: 20
-              start_period: 300s
-
-          prefect-deployment:
-            container_name: prefect-deployment-ci-staging
-            build:
-              context: .
-              dockerfile: docker/Dockerfile
-            deploy:
-              resources:
-                limits:
-                  memory: 8G
-            volumes:
-              - .:/app
-              - ./data:/app/data
-              - ./external_data_ci:/app/data/external_data
-            env_file:
-              - .env
-            entrypoint: []
-            command: >
-              bash -c "
-              echo '--- 1. Enforcing Safety Limits (Creating Pools) ---' &&
-              uv run prefect work-pool create 'analysis-pool' --type process --overwrite &&
-              uv run prefect work-pool update 'analysis-pool' --concurrency-limit 3 &&
-              uv run prefect work-pool create 'interactive-pool' --type process --overwrite &&
-              uv run prefect work-pool update 'interactive-pool' --concurrency-limit 10 &&
-              uv run prefect concurrency-limit create harmonize_tag 2 || true &&
-
-              echo '--- 2. Registering Flows ---' &&
-              uv run python src/deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl --go-map /app/data/go_map.pkl --swipl-host prolog-service --swipl-port 4242 &&
-
-              echo '--- 3. Starting The Workers ---' &&
-              uv run prefect worker start --pool 'analysis-pool' --name 'heavy-worker' &
-              uv run prefect worker start --pool 'interactive-pool' --name 'light-worker' &
-
-              echo '--- 4. Keeping Container Alive ---' &&
-              tail -f /dev/null
-              "
-            environment:
-              - PREFECT_API_URL=http://prefect-service:4200/api
-              - UV_PROJECT_ENVIRONMENT=/opt/flask-venv
-              - DASK_ADDRESS=tcp://dask-scheduler:8786
-              - PYTHONPATH=/app
-              - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
-              - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
-              - GO_MAP=/app/data/go_map.pkl
-              - API_HOST=api-service
-              - API_PORT=5000
-              - OPENAI_API_KEY=dummy-key-for-ci
-              - REDIS_URL=redis://redis:6379
-            depends_on:
-              prefect-service:
-                condition: service_healthy
-              dask-scheduler:
-                condition: service_started
-              mongo:
-                condition: service_healthy
-              redis:
-                condition: service_healthy
-            networks:
-              - app_network_ci
-
-          api-service:
-            restart: unless-stopped
-            container_name: api-service-ci-staging
-            build:
-              context: .
-              dockerfile: docker/Dockerfile
-            ports:
-              - "5009:5000"
-            environment:
-              - FLASK_ENV=development
-              - PREFECT_API_URL=http://prefect-service:4200/api
-              - PYTHONPATH=/app
-              - DASK_ADDRESS=tcp://dask-scheduler:8786
-              - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
-              - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
-              - GO_MAP=/app/data/go_map.pkl
-              - SWIPL_HOST=prolog-service
-              - SWIPL_PORT=4242
-              - OPENAI_API_KEY=dummy-key-for-ci
-              - REDIS_URL=redis://redis:6379
-            env_file:
-              - .env
-            volumes:
-              - .:/app
-              - ./data:/app/data
-            entrypoint: []
-            depends_on:
-              mongo:
-                condition: service_healthy
-              prefect-service:
-                condition: service_healthy
-              dask-scheduler:
-                condition: service_healthy
-              redis:
-                condition: service_healthy
-            command: >
-              uv run gunicorn "src.server:create_app_with_config"
-              --workers 4
-              --worker-class uvicorn.workers.UvicornWorker
-              --bind 0.0.0.0:5000
-              --timeout 600
-              --graceful-timeout 30
-              --keep-alive 5
-              --access-logfile -
-              --error-logfile -
-            networks:
-              - app_network_ci
-
-        volumes:
-          mongo-data-ci:
-          prefect-data-ci:
-          prefect-postgres-data-ci:
-
-        networks:
-          app_network_ci:
-            driver: bridge
-        EOF
-
-        mkdir -p prolog_out_ci external_data_ci data
-        echo "=== docker-compose.ci.yml created successfully ==="
+    - name: Prepare CI directories
+      run: mkdir -p prolog_out_ci external_data_ci data
 
     - name: Build and Monitor All Services
       id: validate
       run: |
         set -e
-        echo "=== Building and Validating All Services ==="
-
         echo "=== Building all Docker images ==="
-        docker compose -f docker-compose.ci.yml build
+        $COMPOSE build
 
         echo "=== Starting ALL services ==="
-        docker compose -f docker-compose.ci.yml up -d
+        $COMPOSE up -d
 
         echo "=== Waiting for services to initialize (90 seconds) ==="
         sleep 90
 
-        echo "=== Checking ALL services status ==="
-        docker compose -f docker-compose.ci.yml ps
+        echo "=== Checking every service Compose actually started ==="
+        $COMPOSE ps --all
 
-        echo ""
-        echo "=== Checking individual service health ==="
+        FAILED_SERVICES=""
+        for service in $($COMPOSE ps --all --services); do
+          STATE=$($COMPOSE ps --all --format '{{.Service}} {{.State}}' | awk -v s="$service" '$1==s{print $2}')
+          if [ "$STATE" = "running" ]; then
+            echo "[SUCCESS] $service is running"
+            $COMPOSE logs "$service" --tail=5
+          else
+            echo "[ERROR] $service is not running (state: ${STATE:-unknown}) — full logs below:"
+            $COMPOSE logs "$service"
+            FAILED_SERVICES="$FAILED_SERVICES $service"
+          fi
+        done
 
-        # Check MongoDB
-        echo "--- Checking MongoDB ---"
-        if docker compose -f docker-compose.ci.yml ps mongo | grep -q "Up"; then
-          echo "[SUCCESS] MongoDB is running"
-          docker compose -f docker-compose.ci.yml logs mongo --tail=5
-        else
-          echo "[ERROR] MongoDB is NOT running"
-          docker compose -f docker-compose.ci.yml logs mongo
+        if [ -n "$FAILED_SERVICES" ]; then
+          echo "[ERROR] Failed services:$FAILED_SERVICES — see their logs above to diagnose"
           exit 1
         fi
 
-        # Check Prolog Service
-        echo ""
-        echo "--- Checking Prolog Service ---"
-        if docker compose -f docker-compose.ci.yml ps prolog-service | grep -q "Up"; then
-          echo "[SUCCESS] Prolog Service is running"
-          docker compose -f docker-compose.ci.yml logs prolog-service --tail=5
-        else
-          echo "[ERROR] Prolog Service is NOT running"
-          docker compose -f docker-compose.ci.yml logs prolog-service
-          exit 1
-        fi
-
-        # Check Dask Scheduler
-        echo ""
-        echo "--- Checking Dask Scheduler ---"
-        if docker compose -f docker-compose.ci.yml ps dask-scheduler | grep -q "Up"; then
-          echo "[SUCCESS] Dask Scheduler is running"
-          docker compose -f docker-compose.ci.yml logs dask-scheduler --tail=5
-        else
-          echo "[ERROR] Dask Scheduler is NOT running"
-          docker compose -f docker-compose.ci.yml logs dask-scheduler
-          exit 1
-        fi
-
-        # Check Dask Worker
-        echo ""
-        echo "--- Checking Dask Worker ---"
-        if docker compose -f docker-compose.ci.yml ps dask-worker | grep -q "Up"; then
-          echo "[SUCCESS] Dask Worker is running"
-          docker compose -f docker-compose.ci.yml logs dask-worker --tail=5
-        else
-          echo "[ERROR] Dask Worker is NOT running"
-          docker compose -f docker-compose.ci.yml logs dask-worker
-          exit 1
-        fi
-
-        # Check Redis
-        echo ""
-        echo "--- Checking Redis ---"
-        if docker compose -f docker-compose.ci.yml ps redis | grep -q "Up"; then
-          echo "[SUCCESS] Redis is running"
-        else
-          echo "[ERROR] Redis is NOT running"
-          docker compose -f docker-compose.ci.yml logs redis
-          exit 1
-        fi
-
-        # Check Prefect Service
-        echo ""
-        echo "--- Checking Prefect Service ---"
-        if docker compose -f docker-compose.ci.yml ps prefect-service | grep -q "Up"; then
-          echo "[SUCCESS] Prefect Service is running"
-          docker compose -f docker-compose.ci.yml logs prefect-service --tail=5
-        else
-          echo "[ERROR] Prefect Service is NOT running"
-          docker compose -f docker-compose.ci.yml logs prefect-service
-          exit 1
-        fi
-
-        # Check Prefect Deployment (one-time job, just show logs)
-        echo ""
-        echo "--- Checking Prefect Deployment ---"
-        docker compose -f docker-compose.ci.yml logs prefect-deployment --tail=20
-        echo "[SUCCESS] Prefect Deployment logs retrieved"
-
-        # Check API Service
-        echo ""
-        echo "--- Checking API Service ---"
-        if docker compose -f docker-compose.ci.yml ps api-service | grep -q "Up"; then
-          echo "[SUCCESS] API Service is running"
-          docker compose -f docker-compose.ci.yml logs api-service --tail=5
-        else
-          echo "[ERROR] API Service is NOT running"
-          docker compose -f docker-compose.ci.yml logs api-service
-          exit 1
-        fi
-
-        echo ""
-        echo "=== Final status - All services ==="
-        docker compose -f docker-compose.ci.yml ps
-
-        echo ""
         echo "[SUCCESS] VALIDATION PASSED - ALL services are running and healthy!"
+
+    # Services with build: and no profile get pushed as hypothesis-generation-<service>.
+    - name: Determine pushable services
+      if: steps.validate.outcome == 'success'
+      id: services
+      run: |
+        LIST=$($COMPOSE config --format json --no-interpolate | python3 -c "
+        import sys, json
+        c = json.load(sys.stdin)
+        names = sorted(n for n, s in c['services'].items() if 'build' in s and not s.get('profiles'))
+        print(' '.join(names))
+        ")
+        echo "list=$LIST" >> $GITHUB_OUTPUT
+        echo "Pushable services: $LIST"
 
     # Docker Image Size Check
     - name: Check Docker image sizes
       if: steps.validate.outcome == 'success'
       run: |
         echo "=== Checking Docker image sizes ==="
-        for service in prolog-service prefect-service api-service prefect-deployment dask-scheduler dask-worker; do
-          IMAGE_ID=$(docker compose -f docker-compose.ci.yml images -q $service)
+        for service in ${{ steps.services.outputs.list }}; do
+          IMAGE_ID=$($COMPOSE images -q $service)
           SIZE=$(docker images $IMAGE_ID --format "{{.Size}}")
           echo "$service image size: $SIZE"
         done
@@ -684,8 +236,8 @@ jobs:
         echo "=== Tagging and pushing images to Docker Hub ==="
         SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
 
-        for service in prolog-service prefect-service api-service prefect-deployment dask-scheduler dask-worker; do
-          IMAGE_ID=$(docker compose -f docker-compose.ci.yml images -q $service)
+        for service in ${{ steps.services.outputs.list }}; do
+          IMAGE_ID=$($COMPOSE images -q $service)
           SERVICE_NAME="hypothesis-generation-${service}"
           STAGING_TAG="${{ env.DOCKER_HUB_ORG }}/${SERVICE_NAME}:staging"
           SHA_TAG="${{ env.DOCKER_HUB_ORG }}/${SERVICE_NAME}:staging-${SHORT_SHA}"
@@ -710,7 +262,7 @@ jobs:
         echo "=== Cleaning up old Docker Hub tags ==="
         SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
         
-        for service in prolog-service prefect-service api-service prefect-deployment dask-scheduler dask-worker; do
+        for service in ${{ steps.services.outputs.list }}; do
           SERVICE_NAME="hypothesis-generation-${service}"
           REPO="${{ env.DOCKER_HUB_ORG }}/${SERVICE_NAME}"
           
@@ -759,19 +311,19 @@ jobs:
         echo "=== Cleaning up CI containers and networks ==="
 
         echo "=== Current running containers before cleanup ==="
-        docker compose -f docker-compose.ci.yml ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+        $COMPOSE ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
 
         # Stop and remove containers
-        docker compose -f docker-compose.ci.yml down -v --remove-orphans 2>/dev/null || true
+        $COMPOSE down -v --remove-orphans 2>/dev/null || true
 
         # Fix permissions on files created by Docker containers
         docker run --rm -v "$GITHUB_WORKSPACE:/workspace" alpine:latest sh -c "chmod -R 777 /workspace" || true
 
         echo "=== Current running containers after cleanup ==="
-        docker compose -f docker-compose.ci.yml ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+        $COMPOSE ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
 
         echo "=== Cleaning up temporary files ==="
-        rm -f docker-compose.ci.yml .env
+        rm -f .env
 
         echo "=== Cleaning Docker system ==="
         docker system prune -f
@@ -894,4 +446,3 @@ jobs:
           echo "[ERROR] Validation did not pass. Check the build-and-test-all job for details."
           exit 1
         fi
-

@@ -80,16 +80,16 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             "status": "Running",
             "stage": "Harmonization",
             "progress": 10,
-            "message": "Starting Nextflow harmonization",
+            "message": "Harmonizing summary statistics (skipped automatically for confirmed OpenTargets studies)",
             "started_at": datetime.now(timezone.utc).isoformat(),
             "flow_run_id": _prefect_flow_run.id,
         }
         save_analysis_state_task.submit(user_id, project_id, initial_state).result()
 
-        logger.info(f"[PIPELINE] Stage 1: Nextflow harmonization")
+        logger.info(f"[PIPELINE] Stage 1: Harmonization (Nextflow, or pass-through if opentargets_study_id is confirmed in OpenTargets' own tables)")
         harmonized_file_result = harmonize_sumstats_with_nextflow.submit(
             gwas_file_path, output_dir, ref_genome=ref_genome, sample_size=sample_size,
-            user_id=user_id, project_id=project_id
+            user_id=user_id, project_id=project_id, opentargets_study_id=opentargets_study_id
         ).result()
 
         # harmonize_sumstats_with_nextflow now returns just the file path.
@@ -99,12 +99,26 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         else:
             harmonized_file = harmonized_file_result
 
-        # Clean up the raw GWAS input file
-        if gwas_file_path and os.path.exists(gwas_file_path):
+        # Clean up the raw GWAS input file. For direct uploads it lives in its own
+        # data/uploads/<user_id>/ dir (safe to rmtree). But cache/library downloads
+        # (source_minio_path / source_download_url — e.g. OT-confirmed FinnGen
+        # studies) land the raw file directly in output_dir alongside the
+        # harmonized/remapped output, so rmtree-ing its parent would delete that
+        # output too. Only rmtree when the raw file's directory isn't output_dir
+        # (or the harmonized output itself); otherwise just remove the raw file.
+        if (
+            gwas_file_path
+            and os.path.exists(gwas_file_path)
+            and os.path.abspath(gwas_file_path) != os.path.abspath(harmonized_file)
+        ):
             try:
                 parent_dir = os.path.dirname(gwas_file_path)
-                _shutil.rmtree(parent_dir, ignore_errors=True)
-                logger.info(f"[PIPELINE] Cleaned up raw GWAS temp dir: {parent_dir}")
+                if os.path.abspath(parent_dir) == os.path.abspath(output_dir):
+                    os.remove(gwas_file_path)
+                    logger.info(f"[PIPELINE] Cleaned up raw GWAS input file: {gwas_file_path}")
+                else:
+                    _shutil.rmtree(parent_dir, ignore_errors=True)
+                    logger.info(f"[PIPELINE] Cleaned up raw GWAS temp dir: {parent_dir}")
             except Exception as _cleanup_e:
                 logger.warning(f"[PIPELINE] Could not clean up {gwas_file_path}: {_cleanup_e}")
 
@@ -241,7 +255,6 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 batch_data = (batch, f"batch_{i}", sumstats_temp_file, {
                     'user_id': user_id,
                     'project_id': project_id,
-                    'opentargets_study_id': opentargets_study_id,
                     'finemap_params': {
                         'seed': seed,
                         'window': window,

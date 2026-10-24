@@ -5,14 +5,19 @@ from loguru import logger
 
 from src.api.dependencies import get_analysis_handler, get_demo_template_handler
 from src.api.auth import get_current_user_id
+from src.api.schemas import CredibleSetsResponse
 from src.db import AnalysisHandler, DemoTemplateHandler
 from src.services.demo import resolve_project_access
 from src.utils import convert_variants_to_object_array, serialize_datetime_fields
 
-router = APIRouter()
+router = APIRouter(tags=["analysis"])
 
 
-@router.get("/credible-sets")
+@router.get(
+    "/credible-sets",
+    response_model=CredibleSetsResponse,
+    summary="Get credible set variants",
+)
 async def get_credible_sets(
     project_id: str | None = Query(None),
     credible_set_id: str | None = Query(None),
@@ -46,7 +51,7 @@ async def get_credible_sets(
         variants = variants_data.get("data", {})
         variants_array = convert_variants_to_object_array(variants)
         variants_array = serialize_datetime_fields(variants_array)
-        return {"variants": variants_array}
+        return CredibleSetsResponse(variants=variants_array)
 
     except HTTPException:
         raise

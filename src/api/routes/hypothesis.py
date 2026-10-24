@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime, timezone
+from typing import Union
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query
 from fastapi.responses import JSONResponse
 from loguru import logger
 
@@ -17,6 +18,17 @@ from src.api.dependencies import (
     get_project_handler,
 )
 from src.api.auth import get_current_user_id
+from src.api.schemas import (
+    BulkDeleteHypothesesRequest,
+    BulkDeleteHypothesesResponse,
+    ErrorResponse,
+    FlexibleDict,
+    FlexibleList,
+    HypothesisChatForm,
+    HypothesisChatResponse,
+    HypothesisGraphResponse,
+    MessageResponse,
+)
 from src.db import (
     DemoTemplateHandler,
     EnrichmentHandler,
@@ -38,7 +50,7 @@ from src.utils import (
     serialize_datetime_fields,
 )
 
-router = APIRouter()
+router = APIRouter(tags=["hypothesis"])
 
 _HYPOTHESIS_FLOW_WAIT_TIMEOUT = float(os.getenv("HYPOTHESIS_FLOW_WAIT_TIMEOUT", "120"))
 
@@ -56,6 +68,7 @@ def _response_from_hypothesis_document(
         "hypothesis_id": hypothesis_id,
         "summary": doc.get("summary") if doc else None,
         "graph": doc.get("graph") if doc else None,
+        "warnings": doc.get("warnings", []) if doc else [],
     }
     if enrich_id is not None:
         response["enrich_id"] = enrich_id
@@ -86,7 +99,11 @@ def _mark_hypothesis_failed(
         logger.exception(f"Could not mark hypothesis {hypothesis_id} as failed")
 
 
-@router.get("/hypothesis")
+@router.get(
+    "/hypothesis",
+    response_model=Union[FlexibleDict, FlexibleList],
+    summary="Get hypothesis by id or list all",
+)
 async def get_hypothesis(
     id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
@@ -144,6 +161,7 @@ async def get_hypothesis(
                 "result": enrich_data,
                 "summary": hypothesis.get("summary"),
                 "graph": hypothesis.get("graph"),
+                "warnings": hypothesis.get("warnings", []),
             }
 
             if "tissue_rankings" in hypothesis:
@@ -173,7 +191,9 @@ async def get_hypothesis(
                     logger.warning(f"Could not get tissue selection: {ts_e}")
 
             response_data["tissue_selected"] = selected_tissue
-            return serialize_datetime_fields(response_data)
+            return FlexibleDict.model_validate(
+                serialize_datetime_fields(response_data)
+            )
 
         latest_state = status_tracker.get_latest_state(id)
 
@@ -236,7 +256,7 @@ async def get_hypothesis(
                 logger.warning(f"Could not get tissue selection: {ts_e}")
 
         status_data["tissue_selected"] = selected_tissue
-        return serialize_datetime_fields(status_data)
+        return FlexibleDict.model_validate(serialize_datetime_fields(status_data))
 
     # List all hypotheses for the user
     all_hypotheses = hypotheses.get_hypotheses(user_id=current_user_id)
@@ -263,10 +283,15 @@ async def get_hypothesis(
 
         formatted.append(entry)
 
-    return serialize_datetime_fields(formatted)
+    return FlexibleList.model_validate(serialize_datetime_fields(formatted))
 
 
-@router.post("/hypothesis", status_code=200)
+@router.post(
+    "/hypothesis",
+    status_code=200,
+    response_model=HypothesisGraphResponse,
+    summary="Generate hypothesis from enrichment",
+)
 async def post_hypothesis(
     id: str | None = Query(None, alias="id"),
     go: str | None = Query(None),
@@ -378,78 +403,102 @@ async def post_hypothesis(
             refreshed = hypotheses.get_hypotheses(
                 write_ctx.data_user_id, write_ctx.hypothesis_id
             )
-            return _response_from_hypothesis_document(
-                write_ctx.hypothesis_id,
-                refreshed,
-                enrich_id=write_ctx.enrich_id,
-                project_id=write_ctx.project_id,
-                forked=write_ctx.forked,
+            return HypothesisGraphResponse.model_validate(
+                _response_from_hypothesis_document(
+                    write_ctx.hypothesis_id,
+                    refreshed,
+                    enrich_id=write_ctx.enrich_id,
+                    project_id=write_ctx.project_id,
+                    forked=write_ctx.forked,
+                )
             )
         error_detail = f"Unexpected hypothesis flow status code: {status_code}"
         _mark_hypothesis_failed(hypotheses, write_ctx.hypothesis_id, error_detail)
         raise HTTPException(status_code=500, detail=error_detail)
 
     refreshed = hypotheses.get_hypotheses(write_ctx.data_user_id, write_ctx.hypothesis_id)
-    return _response_from_hypothesis_document(
-        write_ctx.hypothesis_id,
-        refreshed,
-        enrich_id=write_ctx.enrich_id,
-        project_id=write_ctx.project_id,
-        forked=write_ctx.forked,
+    return HypothesisGraphResponse.model_validate(
+        _response_from_hypothesis_document(
+            write_ctx.hypothesis_id,
+            refreshed,
+            enrich_id=write_ctx.enrich_id,
+            project_id=write_ctx.project_id,
+            forked=write_ctx.forked,
+        )
     )
 
 
-@router.delete("/hypothesis")
+@router.delete(
+    "/hypothesis",
+    response_model=MessageResponse,
+    responses={404: {"model": MessageResponse}},
+)
 async def delete_hypothesis(
     hypothesis_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
 ):
     if hypothesis_id:
-        return hypotheses.delete_hypothesis(current_user_id, hypothesis_id)
+        result, status_code = hypotheses.delete_hypothesis(
+            current_user_id, hypothesis_id
+        )
+        return JSONResponse(content=result, status_code=status_code)
     raise HTTPException(status_code=400, detail="Hypothesis ID is required")
 
 
-@router.post("/hypothesis/delete")
+@router.post(
+    "/hypothesis/delete",
+    response_model=BulkDeleteHypothesesResponse,
+    responses={
+        207: {"model": BulkDeleteHypothesesResponse},
+        400: {"model": ErrorResponse},
+        404: {"model": MessageResponse},
+    },
+    summary="Bulk delete hypotheses",
+)
 async def bulk_delete_hypotheses(
-    data: dict = Body(...),
+    data: BulkDeleteHypothesesRequest,
     current_user_id: str = Depends(get_current_user_id),
     hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
 ):
-    hypothesis_ids = data.get("hypothesis_ids")
-
+    hypothesis_ids = data.hypothesis_ids
     if not hypothesis_ids:
         raise HTTPException(
             status_code=400, detail="hypothesis_ids is required in request body"
         )
     if not isinstance(hypothesis_ids, list):
         raise HTTPException(status_code=400, detail="hypothesis_ids must be a list")
-    if not hypothesis_ids:
-        raise HTTPException(
-            status_code=400, detail="hypothesis_ids list cannot be empty"
-        )
 
-    result, status_code = hypotheses.bulk_delete_hypotheses(current_user_id, hypothesis_ids)
+    result, status_code = hypotheses.bulk_delete_hypotheses(
+        current_user_id, hypothesis_ids
+    )
     return JSONResponse(content=result, status_code=status_code)
 
 
-@router.post("/chat")
+@router.post(
+    "/chat",
+    response_model=HypothesisChatResponse,
+    summary="Chat over a hypothesis graph",
+)
 async def chat(
-    request: Request,
+    query: str | None = Form(None),
+    hypothesis_id: str | None = Form(None),
     current_user_id: str = Depends(get_current_user_id),
     hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
     llm: LLM = Depends(get_llm),
 ):
-    form = await request.form()
-    query = form.get("query")
-    hypothesis_id = form.get("hypothesis_id")
+    form = {"query": query, "hypothesis_id": hypothesis_id}
+    try:
+        chat_form = HypothesisChatForm.from_form(form)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    hypothesis = hypotheses.get_hypotheses(current_user_id, hypothesis_id)
+    hypothesis = hypotheses.get_hypotheses(current_user_id, chat_form.hypothesis_id)
     if not hypothesis:
         raise HTTPException(
             status_code=404, detail="Hypothesis not found or access denied"
         )
 
     graph = hypothesis.get("graph")
-    response = llm.chat(query, graph)
-    return {"response": response}
+    response = llm.chat(chat_form.query, graph)
+    return HypothesisChatResponse(response=response)

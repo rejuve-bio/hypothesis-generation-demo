@@ -1,16 +1,28 @@
 from __future__ import annotations
 
+from typing import Union
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from loguru import logger
 
 from src.api.dependencies import get_phenotype_handler
+from src.api.schemas import (
+    PhenotypeBulkResponse,
+    PhenotypeListResponse,
+    PhenotypeSingleWrapResponse,
+)
+from src.api.schemas.phenotypes import PhenotypeBulkItem
 from src.db import PhenotypeHandler
 from src.utils import serialize_datetime_fields
 
-router = APIRouter()
+router = APIRouter(tags=["phenotypes"])
 
 
-@router.get("/phenotypes")
+@router.get(
+    "/phenotypes",
+    response_model=Union[PhenotypeSingleWrapResponse, PhenotypeListResponse],
+    summary="List or get phenotypes",
+)
 async def get_phenotypes(
     id: str | None = Query(None),
     search: str | None = Query(None),
@@ -23,7 +35,9 @@ async def get_phenotypes(
             phenotype = phenotypes.get_phenotypes(phenotype_id=id)
             if not phenotype:
                 raise HTTPException(status_code=404, detail="Phenotype not found")
-            return serialize_datetime_fields({"phenotype": phenotype})
+            return PhenotypeSingleWrapResponse(
+                phenotype=serialize_datetime_fields(phenotype)
+            )
 
         if limit is None:
             limit = 100
@@ -48,7 +62,7 @@ async def get_phenotypes(
         if search:
             response["search_term"] = search
 
-        return serialize_datetime_fields(response)
+        return PhenotypeListResponse(**serialize_datetime_fields(response))
 
     except HTTPException:
         raise
@@ -59,26 +73,27 @@ async def get_phenotypes(
         )
 
 
-@router.post("/phenotypes", status_code=201)
+@router.post(
+    "/phenotypes",
+    status_code=201,
+    response_model=PhenotypeBulkResponse,
+    summary="Bulk create phenotypes",
+)
 async def post_phenotypes(
-    data: list = Body(...),
+    data: list[PhenotypeBulkItem] = Body(...),
     phenotypes: PhenotypeHandler = Depends(get_phenotype_handler),
 ):
     try:
-        if not isinstance(data, list):
-            raise HTTPException(
-                status_code=400, detail="Expected JSON array of phenotypes"
-            )
-
         phenotypes_data = []
         for item in data:
-            if not isinstance(item, dict):
-                continue
-            phenotype = {"id": item.get("id", ""), "phenotype_name": item.get("name", "")}
+            phenotype = {
+                "id": item.id or "",
+                "phenotype_name": item.name or "",
+            }
             if phenotype["id"] and phenotype["phenotype_name"]:
                 phenotypes_data.append(phenotype)
             else:
-                logger.warning(f"Skipping invalid phenotype entry: {item}")
+                logger.warning(f"Skipping invalid phenotype entry: {item.model_dump()}")
 
         if not phenotypes_data:
             raise HTTPException(
@@ -86,12 +101,12 @@ async def post_phenotypes(
             )
 
         result = phenotypes.bulk_create_phenotypes(phenotypes_data)
-        return {
-            "message": "Phenotypes loaded successfully",
-            "inserted_count": result["inserted_count"],
-            "skipped_count": result["skipped_count"],
-            "total_provided": len(phenotypes_data),
-        }
+        return PhenotypeBulkResponse(
+            message="Phenotypes loaded successfully",
+            inserted_count=result["inserted_count"],
+            skipped_count=result["skipped_count"],
+            total_provided=len(phenotypes_data),
+        )
 
     except HTTPException:
         raise

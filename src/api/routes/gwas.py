@@ -15,9 +15,15 @@ from loguru import logger
 
 from src.api.auth import get_current_user_id
 from src.api.dependencies import get_file_handler, get_gwas_library_handler, get_storage
+from src.api.schemas import (
+    GwasDownloadUrlResponse,
+    GwasFilesListResponse,
+    GwasSourcesResponse,
+    SampleSizeInfoResponse,
+)
 from src.db import FileHandler, GWASLibraryHandler
 
-router = APIRouter()
+router = APIRouter(tags=["gwas_library"])
 
 
 def _download_to_path_sync(url: str, path: str) -> int:
@@ -29,13 +35,17 @@ def _download_to_path_sync(url: str, path: str) -> int:
     return os.path.getsize(path)
 
 
-@router.get("/gwas-files/sources")
+@router.get(
+    "/gwas-files/sources",
+    response_model=GwasSourcesResponse,
+    summary="GWAS catalog source counts",
+)
 async def get_gwas_file_sources(
     gwas_library: GWASLibraryHandler = Depends(get_gwas_library_handler),
 ):
     try:
         sources = gwas_library.get_source_counts()
-        return {"sources": sources}
+        return GwasSourcesResponse(sources=sources)
     except Exception as exc:
         logger.error(f"Error fetching GWAS source counts: {exc}")
         raise HTTPException(
@@ -43,7 +53,11 @@ async def get_gwas_file_sources(
         )
 
 
-@router.get("/gwas-files")
+@router.get(
+    "/gwas-files",
+    response_model=GwasFilesListResponse,
+    summary="Search GWAS library catalog",
+)
 async def get_gwas_files(
     search: str | None = Query(None),
     sex: str | None = Query(None),
@@ -94,13 +108,13 @@ async def get_gwas_files(
         total_count = gwas_library.get_entry_count(
             search_term=search, sex_filter=sex, source_filter=source
         )
-        return {
-            "gwas_files": gwas_files,
-            "total_files": total_count,
-            "returned": len(gwas_files),
-            "skip": skip,
-            "limit": limit,
-        }
+        return GwasFilesListResponse(
+            gwas_files=gwas_files,
+            total_files=total_count,
+            returned=len(gwas_files),
+            skip=skip,
+            limit=limit,
+        )
 
     except Exception as exc:
         logger.error(f"Error fetching GWAS files: {exc}")
@@ -109,7 +123,11 @@ async def get_gwas_files(
         )
 
 
-@router.get("/gwas-files/{file_id}/sample-size-info")
+@router.get(
+    "/gwas-files/{file_id}/sample-size-info",
+    response_model=SampleSizeInfoResponse,
+    summary="Preview GWAS sample size",
+)
 async def get_sample_size_info(
     file_id: str,
     gwas_source: Literal["library", "upload"] | None = Query(
@@ -128,12 +146,12 @@ async def get_sample_size_info(
             entry = gwas_library.get_gwas_entry(file_id=file_id)
             if entry:
                 resolution = GWASLibraryHandler.resolve_sample_size_info(entry=entry)
-                return {
+                return SampleSizeInfoResponse(
                     **GWASLibraryHandler.sample_size_fields_for_library_entry(
                         entry, resolution
                     ),
-                    "gwas_source": "library",
-                }
+                    gwas_source="library",
+                )
             if gwas_source == "library":
                 raise HTTPException(
                     status_code=404, detail="GWAS file not found in library"
@@ -144,7 +162,10 @@ async def get_sample_size_info(
             resolution = GWASLibraryHandler.resolve_upload_sample_size_info(
                 file_meta.get("file_path")
             )
-            return {**resolution.to_api_dict(), "gwas_source": "upload"}
+            return SampleSizeInfoResponse(
+                **resolution.to_api_dict(),
+                gwas_source="upload",
+            )
 
         raise HTTPException(status_code=404, detail="GWAS file not found")
     except HTTPException:
@@ -157,7 +178,19 @@ async def get_sample_size_info(
         )
 
 
-@router.get("/gwas-files/download/{file_id}")
+@router.get(
+    "/gwas-files/download/{file_id}",
+    responses={
+        200: {
+            "description": "Presigned download URL when cached, otherwise TSV file stream.",
+            "content": {
+                "application/json": {"schema": GwasDownloadUrlResponse.model_json_schema()},
+                "text/tab-separated-values": {"schema": {"type": "string", "format": "binary"}},
+            },
+        }
+    },
+    summary="Download GWAS file",
+)
 async def download_gwas_file(
     file_id: str,
     gwas_library: GWASLibraryHandler = Depends(get_gwas_library_handler),
@@ -180,7 +213,7 @@ async def download_gwas_file(
                 gwas_library.increment_download_count(file_id)
                 download_url = storage.generate_presigned_url(cached_path, expiration=3600)
                 if download_url:
-                    return {"download_url": download_url, "cached": True}
+                    return GwasDownloadUrlResponse(download_url=download_url, cached=True)
 
                 with tempfile.NamedTemporaryFile(
                     delete=False, suffix=f"_{filename}"

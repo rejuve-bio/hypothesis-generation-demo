@@ -19,6 +19,12 @@ from src.socketio_instance import sio
 from src.services.socketio_relay import relay_subscribe_forever
 from src.services.status_tracker import StatusTracker
 from src.api import router
+from src.api.openapi import (
+    OPENAPI_TAGS,
+    build_api_description,
+    configure_openapi,
+    get_api_servers,
+)
 from src.services.mail import init_mail
 
 
@@ -100,8 +106,21 @@ def create_app(config: Config) -> python_socketio.ASGIApp:
     fastapi_app = FastAPI(
         title="Hypothesis Generation API",
         version="0.1.0",
+        description=build_api_description(),
+        openapi_tags=OPENAPI_TAGS,
+        servers=get_api_servers(),
+        openapi_version="3.1.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
+        swagger_ui_parameters={
+            "docExpansion": "list",
+            "defaultModelsExpandDepth": 2,
+            "filter": True,
+        },
         lifespan=lifespan,
     )
+    configure_openapi(fastapi_app)
 
     fastapi_app.add_middleware(
         CORSMiddleware,

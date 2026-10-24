@@ -45,3 +45,18 @@ CREATE TABLE IF NOT EXISTS gwas_study_index (
     chromosomes         TEXT[],
     finemap_methods     TEXT[]
 );
+
+-- OpenTargets study-level index (populated by scripts/load_opentargets_studies.py).
+-- Used to confirm a GWAS file's OpenTargets provenance independent of whether it
+-- already has precomputed credible sets.
+CREATE TABLE IF NOT EXISTS opentargets_studies (
+    study_id                TEXT PRIMARY KEY,
+    project_id              TEXT,
+    trait_from_source       TEXT,
+    trait_efo_ids           TEXT[],
+    has_sumstats            BOOLEAN,
+    summarystats_location   TEXT,
+    n_samples               INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ots_project_id ON opentargets_studies(project_id);
+CREATE INDEX IF NOT EXISTS idx_ots_trait_efo  ON opentargets_studies USING GIN(trait_efo_ids);

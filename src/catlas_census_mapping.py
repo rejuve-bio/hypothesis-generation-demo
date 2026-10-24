@@ -115,10 +115,14 @@ class DirectClJsonMapper:
         entry = self._mapping[json_key]
 
         if entry.get("match_method") == "no_match" or not entry.get("cl_id"):
-            raise CatlasMappingError(
-                f"Unmapped catlas cell type for LDSC {ldsc_name!r} "
-                f"({json_key!r}, match_method={entry.get('match_method')!r})",
+            logger.info(
+                f"[CatlasCensus] no Census mapping for LDSC {ldsc_name!r} "
+                f"({json_key!r}, match_method={entry.get('match_method')!r}) — skipping coexpression"
+            )
+            return ResolvedCensusCellFilter(
                 ldsc_name=ldsc_name,
+                skip_coexpression=True,
+                skip_reason=f"no_match (match_method={entry.get('match_method')!r})",
             )
 
         labels: list[str] = []
@@ -151,7 +155,16 @@ def resolve_ldsc_for_census(
     mapping_json_rel: str,
     catlas_aliases_rel: str,
 ) -> ResolvedCensusCellFilter:
-    """Resolve LDSC name to Census filters; raise if unmapped."""
+    """
+    Resolve LDSC name to Census filters.
+
+    Returns a ResolvedCensusCellFilter with skip_coexpression=True (not a raise)
+    when the LDSC cell type has no Census/Catlas mapping (match_method="no_match"
+    or missing cl_id) — that's an expected, non-fatal outcome for some LDSC cell
+    types. Still raises CatlasMappingError for genuinely fatal problems: the
+    mapping JSON/aliases file missing entirely, or ldsc_name having no entry in
+    the mapping JSON at all (a data/config problem, not just "unmapped").
+    """
     mapping_path = os.path.normpath(os.path.join(repo_root, mapping_json_rel))
     aliases_path = os.path.normpath(os.path.join(repo_root, catlas_aliases_rel))
     if not os.path.isfile(mapping_path):

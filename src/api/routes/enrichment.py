@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Union
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from loguru import logger
 
 from src.api.dependencies import (
@@ -15,6 +17,14 @@ from src.api.dependencies import (
     get_project_handler,
 )
 from src.api.auth import get_current_user_id
+from src.api.schemas import (
+    EnrichPostAcceptedResponse,
+    EnrichPostBody,
+    EnrichmentsListResponse,
+    FlexibleDict,
+    FlexibleList,
+    MessageResponse,
+)
 from src.db import (
     DemoTemplateHandler,
     EnrichmentHandler,
@@ -32,10 +42,14 @@ from src.utils import serialize_datetime_fields
 from src.config import Config
 from src.catlas_census_mapping import CatlasMappingError, validate_ldsc_tissue_mapping
 
-router = APIRouter()
+router = APIRouter(tags=["enrichment"])
 
 
-@router.get("/enrich")
+@router.get(
+    "/enrich",
+    response_model=Union[FlexibleDict, FlexibleList, EnrichmentsListResponse],
+    summary="Get enrichment record(s)",
+)
 async def get_enrich(
     id: str | None = Query(None),
     project_id: str | None = Query(None),
@@ -56,7 +70,7 @@ async def get_enrich(
                     enrich = None
         if not enrich:
             raise HTTPException(status_code=404, detail="Enrich not found or access denied.")
-        return serialize_datetime_fields(enrich)
+        return FlexibleDict.model_validate(serialize_datetime_fields(enrich))
 
     if project_id:
         access = resolve_project_access(demo_templates, current_user_id, project_id)
@@ -66,34 +80,48 @@ async def get_enrich(
             project_enrichments = [
                 e for e in enrichments if e.get("project_id") == project_id
             ]
-            return {"enrichments": serialize_datetime_fields(project_enrichments)}
+            return EnrichmentsListResponse(
+                enrichments=serialize_datetime_fields(project_enrichments)
+            )
         else:
             if enrichments and enrichments.get("project_id") == project_id:
-                return {"enrichments": [serialize_datetime_fields(enrichments)]}
-            return {"enrichments": []}
+                return EnrichmentsListResponse(
+                    enrichments=[serialize_datetime_fields(enrichments)]
+                )
+            return EnrichmentsListResponse(enrichments=[])
 
     enrich = enrichment.get_enrich(user_id=current_user_id)
-    return serialize_datetime_fields(enrich)
+    return FlexibleList.model_validate(serialize_datetime_fields(enrich))
 
 
-@router.post("/enrich", status_code=202)
+@router.post(
+    "/enrich",
+    status_code=202,
+    response_model=EnrichPostAcceptedResponse,
+    summary="Start enrichment for a variant",
+)
 async def post_enrich(
     request: Request,
+    body: EnrichPostBody | None = Body(None),
+    variant: str | None = Query(None),
+    project_id: str | None = Query(None),
+    tissue_name: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     projects: ProjectHandler = Depends(get_project_handler),
     hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
     gene_expression: GeneExpressionHandler = Depends(get_gene_expression_handler),
     demo_templates: DemoTemplateHandler = Depends(get_demo_template_handler),
 ):
-    body: dict = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
+    payload = body.model_dump() if body else {}
+    if not payload:
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
 
-    variant = request.query_params.get("variant") or body.get("variant")
-    project_id = request.query_params.get("project_id") or body.get("project_id")
-    seed = int(body.get("seed", 42))
+    variant = variant or payload.get("variant")
+    project_id = project_id or payload.get("project_id")
+    seed = int(payload.get("seed", 42))
 
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
@@ -117,7 +145,7 @@ async def post_enrich(
 
     phenotype = project["phenotype"]
 
-    tissue_name = request.query_params.get("tissue_name") or body.get("tissue_name")
+    tissue_name = tissue_name or payload.get("tissue_name")
     if not tissue_name:
         raise HTTPException(status_code=400, detail="tissue_name is required")
 
@@ -167,11 +195,11 @@ async def post_enrich(
                 seed=seed,
             ),
         )
-        return {
-            "hypothesis_id": existing_hypothesis["id"],
-            "project_id": project_id,
-            "forked": forked,
-        }
+        return EnrichPostAcceptedResponse(
+            hypothesis_id=existing_hypothesis["id"],
+            project_id=project_id,
+            forked=forked,
+        )
 
     hypothesis_id = str(uuid4())
     hypothesis_data = {
@@ -199,16 +227,24 @@ async def post_enrich(
             seed=seed,
         ),
     )
-    return {"hypothesis_id": hypothesis_id, "project_id": project_id, "forked": forked}
+    return EnrichPostAcceptedResponse(
+        hypothesis_id=hypothesis_id,
+        project_id=project_id,
+        forked=forked,
+    )
 
 
-@router.delete("/enrich")
+@router.delete(
+    "/enrich",
+    response_model=MessageResponse,
+    responses={404: {"model": MessageResponse}},
+)
 async def delete_enrich(
     id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     enrichment: EnrichmentHandler = Depends(get_enrichment_handler),
 ):
     if id:
-        result = enrichment.delete_enrich(current_user_id, id)
-        return result
+        result, status_code = enrichment.delete_enrich(current_user_id, id)
+        return JSONResponse(content=result, status_code=status_code)
     raise HTTPException(status_code=400, detail="enrich id is required!")

@@ -179,7 +179,56 @@ class CredibleSetsHandler:
                 return cur.fetchone() is not None
         except Exception as exc:
             logger.warning(f"[CredibleSets] study_has_credible_sets({study_id}): {exc}")
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
             return False
+
+    def get_study_by_id(self, study_id: str) -> Optional[dict]:
+        """
+        Look up a GWAS study's own OpenTargets record (study_id, project_id,
+        trait, has_sumstats, summarystats_location, n_samples) from the
+        `opentargets_studies` table populated by scripts/load_opentargets_studies.py.
+
+        Returns None if the study isn't known to OpenTargets, the table hasn't
+        been loaded yet, or the lookup otherwise fails — callers should treat
+        this as "provenance not confirmed", not a hard error.
+        """
+        if not study_id or not _PSYCOPG2_OK:
+            return None
+        try:
+            conn = self._get_conn()
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT study_id, project_id, trait_from_source, trait_efo_ids,
+                           has_sumstats, summarystats_location, n_samples
+                    FROM opentargets_studies
+                    WHERE study_id = %s
+                    LIMIT 1
+                    """,
+                    (study_id,),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+        except Exception as exc:
+            logger.warning(f"[CredibleSets] get_study_by_id({study_id}): {exc}")
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+            return None
+
+    def is_study_known_to_opentargets(self, study_id: str) -> bool:
+        """
+        True if OpenTargets has any record of this study — either its own
+        study-level index (opentargets_studies) or precomputed credible sets
+        (gwas_study_index) — confirming the file the user selected genuinely
+        originates from OpenTargets (and is therefore already pre-harmonized),
+        rather than just happening to look like SSF format.
+        """
+        return self.get_study_by_id(study_id) is not None or self.study_has_credible_sets(study_id)
 
     def get_credible_sets_for_region(
         self,
