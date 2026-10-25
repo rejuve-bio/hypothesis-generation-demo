@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 from prefect import task
+from src.config import DEFAULT_P_VALUE_THRESHOLD
 from src.services.status_tracker import TaskState, status_tracker
 from src.utils import emit_task_update, get_deps
 
@@ -73,8 +74,11 @@ def extract_causal_gene_from_graph(graph, variant_nodes):
 
 ### Enrich Tasks
 @task(retries=2)
-def check_enrich(current_user_id, variant, phenotype, hypothesis_id):
-    """Check if enrichment exists for variant and phenotype"""
+def check_enrich(
+    current_user_id, variant, phenotype, hypothesis_id,
+    p_value_threshold=DEFAULT_P_VALUE_THRESHOLD,
+):
+    """Return an existing enrichment for variant and phenotype run at ``p_value_threshold``."""
     try:
         emit_task_update(
             hypothesis_id=hypothesis_id,
@@ -85,9 +89,13 @@ def check_enrich(current_user_id, variant, phenotype, hypothesis_id):
         deps = get_deps()
         enrichment = deps["enrichment"]
 
-        if enrichment.check_enrich(current_user_id, phenotype, variant):
-            enrich = enrichment.get_enrich_by_phenotype_and_variant(phenotype, variant, current_user_id)
-
+        thresholds = [p_value_threshold]
+        if p_value_threshold == DEFAULT_P_VALUE_THRESHOLD:
+            thresholds.append(None)
+        enrich = enrichment.get_enrich_by_phenotype_and_variant(
+            phenotype, variant, current_user_id, p_value_thresholds=thresholds
+        )
+        if enrich:
             emit_task_update(
                 hypothesis_id=hypothesis_id,
                 task_name="Verifying existence of enrichment data",

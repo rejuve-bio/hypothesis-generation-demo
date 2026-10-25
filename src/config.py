@@ -11,6 +11,8 @@ from src.db import (
 )
 from src.services.storage import create_minio_client_from_env
 
+DEFAULT_P_VALUE_THRESHOLD = 0.05
+
 class Config:
     """Centralized configuration for the application"""
     

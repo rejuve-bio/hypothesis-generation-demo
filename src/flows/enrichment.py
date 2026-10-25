@@ -7,7 +7,7 @@ from prefect import flow
 from prefect_dask import DaskTaskRunner
 from src.services.status_tracker import TaskState
 
-from src.config import Config, create_dependencies
+from src.config import DEFAULT_P_VALUE_THRESHOLD, Config, create_dependencies
 from src.catlas_census_mapping import CatlasMappingError
 from src.services.enrich import EnrichrAPIUnavailableError, NoEnrichmentFoundError
 from src.services.prolog import PrologNoEvidenceError, PrologServiceError
@@ -43,7 +43,10 @@ def _skipped_graphs_warnings(skipped_graphs, total_graphs, variant):
     persist_result=False,
     task_runner=DaskTaskRunner(address=os.getenv("DASK_ADDRESS"))
 )
-def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id, seed):
+def enrichment_flow(
+    current_user_id, phenotype, variant, hypothesis_id, project_id, seed,
+    p_value_threshold=DEFAULT_P_VALUE_THRESHOLD,
+):
     """
     Fully project-based enrichment flow that initializes dependencies from centralized config
     """
@@ -65,11 +68,20 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         logger.info(f"Running project-based enrichment for project {project_id}, variant {variant}")
 
         # Check for existing enrichment data
-        enrich = check_enrich.submit(current_user_id, variant, phenotype, hypothesis_id).result()
+        enrich = check_enrich.submit(
+            current_user_id, variant, phenotype, hypothesis_id, p_value_threshold
+        ).result()
 
         if enrich:
             logger.info("Retrieved enrich data from saved db")
             return {"id": enrich['id']}, 200
+
+        hypotheses.update_hypothesis(hypothesis_id, {
+            "error": None,
+            "error_detail": None,
+            "skipped_enrich_ids": [],
+            "enrichment_warnings": [],
+        })
 
         candidate_genes = get_candidate_genes.submit(variant, hypothesis_id).result()
         graphs_list = get_relevant_gene_proof.submit(variant, hypothesis_id, seed).result()
@@ -192,6 +204,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
 
             enrichment_run_meta = {
                 "attempted_ldsc_cell_type": selected_tissue,
+                "p_value_threshold": p_value_threshold,
             }
 
             if use_shared_enrichment and this_causal_gene in shared_enrichment_cache:
@@ -218,7 +231,8 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                     ).result()
                     enrich_tbl = enrichr.run(
                         this_causal_gene, tissue_name=selected_tissue,
-                        coexpression_data=coexpression_data
+                        coexpression_data=coexpression_data,
+                        p_value_threshold=p_value_threshold,
                     )
                 except NoEnrichmentFoundError as exc:
                     no_enrichment_by_gene[this_causal_gene] = exc

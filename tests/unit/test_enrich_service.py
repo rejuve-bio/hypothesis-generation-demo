@@ -102,6 +102,23 @@ def test_no_significant_go_terms_raises_with_gene_count(monkeypatch):
 
     assert exc.value.reason == "no_significant_go_terms"
     assert "2 genes are co-expressed with GENE1 in 'Liver'" in str(exc.value)
+    assert "'some process' (adjusted p = 0.4)" in str(exc.value)
+    assert exc.value.as_detail()["min_adjusted_p"] == 0.4
+
+
+def test_p_value_threshold_controls_which_go_terms_pass():
+    enrich = _enrich()
+    results = pd.DataFrame(
+        {
+            "Gene_set": ["GO_Biological_Process_2023"],
+            "Term": ["some process (GO:1)"],
+            "Adjusted P-value": [0.08],
+            "Genes": ["GENE1;GENE2"],
+        }
+    )
+
+    assert enrich._process_enrichment_results(results).empty
+    assert enrich._process_enrichment_results(results, 0.1)["ID"].tolist() == ["GO:1"]
 
 
 def test_retry_api_contract_is_available():

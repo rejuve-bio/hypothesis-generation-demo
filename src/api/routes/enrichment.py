@@ -39,10 +39,26 @@ from src.services.demo import (
 )
 from src.run_deployment import invoke_enrichment_deployment
 from src.utils import serialize_datetime_fields
-from src.config import Config
+from src.config import DEFAULT_P_VALUE_THRESHOLD, Config
 from src.catlas_census_mapping import CatlasMappingError, validate_ldsc_tissue_mapping
 
 router = APIRouter(tags=["enrichment"])
+
+
+def _p_value_threshold(value) -> float:
+    """Adjusted p-value cutoff for GO terms; 400 unless 0 < value <= 1."""
+    if value is None or value == "":
+        return DEFAULT_P_VALUE_THRESHOLD
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        threshold = None
+    if threshold is None or not 0 < threshold <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="p_value_threshold must be greater than 0 and at most 1",
+        )
+    return threshold
 
 
 @router.get(
@@ -106,6 +122,7 @@ async def post_enrich(
     variant: str | None = Query(None),
     project_id: str | None = Query(None),
     tissue_name: str | None = Query(None),
+    p_value_threshold: float | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     projects: ProjectHandler = Depends(get_project_handler),
     hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
@@ -122,6 +139,9 @@ async def post_enrich(
     variant = variant or payload.get("variant")
     project_id = project_id or payload.get("project_id")
     seed = int(payload.get("seed", 42))
+    p_value_threshold = _p_value_threshold(
+        p_value_threshold if p_value_threshold is not None else payload.get("p_value_threshold")
+    )
 
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
@@ -193,6 +213,7 @@ async def post_enrich(
                 hypothesis_id=existing_hypothesis["id"],
                 project_id=project_id,
                 seed=seed,
+                p_value_threshold=p_value_threshold,
             ),
         )
         return EnrichPostAcceptedResponse(
@@ -225,6 +246,7 @@ async def post_enrich(
             hypothesis_id=hypothesis_id,
             project_id=project_id,
             seed=seed,
+            p_value_threshold=p_value_threshold,
         ),
     )
     return EnrichPostAcceptedResponse(

@@ -7,7 +7,7 @@ import gseapy as gp
 import pandas as pd
 from loguru import logger
 
-from src.config import Config
+from src.config import DEFAULT_P_VALUE_THRESHOLD, Config
 from src.tasks.gene_expression import get_coexpression_matrix_for_tissue
 
 _ENSG_RE = re.compile(r"^ENSG\d+$", re.IGNORECASE)
@@ -38,12 +38,14 @@ class NoEnrichmentFoundError(ValueError):
         gene: str | None = None,
         tissue: str | None = None,
         variant: str | None = None,
+        min_adjusted_p: float | None = None,
     ) -> None:
         super().__init__(message)
         self.reason = reason
         self.gene = gene
         self.tissue = tissue
         self.variant = variant
+        self.min_adjusted_p = min_adjusted_p
 
     def as_detail(self) -> dict[str, str]:
         detail = {
@@ -55,6 +57,8 @@ class NoEnrichmentFoundError(ValueError):
             value = getattr(self, key)
             if value:
                 detail[key] = value
+        if self.min_adjusted_p is not None:
+            detail["min_adjusted_p"] = self.min_adjusted_p
         return detail
 
 
@@ -160,7 +164,9 @@ class Enrich:
         return top_positive_genes, all_genes
 
 
-    def _process_enrichment_results(self, res: pd.DataFrame) -> pd.DataFrame:
+    def _process_enrichment_results(
+        self, res: pd.DataFrame, p_value_threshold: float = DEFAULT_P_VALUE_THRESHOLD
+    ) -> pd.DataFrame:
         """
         Process and filter enrichment results from gseapy.
         """
@@ -169,7 +175,7 @@ class Enrich:
         res.insert(1, "ID", res["Term"].apply(
             lambda x: x.split("(")[1].split(")")[0]))
         res["Term"] = res["Term"].apply(lambda x: x.split("(")[0])
-        res = res[res["Adjusted P-value"] < 0.05].copy()
+        res = res[res["Adjusted P-value"] < p_value_threshold].copy()
         desc = []
         for _, row in res.iterrows():
             go_id = row["ID"]
@@ -224,7 +230,13 @@ class Enrich:
             f"{background_sizes}"
         ) from last_error
 
-    def run(self, relevant_gene, tissue_name=None, coexpression_data=None):
+    def run(
+        self,
+        relevant_gene,
+        tissue_name=None,
+        coexpression_data=None,
+        p_value_threshold=DEFAULT_P_VALUE_THRESHOLD,
+    ):
         """
         Given a gene, return the enriched GO terms based on its co-expression network.
         If coexpression_data is provided (from Dask task), use it instead of computing.
@@ -277,16 +289,25 @@ class Enrich:
             outdir=None,
         )
 
-        enriched = self._process_enrichment_results(res)
+        enriched = self._process_enrichment_results(res, p_value_threshold)
         if enriched.empty:
+            min_adjusted_p, best_term = None, ""
+            if not res.empty:
+                best = res.loc[res["Adjusted P-value"].idxmin()]
+                min_adjusted_p = float(best["Adjusted P-value"])
+                best_term = (
+                    f" The most significant term was '{best['Term'].split('(')[0].strip()}' "
+                    f"(adjusted p = {min_adjusted_p:.3g}); a higher p_value_threshold would include it."
+                )
             raise NoEnrichmentFoundError(
                 f"{len(gene_list)} genes are co-expressed with {causal_gene_symbol} in "
                 f"'{tissue_name}', but no GO Biological Process term is significantly "
-                "enriched among them (adjusted p < 0.05). Selecting a different "
-                "tissue may give a result.",
+                f"enriched among them (adjusted p < {p_value_threshold:g}).{best_term} "
+                "Selecting a different tissue may also give a result.",
                 reason="no_significant_go_terms",
                 gene=causal_gene_symbol,
                 tissue=tissue_name,
+                min_adjusted_p=min_adjusted_p,
             )
         return enriched
 

@@ -1,6 +1,8 @@
 from prefect.deployments import run_deployment
 
-def invoke_enrichment_deployment(current_user_id, phenotype, variant, hypothesis_id, project_id, seed):
+def invoke_enrichment_deployment(
+    current_user_id, phenotype, variant, hypothesis_id, project_id, seed, p_value_threshold
+):
     """
     Invoke enrichment deployment with minimal parameters.
     Objects are initialized inside the flow for deployment compatibility.
@@ -13,7 +15,8 @@ def invoke_enrichment_deployment(current_user_id, phenotype, variant, hypothesis
             "variant": variant,
             "hypothesis_id": hypothesis_id,
             "project_id": project_id,
-            "seed": seed
+            "seed": seed,
+            "p_value_threshold": p_value_threshold,
         },
         timeout=0
     )

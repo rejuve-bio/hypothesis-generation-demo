@@ -66,7 +66,8 @@ def test_happy_path_runs_enrichr_filters_go_and_saves(
 
     assert result == ({"id": "enrich-1"}, 200)
     deps["enrichr"].run.assert_called_once_with(
-        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression",
+        p_value_threshold=0.05,
     )
     deps["llm"].get_relevant_go.assert_called_once_with(
         "Ulcerative colitis", [{"Term": "inflammatory response"}]
@@ -302,7 +303,8 @@ def test_tissue_selection_uses_coexpression_background(
     )
 
     deps["enrichr"].run.assert_called_once_with(
-        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression",
+        p_value_threshold=0.05,
     )
 
 
@@ -318,8 +320,11 @@ def test_zero_graphs_after_retry_raises_no_evidence_error(
         )
 
     assert created == []
-    assert deps["hypotheses"].update_hypothesis.call_count == 1
-    fail_call = deps["hypotheses"].update_hypothesis.call_args
+    reset_call, fail_call = deps["hypotheses"].update_hypothesis.call_args_list
+    assert reset_call.args[1] == {
+        "error": None, "error_detail": None,
+        "skipped_enrich_ids": [], "enrichment_warnings": [],
+    }
     assert fail_call.args[0] == "hyp-1"
     assert fail_call.args[1]["status"] == "failed"
     assert "No causal-gene evidence" in fail_call.args[1]["error"]
@@ -436,7 +441,8 @@ def test_shared_causal_gene_reuses_cached_enrichment(
 
     assert result == ({"id": "enrich-1"}, 200)
     deps["enrichr"].run.assert_called_once_with(
-        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression",
+        p_value_threshold=0.05,
     )
     assert len(created) == 2
     assert created[0][5] == created[1][5]
@@ -459,7 +465,8 @@ def test_no_tissue_selection_falls_back_to_top_ldsc_tissue(
         "user-1", "project-1", limit=1, format="selection"
     )
     deps["enrichr"].run.assert_called_once_with(
-        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression",
+        p_value_threshold=0.05,
     )
 
 
