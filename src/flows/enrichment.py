@@ -77,6 +77,7 @@ def enrichment_flow(
             return {"id": enrich['id']}, 200
 
         hypotheses.update_hypothesis(hypothesis_id, {
+            "status": "pending",
             "error": None,
             "error_detail": None,
             "skipped_enrich_ids": [],
@@ -373,6 +374,13 @@ def enrichment_flow(
                 reason=reasons.pop() if len(reasons) == 1 else "multiple_reasons",
                 tissue=selected_tissue,
                 variant=variant,
+                min_adjusted_p=min(
+                    (
+                        exc.min_adjusted_p for exc in no_enrichment_by_gene.values()
+                        if exc.min_adjusted_p is not None
+                    ),
+                    default=None,
+                ),
             )
 
         all_enrich_ids = [e['enrich_id'] for e in enrichment_data]
