@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: credible-sets-postgres
+  namespace: hypothesis-staging
+spec:
+  selector:
+    matchLabels:
+      app: credible-sets-postgres
+  serviceName: credible-sets-postgres
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: credible-sets-postgres
+    spec:
+      containers:
+        - name: credible-sets-postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: hypothesis-env-secrets
+                  key: CREDIBLE_SETS_DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hypothesis-env-secrets
+                  key: CREDIBLE_SETS_DB_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: hypothesis-env-secrets
+                  key: CREDIBLE_SETS_DB_NAME
+          volumeMounts:
+            - name: credible-sets-postgres-data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: credible-sets-postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: credible-sets-postgres
+  namespace: hypothesis-staging
+spec:
+  selector:
+    app: credible-sets-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

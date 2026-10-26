@@ -23,17 +23,17 @@ spec:
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: hypothesis-secrets
+                  name: hypothesis-env-secrets
                   key: PREFECT_DB_USER
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: hypothesis-secrets
+                  name: hypothesis-env-secrets
                   key: PREFECT_DB_PASSWORD
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: hypothesis-secrets
+                  name: hypothesis-env-secrets
                   key: PREFECT_DB_NAME
           volumeMounts:
             - name: prefect-postgres-data
