@@ -83,7 +83,7 @@ def build_rsid_lookup_from_harmonized_file(harmonized_file: str) -> dict:
 
 def convert_ot_row_to_credible_set(ot_row: dict, coverage: float = 0.95, rsid_lookup: Optional[dict] = None) -> dict:
     """
-    Convert one OpenTargets credible set row (from credible_sets table) into the
+    Convert one OpenTargets credible set row (from the credible_set table) into the
     format expected by AnalysisHandler.save_credible_set().
 
     *rsid_lookup*, if given, is a {(chromosome, position): rsid} map (see
@@ -148,8 +148,32 @@ def convert_ot_row_to_credible_set(ot_row: dict, coverage: float = 0.95, rsid_lo
     }
 
 
+# Columns returned for a credible set, aliased to the keys
+# convert_ot_row_to_credible_set() expects (the tables use Prolog's naming).
+_CREDIBLE_SET_SELECT = """
+    SELECT studylocusid AS study_locus_id, studyid AS study_id, variantid AS variant_id,
+           chromosome, position,
+           beta, pvaluemantissa AS p_value_mantissa, pvalueexponent AS p_value_exponent,
+           effectallelefrequencyfromsource AS effect_allele_frequency,
+           standarderror AS standard_error,
+           finemappingmethod AS finemap_method, confidence, locus
+    FROM credible_set
+"""
+
+# Study fields returned to callers, aliased to the keys they already use.
+_STUDY_SELECT_FIELDS = """
+    s.studyid AS study_id, s.projectid AS project_id, s.traitfromsource AS trait_from_source,
+    s.traitfromsourcemappedids AS trait_efo_ids, s.hassumstats AS has_sumstats,
+    s.summarystatslocation AS summarystats_location, s.nsamples AS n_samples
+"""
+
+
 class CredibleSetsHandler:
-    """Query OpenTargets credible sets from the dedicated PostgreSQL database."""
+    """
+    Query OpenTargets data from the shared PostgreSQL database (see
+    src/db/credible_sets_schema.py). The tables hold every study type because
+    the Prolog backend needs QTL data; this handler only ever returns GWAS.
+    """
 
     def __init__(self):
         self._conn = None
@@ -195,7 +219,7 @@ class CredibleSetsHandler:
             conn = self._get_conn()
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT 1 FROM gwas_study_index WHERE study_id = %s LIMIT 1",
+                    "SELECT 1 FROM gwas_study_index WHERE studyid = %s LIMIT 1",
                     (study_id,),
                 )
                 return cur.fetchone() is not None
@@ -211,7 +235,7 @@ class CredibleSetsHandler:
         """
         Look up a GWAS study's own OpenTargets record (study_id, project_id,
         trait, has_sumstats, summarystats_location, n_samples) from the
-        `opentargets_studies` table populated by scripts/load_opentargets_studies.py.
+        `study` table. QTL studies are never returned.
 
         Returns None if the study isn't known to OpenTargets, the table hasn't
         been loaded yet, or the lookup otherwise fails — callers should treat
@@ -223,11 +247,10 @@ class CredibleSetsHandler:
             conn = self._get_conn()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    """
-                    SELECT study_id, project_id, trait_from_source, trait_efo_ids,
-                           has_sumstats, summarystats_location, n_samples
-                    FROM opentargets_studies
-                    WHERE study_id = %s
+                    f"""
+                    SELECT {_STUDY_SELECT_FIELDS}
+                    FROM study s
+                    WHERE s.studyid = %s AND s.studytype = 'gwas'
                     LIMIT 1
                     """,
                     (study_id,),
@@ -244,9 +267,9 @@ class CredibleSetsHandler:
 
     def is_study_known_to_opentargets(self, study_id: str) -> bool:
         """
-        True if OpenTargets has any record of this study — either its own
-        study-level index (opentargets_studies) or precomputed credible sets
-        (gwas_study_index) — confirming the file the user selected genuinely
+        True if OpenTargets has any record of this GWAS study — either its own
+        study record (study) or precomputed credible sets (gwas_study_index) —
+        confirming the file the user selected genuinely
         originates from OpenTargets (and is therefore already pre-harmonized),
         rather than just happening to look like SSF format.
         """
@@ -270,15 +293,10 @@ class CredibleSetsHandler:
             conn = self._get_conn()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    """
-                    SELECT study_locus_id, study_id, variant_id,
-                           chromosome, position,
-                           beta, p_value_mantissa, p_value_exponent,
-                           effect_allele_frequency, standard_error,
-                           finemap_method, confidence, locus
-                    FROM credible_sets
-                    WHERE study_id    = %s
-                      AND chromosome  = %s
+                    _CREDIBLE_SET_SELECT + """
+                    WHERE studyid = %s
+                      AND studytype = 'gwas'
+                      AND chromosome = %s
                       AND position BETWEEN %s AND %s
                     ORDER BY position
                     """,
@@ -291,9 +309,9 @@ class CredibleSetsHandler:
 
     def search_studies_by_trait(self, trait: str, limit: int = 20) -> list:
         """
-        Search OpenTargets GWAS studies by trait text (against opentargets_studies,
-        loaded via scripts/load_opentargets_studies.py), joined with whether each
-        study already has precomputed credible sets in gwas_study_index.
+        Search OpenTargets GWAS studies by trait text (against the `study`
+        table, GWAS only), joined with whether each study already has
+        precomputed credible sets in gwas_study_index.
 
         Lets a user pick a real OpenTargets study directly by trait, rather than
         needing an existing gwas_library entry to already carry a matching
@@ -305,16 +323,15 @@ class CredibleSetsHandler:
             conn = self._get_conn()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    """
-                    SELECT s.study_id, s.project_id, s.trait_from_source,
-                           s.trait_efo_ids, s.has_sumstats, s.summarystats_location,
-                           s.n_samples,
-                           (g.study_id IS NOT NULL) AS has_credible_sets,
+                    f"""
+                    SELECT {_STUDY_SELECT_FIELDS},
+                           (g.studyid IS NOT NULL) AS has_credible_sets,
                            g.credible_set_count
-                    FROM opentargets_studies s
-                    LEFT JOIN gwas_study_index g ON g.study_id = s.study_id
-                    WHERE s.trait_from_source ILIKE %s
-                    ORDER BY has_credible_sets DESC, s.has_sumstats DESC
+                    FROM study s
+                    LEFT JOIN gwas_study_index g ON g.studyid = s.studyid
+                    WHERE s.studytype = 'gwas'
+                      AND s.traitfromsource ILIKE %s
+                    ORDER BY has_credible_sets DESC, s.hassumstats DESC
                     LIMIT %s
                     """,
                     (f"%{trait}%", limit),
@@ -337,14 +354,9 @@ class CredibleSetsHandler:
             conn = self._get_conn()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    """
-                    SELECT study_locus_id, study_id, variant_id,
-                           chromosome, position,
-                           beta, p_value_mantissa, p_value_exponent,
-                           effect_allele_frequency, standard_error,
-                           finemap_method, confidence, locus
-                    FROM credible_sets
-                    WHERE study_id = %s
+                    _CREDIBLE_SET_SELECT + """
+                    WHERE studyid = %s
+                      AND studytype = 'gwas'
                     ORDER BY chromosome, position
                     """,
                     (study_id,),
