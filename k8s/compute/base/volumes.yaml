@@ -1,0 +1,27 @@
+# Writable runtime data (projects, states, temp, uploads) + claims for the admin-made read-only PVs.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-runtime-data
+spec:
+  accessModes: [ReadWriteOnce]      # single node: shared by api, dask-worker, prefect-deployment
+  storageClassName: local-path
+  resources: {requests: {storage: 200Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reference-data
+spec:
+  accessModes: [ReadOnlyMany]
+  storageClassName: ""
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: knowledge-graph
+spec:
+  accessModes: [ReadOnlyMany]
+  storageClassName: ""
+  resources: {requests: {storage: 1Gi}}

@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hypothesis-staging
+resources:
+  - ../../base
+  - infisical-secret.yaml
+images:                                    # CD overrides with staging-<sha> via kubectl set image
+  - {name: rejuvebio/hypothesis-generation-api-service, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-dask-worker, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-dask-scheduler, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-prefect-service, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-prefect-deployment, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-prolog-service, newTag: staging}
+# API NodePort stays 30500 (base): nginx -> 127.0.0.1:30500

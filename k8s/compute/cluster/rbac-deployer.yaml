@@ -1,0 +1,80 @@
+# Admin-applied. CD runner account: update images + watch rollouts in its own namespace only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deployer
+  namespace: hypothesis-staging
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployer
+  namespace: hypothesis-staging
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deployer
+  namespace: hypothesis-staging
+subjects:
+  - {kind: ServiceAccount, name: deployer, namespace: hypothesis-staging}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: deployer}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: deployer-token        # token for the runner kubeconfig
+  namespace: hypothesis-staging
+  annotations: {kubernetes.io/service-account.name: deployer}
+type: kubernetes.io/service-account-token
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deployer
+  namespace: hypothesis-wip
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployer
+  namespace: hypothesis-wip
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deployer
+  namespace: hypothesis-wip
+subjects:
+  - {kind: ServiceAccount, name: deployer, namespace: hypothesis-wip}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: deployer}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: deployer-token
+  namespace: hypothesis-wip
+  annotations: {kubernetes.io/service-account.name: deployer}
+type: kubernetes.io/service-account-token

@@ -1,0 +1,48 @@
+# Admin-applied. Read-only shared data; host paths are ro bind mounts (see README).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hypothesis-staging-reference-data
+spec:
+  capacity: {storage: 1Gi}
+  accessModes: [ReadOnlyMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef: {namespace: hypothesis-staging, name: reference-data}
+  hostPath: {path: /srv/k8s-ro/hypgen_data, type: Directory}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hypothesis-staging-knowledge-graph
+spec:
+  capacity: {storage: 1Gi}
+  accessModes: [ReadOnlyMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef: {namespace: hypothesis-staging, name: knowledge-graph}
+  hostPath: {path: /srv/k8s-ro/kg_v4, type: Directory}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hypothesis-wip-reference-data
+spec:
+  capacity: {storage: 1Gi}
+  accessModes: [ReadOnlyMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef: {namespace: hypothesis-wip, name: reference-data}
+  hostPath: {path: /srv/k8s-ro/hypgen_data, type: Directory}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hypothesis-wip-knowledge-graph
+spec:
+  capacity: {storage: 1Gi}
+  accessModes: [ReadOnlyMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef: {namespace: hypothesis-wip, name: knowledge-graph}
+  hostPath: {path: /srv/k8s-ro/kg_v4, type: Directory}

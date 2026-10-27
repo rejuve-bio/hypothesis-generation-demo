@@ -1,0 +1,46 @@
+# KG (v4) mounted read-only; loading takes 30+ min, hence the long startupProbe.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prolog-service
+spec:
+  replicas: 1
+  strategy: {type: Recreate}        # never run two ~220Gi copies during an update
+  selector:
+    matchLabels: {app: prolog-service}
+  template:
+    metadata:
+      labels: {app: prolog-service}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      imagePullSecrets: [{name: dockerhub-creds}]
+      containers:
+        - name: prolog
+          image: rejuvebio/hypothesis-generation-prolog-service:staging
+          imagePullPolicy: Always
+          securityContext: {allowPrivilegeEscalation: false}
+          ports: [{containerPort: 4242}]
+          startupProbe:
+            tcpSocket: {port: 4242}
+            periodSeconds: 30
+            failureThreshold: 240     # up to 2h
+          readinessProbe:
+            tcpSocket: {port: 4242}
+            periodSeconds: 15
+          resources:
+            requests: {cpu: "1", memory: 220Gi}
+            limits: {cpu: "4", memory: 320Gi}
+          volumeMounts:
+            - {name: kg, mountPath: /mnt/prolog_out_v3, readOnly: true}
+      volumes:
+        - {name: kg, persistentVolumeClaim: {claimName: knowledge-graph, readOnly: true}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prolog-service
+spec:
+  selector: {app: prolog-service}
+  ports:
+    - {port: 4242, targetPort: 4242}

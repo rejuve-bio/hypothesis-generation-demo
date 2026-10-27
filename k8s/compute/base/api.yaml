@@ -1,0 +1,80 @@
+# Code comes from the image; only data is mounted (runtime rw, reference ro).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hypothesis-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: hypothesis-api}
+  template:
+    metadata:
+      labels: {app: hypothesis-api}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      imagePullSecrets: [{name: dockerhub-creds}]
+      containers:
+        - name: api
+          image: rejuvebio/hypothesis-generation-api-service:staging
+          imagePullPolicy: Always
+          securityContext: {allowPrivilegeEscalation: false}
+          ports: [{containerPort: 5000}]
+          env:
+            - {name: FLASK_ENV, value: "development"}
+            - {name: PREFECT_API_URL, value: "http://prefect-service:4200/api"}
+            - {name: PYTHONPATH, value: "/app"}
+            - {name: DASK_ADDRESS, value: "tcp://dask-scheduler:8786"}
+            - {name: SWIPL_HOST, value: "prolog-service"}
+            - {name: SWIPL_PORT, value: "4242"}
+            - {name: REDIS_URL, value: "redis://redis:6379"}
+            - {name: ENSEMBL_HGNC_MAP, value: "/app/data/ensembl_to_hgnc.pkl"}
+            - {name: HGNC_ENSEMBL_MAP, value: "/app/data/hgnc_to_ensembl.pkl"}
+            - {name: GO_MAP, value: "/app/data/go_map.pkl"}
+            - {name: CREDIBLE_SETS_DB_HOST, value: "credible-sets-postgres"}
+            - {name: CREDIBLE_SETS_DB_PORT, value: "5432"}
+          envFrom:
+            - secretRef: {name: hypothesis-secrets}       # Infisical sync
+            - secretRef: {name: hypothesis-env-secrets}   # from .env
+          command: ["uv", "run", "gunicorn", "src.server:create_app_with_config",
+                    "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker",
+                    "--bind", "0.0.0.0:5000", "--timeout", "600", "--graceful-timeout", "30",
+                    "--keep-alive", "5", "--access-logfile", "-", "--error-logfile", "-"]
+          startupProbe:                 # first start seeds the GWAS library (can take ~1h)
+            httpGet: {path: /docs, port: 5000}
+            periodSeconds: 30
+            failureThreshold: 180
+          readinessProbe:
+            httpGet: {path: /docs, port: 5000}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "8", memory: 16Gi}
+          volumeMounts:
+            - {name: runtime, mountPath: /app/data/projects, subPath: projects}
+            - {name: runtime, mountPath: /app/data/states, subPath: states}
+            - {name: runtime, mountPath: /app/data/temp, subPath: temp}
+            - {name: runtime, mountPath: /app/data/uploads, subPath: uploads}
+            - {name: runtime, mountPath: /app/data/metadata, subPath: metadata}
+            - {name: runtime, mountPath: /app/data/susie, subPath: susie}
+            - {name: refdata, mountPath: /app/data/ldscores, subPath: ldscores, readOnly: true}
+            - {name: refdata, mountPath: /app/data/cts, subPath: cts, readOnly: true}
+            - {name: refdata, mountPath: /app/data/OSF, subPath: OSF, readOnly: true}
+            - {name: refdata, mountPath: /app/data/ldsc, subPath: ldsc, readOnly: true}
+            - {name: refdata, mountPath: /app/data/harmonizer_ref, subPath: harmonizer_ref, readOnly: true}
+            - {name: refdata, mountPath: /app/data/1000Genomes_phase3/plink_format_b38, subPath: plink_format_b38, readOnly: true}
+            - {name: refdata, mountPath: /app/data/Manifest_201807.csv, subPath: Manifest_201807.csv, readOnly: true}
+            - {name: refdata, mountPath: /app/data/gwas_catalog_phenotypes.json, subPath: gwas_catalog_phenotypes.json, readOnly: true}
+      volumes:
+        - {name: runtime, persistentVolumeClaim: {claimName: app-runtime-data}}
+        - {name: refdata, persistentVolumeClaim: {claimName: reference-data, readOnly: true}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hypothesis-api
+spec:
+  type: NodePort                  # nginx -> 127.0.0.1:<nodePort>; firewall blocks it externally
+  selector: {app: hypothesis-api}
+  ports:
+    - {port: 5000, targetPort: 5000, nodePort: 30500}

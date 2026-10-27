@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hypothesis-wip
+resources:
+  - ../../base
+  - infisical-secret.yaml
+images:                                    # CD overrides with wip-<sha> via kubectl set image
+  - {name: rejuvebio/hypothesis-generation-api-service, newTag: wip}
+  - {name: rejuvebio/hypothesis-generation-dask-worker, newTag: wip}
+  - {name: rejuvebio/hypothesis-generation-dask-scheduler, newTag: wip}
+  - {name: rejuvebio/hypothesis-generation-prefect-service, newTag: wip}
+  - {name: rejuvebio/hypothesis-generation-prefect-deployment, newTag: wip}
+  - {name: rejuvebio/hypothesis-generation-prolog-service, newTag: wip}
+patches:
+  - target: {kind: Service, name: hypothesis-api}     # nginx -> 127.0.0.1:30510
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/nodePort
+        value: 30510
+  - target: {kind: Deployment, name: prolog-service}  # ODBC DSN for bioatomspace (Secret prolog-odbc)
+    patch: |-
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value: {name: odbc, secret: {secretName: prolog-odbc, defaultMode: 0400}}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value: {name: odbc, mountPath: /root/.odbc.ini, subPath: odbc.ini, readOnly: true}

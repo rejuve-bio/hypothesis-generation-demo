@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dask-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: dask-scheduler}
+  template:
+    metadata:
+      labels: {app: dask-scheduler}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      imagePullSecrets: [{name: dockerhub-creds}]
+      containers:
+        - name: dask-scheduler
+          image: rejuvebio/hypothesis-generation-dask-scheduler:staging
+          imagePullPolicy: Always
+          securityContext: {allowPrivilegeEscalation: false}
+          ports: [{containerPort: 8786}, {containerPort: 8787}]
+          env:
+            - {name: PYTHONPATH, value: "/app"}
+            - {name: SKIP_SEED, value: "true"}
+          command: ["sh", "-c", "uv run dask scheduler --host 0.0.0.0 --port 8786 --dashboard-address :8787"]
+          readinessProbe:
+            tcpSocket: {port: 8786}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dask-scheduler
+spec:
+  selector: {app: dask-scheduler}       # ClusterIP only; dashboard via kubectl port-forward
+  ports:
+    - {name: scheduler, port: 8786, targetPort: 8786}
+    - {name: dashboard, port: 8787, targetPort: 8787}
