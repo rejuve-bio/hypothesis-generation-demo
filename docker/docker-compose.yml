@@ -29,6 +29,14 @@ services:
       - ${PROLOG_OUT_V2_PATH}:/mnt/prolog_out_v2:ro
       - ${PROLOG_OUT_V3_PATH}:/mnt/prolog_out_v3:ro
       - ../config/odbc.ini:/root/.odbc.ini
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # host Postgres (bioatomspace) via docker bridge
+    healthcheck:                               # healthy once the KB is loaded and :4242 listens
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/4242' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 7200s
     networks:
       - app_network
     restart: unless-stopped
@@ -92,7 +100,7 @@ services:
       mongo:
         condition: service_healthy
       prolog-service:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
       credible-sets-postgres:
@@ -139,6 +147,8 @@ services:
       - ../data:/app/data
       - ${EXTERNAL_DATA_PATH}:/app/data/external_data
     depends_on:
+      prolog-service:
+        condition: service_healthy
       mongo:
         condition: service_healthy
       prefect-service:
@@ -299,6 +309,7 @@ services:
       - GO_MAP=/app/data/go_map.pkl
       - SWIPL_HOST=${SWIPL_HOST:-prolog-service}
       - SWIPL_PORT=${SWIPL_PORT:-4242}
+      - SKIP_SEED=true                      # api-service does the seeding
       - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OpenAI}
       - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
@@ -307,10 +318,12 @@ services:
       - CREDIBLE_SETS_DB_USER=${CREDIBLE_SETS_DB_USER}
       - CREDIBLE_SETS_DB_PASSWORD=${CREDIBLE_SETS_DB_PASSWORD}
     depends_on:
+      prolog-service:
+        condition: service_healthy
       prefect-service:
         condition: service_healthy
       dask-scheduler:
-        condition: service_started
+        condition: service_healthy
       mongo:
         condition: service_healthy
       redis:

@@ -14,7 +14,7 @@
 [PGOT]
 Driver = PostgreSQL Unicode
 Database = bioatomspace
-Servername = <postgres-host>
+Servername = host.docker.internal
 Port = 5432
 UserName = <username>
 Password = <password>
