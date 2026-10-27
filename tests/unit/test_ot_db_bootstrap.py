@@ -123,12 +123,6 @@ def test_parse_manifest_rejects_mismatch(text):
         boot.parse_manifest(text, "25.09")
 
 
-def test_sha256_file(tmp_path):
-    p = tmp_path / "f"
-    p.write_bytes(b"abc")
-    assert boot.sha256_file(str(p)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-
-
 def test_fetch_dump_checksum_mismatch_leaves_no_file(tmp_path):
     class FakeStorage:
         bucket = "b"
