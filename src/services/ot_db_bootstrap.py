@@ -1,6 +1,7 @@
 """
-Make sure the OpenTargets Postgres DB (credible_sets, gwas_study_index,
-opentargets_studies) holds a complete copy of the pinned release OT_RELEASE.
+Make sure the shared OpenTargets Postgres DB (the tables in
+credible_sets_schema.OT_TABLES, used by both the Python pipeline and the Prolog
+backend) holds a complete copy of the pinned release OT_RELEASE.
 
 Run on every deployment by the `ot-db-bootstrap` one-shot service
 (scripts/bootstrap_ot_db.py); the pipeline workers wait for it to exit 0.
@@ -260,15 +261,15 @@ def validate_staging(conn, expected_counts: Optional[dict] = None) -> dict:
     counts = table_row_counts(conn, cs_schema.STAGING_SCHEMA)
     if counts is None:
         raise BootstrapError("staging is missing one or more OT tables")
-    for table in ("credible_sets", "gwas_study_index", "opentargets_studies"):
+    for table in cs_schema.OT_TABLES:
         if counts[table] <= 0:
             raise BootstrapError(f"staging {table} is empty")
     if expected_counts is not None and counts != expected_counts:
         raise BootstrapError(f"staging row counts {counts} != manifest {expected_counts}")
     with conn.cursor() as cur:
         cur.execute(
-            f"SELECT EXISTS (SELECT 1 FROM {cs_schema.STAGING_SCHEMA}.opentargets_studies "
-            "WHERE study_id LIKE %s)",
+            f"SELECT EXISTS (SELECT 1 FROM {cs_schema.STAGING_SCHEMA}.study "
+            "WHERE studyid LIKE %s)",
             (FINNGEN_PREFIX + "%",),
         )
         has_finngen = cur.fetchone()[0]
@@ -285,6 +286,8 @@ def swap_into_public(conn, release: str, source: str, counts: dict, snapshot_sha
     """Replace the public OT tables with ot_staging's and record the load — atomically."""
     with conn.cursor() as cur:
         for table in cs_schema.OT_TABLES:
+            cur.execute(f"DROP TABLE IF EXISTS public.{table} CASCADE")
+        for table in cs_schema.LEGACY_TABLES:
             cur.execute(f"DROP TABLE IF EXISTS public.{table} CASCADE")
         for table in cs_schema.OT_TABLES:
             cur.execute(f"ALTER TABLE {cs_schema.STAGING_SCHEMA}.{table} SET SCHEMA public")
@@ -481,7 +484,7 @@ def publish_snapshot(storage, prefix: str, force: bool = False) -> dict:
             cur.execute(f"CREATE SCHEMA {staging}")
             cur.execute(cs_schema.create_tables_sql(staging))
             for table in cs_schema.OT_TABLES:
-                cols = ", ".join(cs_schema.TABLE_COLUMNS[table])
+                cols = cs_schema.column_list(table)
                 cur.execute(f"INSERT INTO {staging}.{table} ({cols}) SELECT {cols} FROM public.{table}")
             cur.execute(cs_schema.create_indexes_sql(staging))
         conn.commit()

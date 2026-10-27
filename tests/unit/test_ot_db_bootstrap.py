@@ -8,7 +8,7 @@ from src.db import credible_sets_schema as cs_schema
 from src.services import ot_db_bootstrap as boot
 from src.services.ot_ebi_loader import _copy_field, pg_text_array
 
-COUNTS = {"credible_sets": 100, "gwas_study_index": 10, "opentargets_studies": 20}
+COUNTS = {table: 10 * (i + 1) for i, table in enumerate(cs_schema.OT_TABLES)}
 
 
 def _state(**overrides):
@@ -65,7 +65,7 @@ def test_not_current_on_partial_or_tampered_table(table):
 
 def test_not_current_when_marker_lacks_a_table_count():
     counts = dict(COUNTS)
-    del counts["opentargets_studies"]
+    del counts[cs_schema.OT_TABLES[-1]]
     current, _ = boot.check_current(_state(row_counts=counts), dict(COUNTS), "25.09")
     assert not current
 

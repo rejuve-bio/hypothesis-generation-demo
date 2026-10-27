@@ -1,7 +1,12 @@
 """
-Load an OpenTargets release (credible_set/ + study/ parquet from the EBI FTP)
-into a target Postgres schema — normally `ot_staging`, which the bootstrap
-then validates and swaps into `public` (see ot_db_bootstrap.py).
+Load an OpenTargets release from the EBI FTP into a target Postgres schema —
+normally `ot_staging`, which the bootstrap then validates and swaps into
+`public` (see ot_db_bootstrap.py).
+
+What gets loaded is driven by credible_sets_schema.LOADED_TABLES: for each
+table, only the listed parquet fields are read and converted, then COPYed in.
+Derived tables (credible_set_variants, gwas_study_index) are built afterwards
+with SQL inside Postgres.
 
 Fail-fast by design: each parquet file is loaded in its own transaction and
 retried a few times; if a file still fails, the whole load raises. A partial
@@ -17,24 +22,21 @@ import shutil
 import tempfile
 import time
 import urllib.request
-from typing import Callable, Iterable
+from typing import Callable
 
-import numpy as np
 import pyarrow.parquet as pq
 from loguru import logger
 
 from src.db import credible_sets_schema as cs_schema
 
 BASE_URL = "https://ftp.ebi.ac.uk/pub/databases/opentargets/platform"
-CREDIBLE_SET_FOLDER = "credible_set"
-STUDY_FOLDER = "study"
 
-# Row-group read batch size for streaming a parquet file instead of loading it
-# whole into memory (a single file can be ~235MB, enough to OOM the loader).
+# Rows per parquet read batch: files are streamed instead of loaded whole
+# (a single file can be a few hundred MB, enough to OOM the loader).
 CHUNK_ROWS = 1_000
-# Rows vary wildly in size — some credible sets carry huge `locus`/`ld_set`
-# JSONB blobs. Each COPY is capped by serialized bytes so no single statement
-# gets large enough to kill the Postgres connection.
+# Rows vary wildly in size — some credible sets carry large `locus` JSONB
+# blobs. Each COPY is capped by serialized bytes so no single statement gets
+# large enough to kill the Postgres connection.
 MAX_COPY_BYTES = 8 * 1024 * 1024
 # Attempts per parquet file (download + load) before the whole load fails.
 FILE_ATTEMPTS = 3
@@ -49,55 +51,45 @@ class EbiLoadError(RuntimeError):
 
 
 # ── value conversion ─────────────────────────────────────────────────────────
+# Values come from pyarrow's to_pylist(): None for nulls, lists for list
+# columns, dicts for structs. Floats can still be NaN.
 
-def _float(v):
-    if v is None:
+def _is_nan(v) -> bool:
+    return isinstance(v, float) and math.isnan(v)
+
+
+def _clean_json(v):
+    """Replace NaN with None so the value is valid JSON for a jsonb column."""
+    if _is_nan(v):
         return None
-    if isinstance(v, (np.floating, float)):
-        return None if math.isnan(v) else float(v)
-    return float(v)
+    if isinstance(v, list):
+        return [_clean_json(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _clean_json(x) for k, x in v.items()}
+    return v
 
 
-def _int(v):
-    if v is None:
+def convert_value(value, kind: str):
+    """Convert one parquet value to what COPY expects for the column kind."""
+    if value is None or _is_nan(value):
         return None
-    if isinstance(v, (np.floating, float)):
-        return None if math.isnan(v) else int(v)
-    return int(v)
+    if kind == "text":
+        return str(value)
+    if kind == "int":
+        return int(value)
+    if kind == "float":
+        return float(value)
+    if kind == "bool":
+        return bool(value)
+    if kind == "text_array":
+        return list(value) or None
+    if kind == "json":
+        return json.dumps(_clean_json(value), allow_nan=False)
+    raise ValueError(f"unknown column kind {kind!r}")
 
 
-def _bool(v):
-    if v is None:
-        return None
-    return bool(v)
-
-
-def _list(v):
-    if v is None:
-        return None
-    if isinstance(v, np.ndarray):
-        v = v.tolist()
-    return list(v)
-
-
-def _json(v):
-    if v is None:
-        return None
-    if isinstance(v, np.ndarray):
-        v = v.tolist()
-
-    def default(obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return None if math.isnan(obj) else float(obj)
-        if isinstance(obj, np.bool_):
-            return bool(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return str(obj)
-
-    return json.dumps(v, default=default)
+def table_row(spec: cs_schema.LoadedTable, record: dict) -> tuple:
+    return tuple(convert_value(record.get(c.source), c.kind) for c in spec.columns)
 
 
 def pg_text_array(values) -> str:
@@ -122,57 +114,6 @@ def _copy_field(v) -> str:
     return str(v)
 
 
-def credible_set_row(row: dict) -> tuple:
-    return (
-        row["studyLocusId"],
-        row["studyId"],
-        row["variantId"],
-        row.get("chromosome"),
-        _int(row.get("position")),
-        row.get("region"),
-        _float(row.get("beta")),
-        _float(row.get("zScore")),
-        _float(row.get("pValueMantissa")),
-        _int(row.get("pValueExponent")),
-        _float(row.get("effectAlleleFrequencyFromSource")),
-        _float(row.get("standardError")),
-        row.get("subStudyDescription"),
-        _list(row.get("qualityControls")),
-        row.get("finemappingMethod"),
-        _int(row.get("credibleSetIndex")),
-        _float(row.get("credibleSetlog10BF")),
-        _float(row.get("purityMeanR2")),
-        _float(row.get("purityMinR2")),
-        _int(row.get("locusStart")),
-        _int(row.get("locusEnd")),
-        _int(row.get("sampleSize")),
-        _json(row.get("ldSet")),
-        _json(row.get("locus")),
-        row.get("confidence"),
-        row.get("studyType"),
-        _bool(row.get("isTransQtl")),
-    )
-
-
-def study_row(row: dict) -> tuple:
-    efo_ids = _list(row.get("traitFromSourceMappedIds"))
-    return (
-        row["studyId"],
-        row.get("projectId"),
-        row.get("traitFromSource"),
-        efo_ids or None,
-        _bool(row.get("hasSumstats")),
-        row.get("summarystatsLocation"),
-        _int(row.get("nSamples")),
-    )
-
-
-STUDY_PARQUET_COLUMNS = [
-    "studyId", "projectId", "studyType", "traitFromSource",
-    "traitFromSourceMappedIds", "hasSumstats", "summarystatsLocation", "nSamples",
-]
-
-
 # ── FTP helpers ──────────────────────────────────────────────────────────────
 
 def list_parquet_urls(release: str, folder: str) -> list:
@@ -195,10 +136,10 @@ def _download(url: str, dest: str) -> None:
 class _CopyBuffer:
     """Accumulates rows as CSV and flushes them with COPY once MAX_COPY_BYTES is hit."""
 
-    def __init__(self, cur, schema: str, table: str, columns: Iterable[str]):
+    def __init__(self, cur, schema: str, table: str):
         self._cur = cur
         self._sql = (
-            f"COPY {schema}.{table} ({', '.join(columns)}) "
+            f"COPY {schema}.{table} ({cs_schema.column_list(table)}) "
             f"FROM STDIN WITH (FORMAT csv, NULL '{_NULL}')"
         )
         self._buf = io.StringIO()
@@ -220,43 +161,25 @@ class _CopyBuffer:
         self._writer = csv.writer(self._buf, lineterminator="\n")
 
 
-def _load_credible_set_file(cur, schema: str, path: str) -> int:
-    buf = _CopyBuffer(cur, schema, "credible_sets", cs_schema.CREDIBLE_SETS_COLUMNS)
-    for batch in pq.ParquetFile(path).iter_batches(batch_size=CHUNK_ROWS):
-        df = batch.to_pandas()
-        df = df[df["studyType"] == "gwas"]
-        for row in df.to_dict("records"):
-            buf.add(credible_set_row(row))
+def _load_file(cur, schema: str, spec: cs_schema.LoadedTable, path: str) -> int:
+    buf = _CopyBuffer(cur, schema, spec.name)
+    fields = [c.source for c in spec.columns]
+    for batch in pq.ParquetFile(path).iter_batches(batch_size=CHUNK_ROWS, columns=fields):
+        for record in batch.to_pylist():
+            buf.add(table_row(spec, record))
     buf.flush()
     return buf.rows
 
 
-def _load_study_file(cur, schema: str, path: str) -> int:
-    buf = _CopyBuffer(cur, schema, "opentargets_studies", cs_schema.OPENTARGETS_STUDIES_COLUMNS)
-    df = pq.read_table(path, columns=STUDY_PARQUET_COLUMNS).to_pandas()
-    df = df[df["studyType"] == "gwas"]
-    for row in df.to_dict("records"):
-        buf.add(study_row(row))
-    buf.flush()
-    return buf.rows
-
-
-def _load_folder(
-    connect: Callable,
-    conn,
-    schema: str,
-    release: str,
-    folder: str,
-    load_file: Callable,
-):
+def _load_table(connect: Callable, conn, schema: str, release: str, spec: cs_schema.LoadedTable):
     """
-    Load every parquet file in an EBI folder. Each file is one transaction:
-    on failure it is rolled back (so a retry never double-inserts) and retried;
-    after FILE_ATTEMPTS failures the whole load raises. Returns (conn, rows) —
-    conn may be a fresh connection if the old one died.
+    Load every parquet file in the table's EBI folder. Each file is one
+    transaction: on failure it is rolled back (so a retry never double-inserts)
+    and retried; after FILE_ATTEMPTS failures the whole load raises. Returns
+    (conn, rows) — conn may be a fresh connection if the old one died.
     """
-    urls = list_parquet_urls(release, folder)
-    logger.info(f"[OT-EBI] {folder}: {len(urls)} parquet file(s) for release {release}")
+    urls = list_parquet_urls(release, spec.folder)
+    logger.info(f"[OT-EBI] {spec.name} <- {spec.folder}: {len(urls)} parquet file(s) for release {release}")
     total = 0
     for i, url in enumerate(urls, 1):
         fname = url.rsplit("/", 1)[-1]
@@ -266,17 +189,17 @@ def _load_folder(
                 with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
                     _download(url, tmp.name)
                     with conn.cursor() as cur:
-                        rows = load_file(cur, schema, tmp.name)
+                        rows = _load_file(cur, schema, spec, tmp.name)
                 conn.commit()
                 total += rows
                 logger.info(
-                    f"[OT-EBI] {folder} [{i}/{len(urls)}] {fname}: "
-                    f"{rows:,} gwas rows ({time.time() - t0:.1f}s)"
+                    f"[OT-EBI] {spec.name} [{i}/{len(urls)}] {fname}: "
+                    f"{rows:,} rows ({time.time() - t0:.1f}s)"
                 )
                 break
             except Exception as exc:
                 logger.warning(
-                    f"[OT-EBI] {folder} [{i}/{len(urls)}] {fname} attempt "
+                    f"[OT-EBI] {spec.name} [{i}/{len(urls)}] {fname} attempt "
                     f"{attempt}/{FILE_ATTEMPTS} failed: {exc}"
                 )
                 try:
@@ -295,24 +218,28 @@ def _load_folder(
 
 def load_release_into_schema(connect: Callable, conn, schema: str, release: str):
     """
-    Load studies + credible sets for *release* into *schema* (whose bare
-    tables must already exist), de-duplicate, build gwas_study_index, then
+    Load every table in LOADED_TABLES for *release* into *schema* (whose bare
+    tables must already exist), de-duplicate, build the derived tables, then
     add PKs and indexes. Returns the (possibly replaced) connection.
     """
     t_start = time.time()
-    conn, n_studies = _load_folder(connect, conn, schema, release, STUDY_FOLDER, _load_study_file)
-    conn, n_cs = _load_folder(connect, conn, schema, release, CREDIBLE_SET_FOLDER, _load_credible_set_file)
-    logger.info(f"[OT-EBI] Loaded {n_studies:,} studies and {n_cs:,} credible sets")
+    for spec in cs_schema.LOADED_TABLES:
+        conn, rows = _load_table(connect, conn, schema, release, spec)
+        logger.info(f"[OT-EBI] {spec.name}: {rows:,} rows loaded")
 
     with conn.cursor() as cur:
-        for table in ("opentargets_studies", "credible_sets"):
-            cur.execute(cs_schema.duplicate_count_sql(schema, table))
+        for spec in cs_schema.LOADED_TABLES:
+            if spec.name not in cs_schema.PRIMARY_KEYS:
+                continue
+            cur.execute(cs_schema.duplicate_count_sql(schema, spec.name))
             dupes = cur.fetchone()[0]
             if dupes:
-                logger.warning(f"[OT-EBI] {table}: removing {dupes:,} duplicate primary-key rows")
-                cur.execute(cs_schema.dedupe_sql(schema, table))
-        logger.info("[OT-EBI] Building gwas_study_index, primary keys and indexes")
-        cur.execute(cs_schema.build_study_index_sql(schema))
+                logger.warning(f"[OT-EBI] {spec.name}: removing {dupes:,} duplicate primary-key rows")
+                cur.execute(cs_schema.dedupe_sql(schema, spec.name))
+        logger.info("[OT-EBI] Building derived tables (credible_set_variants, gwas_study_index)")
+        for statement in cs_schema.derive_sql(schema):
+            cur.execute(statement)
+        logger.info("[OT-EBI] Building primary keys and indexes")
         cur.execute(cs_schema.create_indexes_sql(schema))
     conn.commit()
 
