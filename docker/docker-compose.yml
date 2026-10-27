@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
 
@@ -23,12 +22,12 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.prolog
     ports:
-      - "4242:4242"
+      - "127.0.0.1:${PROLOG_PORT:-4242}:4242"
     volumes:
       - ../pl:/app/pl
       - ../config:/app/config
-      - ${PROLOG_OUT_V2_PATH}:/mnt/prolog_out_v2
-      - ${PROLOG_OUT_V3_PATH}:/mnt/prolog_out_v3
+      - ${PROLOG_OUT_V2_PATH}:/mnt/prolog_out_v2:ro
+      - ${PROLOG_OUT_V3_PATH}:/mnt/prolog_out_v3:ro
       - ../config/odbc.ini:/root/.odbc.ini
     networks:
       - app_network
@@ -40,8 +39,8 @@ services:
       dockerfile: docker/Dockerfile
     hostname: dask-scheduler
     ports:
-      - "8786:8786" 
-      - "8787:8787" 
+      - "127.0.0.1:${DASK_SCHEDULER_PORT:-8786}:8786"
+      - "127.0.0.1:${DASK_DASHBOARD_PORT:-8787}:8787"
     environment:
       - PYTHONPATH=/app
       - SKIP_SEED=true 
@@ -120,7 +119,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "5008:5000"
+      - "127.0.0.1:${API_PORT:-5008}:5000"
     environment:
       - FLASK_ENV=development
       - PREFECT_API_URL=http://prefect-service:4200/api
@@ -138,6 +137,7 @@ services:
     volumes:
       - ..:/app
       - ../data:/app/data
+      - ${EXTERNAL_DATA_PATH}:/app/data/external_data
     depends_on:
       mongo:
         condition: service_healthy
@@ -168,7 +168,7 @@ services:
       POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD}
       POSTGRES_DB: ${PREFECT_DB_NAME}
     ports:
-      - "5409:5432" 
+      - "127.0.0.1:${PREFECT_DB_PORT:-5409}:5432"
     volumes:
       - prefect-postgres-data:/var/lib/postgresql/data
     networks:
@@ -187,7 +187,7 @@ services:
       POSTGRES_PASSWORD: ${CREDIBLE_SETS_DB_PASSWORD}
       POSTGRES_DB: ${CREDIBLE_SETS_DB_NAME}
     ports:
-      - "5411:5432"
+      - "127.0.0.1:${CREDIBLE_SETS_DB_PORT:-5411}:5432"
     volumes:
       - credible-sets-postgres-data:/var/lib/postgresql/data
       - ./init-credible-sets.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -229,7 +229,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.prefect
     ports:
-      - "4292:4200"
+      - "127.0.0.1:${PREFECT_UI_PORT:-4292}:4200"
     volumes:
       - ..:/app
       - prefect-data:/root/.prefect 
@@ -323,7 +323,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6309:6379"
+      - "127.0.0.1:${REDIS_PORT:-6309}:6379"
     networks:
       - app_network
     healthcheck:
