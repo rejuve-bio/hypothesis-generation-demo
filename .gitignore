@@ -227,6 +227,7 @@ data/gene_expression
 data/temp/
 data/ontology
 data/census_cache
+data/pg_releases
 .nextflow.*
 .nextflow/
 data/harmonizer_ref/
