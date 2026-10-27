@@ -39,13 +39,57 @@ with app.setup(hide_code=True):
     MAGMA_VERSION = "1.10"
     MAGMA_ARCHIVE_URL = "https://vu.data.surf.nl/index.php/s/lxDgt2dNdNr6DYt/download"
     MAGMA_ARCHIVE_SHA256 = "d8b20778b773f47b4fb0f1020baefebc92b11ee65946e708a618d494d6819e39"
+    DEFAULT_PLINK2_BIN = BASE_DIR / "tools" / "plink2" / "plink2"
+    PLINK2_VERSION = "v2.0.0-b.1.2"
+    PLINK2_ARCHIVE_URL = "https://github.com/chrchang/plink-ng/releases/download/v2.0.0-b.1.2/plink2_linux_x86_64.zip"
+    PHENOTYPE_URL = "https://dgrpool.epfl.ch/studies/18/get_file?name=summary.tsv"
+    GENOTYPE_URL = "https://zenodo.org/records/837947/files/dgrp2_dm6_dbSNP.vcf"
+    GTF_URL = "https://ftp.ebi.ac.uk/ensemblgenomes/pub/metazoa/release-62/gtf/drosophila_melanogaster/Drosophila_melanogaster.BDGP6.54.62.chr.gtf.gz"
     GO_GAF_URL = "https://current.geneontology.org/annotations/gaf/DROME-mod.gaf.gz"
     GO_OBO_URL = "https://current.geneontology.org/ontology/go-basic.obo"
+    GTF_SHA256 = "39e943ea25fbe46a6ec3fc28742e7bbf5f6c5e6de470785597bee3662e80730e"
+    GENOTYPE_MD5 = {
+        ".bed": "6e3b0c5b2c186c3a6dec99c20c24e3f4",
+        ".bim": "18ba9e60111dd6398d160f9bba89023c",
+        ".fam": "d5cbeec02da5e40a89f3c3a9ab8f15cf",
+    }
+    PHENO_NAME = "S18_1537_F"
     CHROM_MAP = {"2L": "1", "2R": "2", "3L": "3", "3R": "4", "4": "5", "X": "X", "23": "X"}
     BFILE_EXTENSIONS = (".bed", ".bim", ".fam")
     GENE_ID_PATTERN = re.compile(r'gene_id "([^"]+)"')
     GENE_NAME_PATTERN = re.compile(r'gene_name "([^"]+)"')
     GENE_BIOTYPE_PATTERN = re.compile(r'gene_biotype "([^"]+)"')
+
+
+    def _file_digest(path: Path, algorithm: str) -> str:
+        h = hashlib.new(algorithm)
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+
+    def _download_verified(url: str, destination: Path, digest: str, algorithm: str) -> None:
+        if destination.is_file():
+            if _file_digest(destination, algorithm) != digest:
+                raise ValueError(f"Cached file has wrong {algorithm} checksum: {destination}")
+            print(f"Using verified source: {destination}")
+            return
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(destination.name + ".tmp")
+        try:
+            print(f"Downloading {url}", flush=True)
+            req = urllib.request.Request(url, headers={"User-Agent": "DrosophilaMAGMA/1.0"})
+            with urllib.request.urlopen(req, timeout=300) as response, temporary.open("wb") as out:
+                shutil.copyfileobj(response, out, length=1024 * 1024)
+            actual = _file_digest(temporary, algorithm)
+            if actual != digest:
+                raise ValueError(f"{algorithm} mismatch for {url}: expected {digest}, got {actual}")
+            temporary.replace(destination)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        print(f"Downloaded: {destination}")
 
 
     def default_magma_bin() -> Path:
@@ -103,6 +147,52 @@ with app.setup(hide_code=True):
         raise FileNotFoundError(f"MAGMA executable is missing or not executable: {requested}")
 
 
+    def install_plink2(destination: Path = DEFAULT_PLINK2_BIN) -> Path:
+        if platform.system() != "Linux" or platform.machine().lower() not in {"x86_64", "amd64"}:
+            raise RuntimeError(
+                "Automatic plink2 installation supports Linux x86_64 only; "
+                "install plink2 manually or pass --plink2-bin"
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with tempfile.TemporaryDirectory(prefix="plink2-download-", dir=destination.parent) as temp:
+                archive = Path(temp) / "plink2.zip"
+                digest = hashlib.sha256()
+                req = urllib.request.Request(
+                    PLINK2_ARCHIVE_URL, headers={"User-Agent": "DrosophilaMAGMA/1.0"}
+                )
+                with urllib.request.urlopen(req, timeout=300) as response, archive.open("wb") as output:
+                    shutil.copyfileobj(response, output, length=1024 * 1024)
+                with zipfile.ZipFile(archive) as package, package.open("plink2") as executable:
+                    temporary_binary = Path(temp) / "plink2"
+                    with temporary_binary.open("wb") as output:
+                        shutil.copyfileobj(executable, output)
+                with temporary_binary.open("rb") as executable:
+                    if executable.read(4) != b"\x7fELF":
+                        raise RuntimeError("Downloaded plink2 executable is not a Linux ELF binary")
+                temporary_binary.chmod(0o755)
+                temporary_binary.replace(destination)
+        except (OSError, urllib.error.URLError, zipfile.BadZipFile, KeyError) as error:
+            raise RuntimeError(
+                f"Could not install plink2 {PLINK2_VERSION}; install it manually or pass --plink2-bin: "
+                f"{error}"
+            ) from error
+        print(f"Installed plink2 {PLINK2_VERSION}: {destination}")
+        return destination
+
+
+    def resolve_plink2_binary(requested: str) -> str:
+        path = Path(requested).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+        on_path = shutil.which(requested)
+        if on_path is not None:
+            return on_path
+        if requested == "plink2":
+            return str(install_plink2(DEFAULT_PLINK2_BIN))
+        raise FileNotFoundError(f"plink2 executable not found: {requested}")
+
+
     def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser = argparse.ArgumentParser(
             description="Run MAGMA gene and gene-set analysis for DGRP female lifespan."
@@ -127,6 +217,7 @@ with app.setup(hide_code=True):
         gene_set_source.add_argument("--go-gaf", type=Path)
         gene_set_source.add_argument("--download-go", action="store_true")
         parser.add_argument("--go-obo", type=Path)
+        parser.add_argument("--plink2-bin", type=str, default="plink2")
         args = parser.parse_args(argv)
         if args.go_gaf is not None and args.go_obo is None:
             parser.error("--go-gaf requires --go-obo")
@@ -308,6 +399,125 @@ with app.setup(hide_code=True):
         )
 
 
+    def prepare_inputs(args: argparse.Namespace) -> None:
+        try:
+            import pandas as pd
+        except ImportError:
+            subprocess.run([sys.executable, "-m", "pip", "install", "pandas"], check=True)
+            import pandas as pd
+
+        if not args.gtf.is_file():
+            _download_verified(GTF_URL, args.gtf, GTF_SHA256, "sha256")
+
+        for ext, digest in GENOTYPE_MD5.items():
+            dest = Path(str(args.bfile) + ext)
+            if not dest.is_file():
+                _download_verified(GENOTYPE_URL + ext + "?download=1", dest, digest, "md5")
+
+        bim = Path(str(args.bfile) + ".bim")
+        with bim.open() as f:
+            first_chrom = f.readline().split()[0] if bim.stat().st_size else ""
+        if first_chrom.startswith("chr") or first_chrom == "23":
+            tmp_bim = bim.with_name(bim.name + ".tmp")
+            try:
+                with bim.open() as src, tmp_bim.open("w") as dst:
+                    for line in src:
+                        fields = line.split("\t", 1)
+                        chrom = fields[0].removeprefix("chr")
+                        if chrom == "23":
+                            chrom = "X"
+                        dst.write(chrom + "\t" + fields[1])
+                tmp_bim.replace(bim)
+            finally:
+                tmp_bim.unlink(missing_ok=True)
+
+        raw_pheno = BASE_DIR / "data" / "gwas" / "lifespan_female_raw.tsv.gz"
+        if not raw_pheno.is_file():
+            raw_pheno.parent.mkdir(parents=True, exist_ok=True)
+            tmp_pheno = raw_pheno.with_name(raw_pheno.name + ".tmp")
+            try:
+                req = urllib.request.Request(PHENOTYPE_URL, headers={"User-Agent": "DrosophilaMAGMA/1.0"})
+                with urllib.request.urlopen(req, timeout=120) as response, tmp_pheno.open("wb") as out:
+                    shutil.copyfileobj(response, out)
+                tmp_pheno.replace(raw_pheno)
+            except BaseException:
+                tmp_pheno.unlink(missing_ok=True)
+                raise
+            print(f"Downloaded phenotype: {raw_pheno}")
+
+        if not args.sumstats.is_file():
+            source = pd.read_csv(raw_pheno, sep="\t", compression="gzip")
+            female = source.loc[source["sex"].eq("F"), ["DGRP", "mn_Lifespan"]].copy()
+            female["IID"] = female["DGRP"].str.extract(r"^DGRP_(\d+)$", expand=False).astype(int).astype(str)
+            female["FID"] = "line"
+            female[PHENO_NAME] = pd.to_numeric(female["mn_Lifespan"], errors="coerce")
+            if female["IID"].isna().any() or female[PHENO_NAME].isna().any():
+                raise ValueError("Malformed DGRP line IDs or missing mean lifespan values")
+
+            args.sumstats.parent.mkdir(parents=True, exist_ok=True)
+            pheno_file = args.sumstats.parent / "lifespan_female.pheno"
+            female[["FID", "IID", PHENO_NAME]].to_csv(pheno_file, sep="\t", index=False)
+
+            plink2 = resolve_plink2_binary(args.plink2_bin)
+
+            keep_file = args.sumstats.parent / "analysis_lines.keep"
+            female[["FID", "IID"]].to_csv(keep_file, sep="\t", index=False, header=False)
+
+            prune_prefix = args.sumstats.parent / "dgrp_prune"
+            prune_in = prune_prefix.with_suffix(".prune.in")
+            if not prune_in.is_file():
+                subprocess.run([
+                    plink2, "--bfile", str(args.bfile),
+                    "--keep", str(keep_file),
+                    "--maf", "0.01", "--geno", "0.05",
+                    "--indep-pairwise", "200kb", "1", "0.2",
+                    "--out", str(prune_prefix),
+                    "--allow-extra-chr",
+                ], check=True)
+                if not prune_in.is_file():
+                    raise RuntimeError(f"plink2 did not produce prune.in: {prune_in}")
+
+            eigenvec = args.sumstats.parent / "dgrp_pca.eigenvec"
+            if not eigenvec.is_file():
+                subprocess.run([
+                    plink2, "--bfile", str(args.bfile),
+                    "--keep", str(keep_file),
+                    "--extract", str(prune_in),
+                    "--pca", "4",
+                    "--out", str(args.sumstats.parent / "dgrp_pca"),
+                    "--allow-extra-chr",
+                ], check=True)
+                if not eigenvec.is_file():
+                    raise RuntimeError(f"plink2 did not produce eigenvec: {eigenvec}")
+            print(f"PCA complete: {eigenvec}")
+
+            glm_prefix = args.sumstats.parent / "lifespan_female_gwas"
+            subprocess.run([
+                plink2, "--bfile", str(args.bfile),
+                "--pheno", str(pheno_file), "--pheno-name", PHENO_NAME,
+                "--covar", str(eigenvec), "--covar-col-nums", "3-6",
+                "--maf", "0.01", "--geno", "0.05",
+                "--linear", "hide-covar",
+                "--out", str(glm_prefix),
+                "--no-psam-pheno", "--allow-extra-chr",
+            ], check=True)
+            glm_out = Path(str(glm_prefix) + f".{PHENO_NAME}.glm.linear")
+            if not glm_out.is_file():
+                raise RuntimeError(f"plink2 did not produce expected GWAS output: {glm_out}")
+
+            glm = pd.read_csv(glm_out, sep="\t", comment=None)
+            glm.columns = [c.lstrip("#") for c in glm.columns]
+            glm = glm.rename(columns={"CHROM": "CHR", "ID": "SNP", "P": "p", "OBS_CT": "N"})
+            result = glm[["CHR", "POS", "SNP", "p", "N"]].dropna()
+            tmp_stats = args.sumstats.with_name(args.sumstats.name + ".tmp")
+            try:
+                result.to_csv(tmp_stats, sep="\t", index=False)
+                tmp_stats.replace(args.sumstats)
+            finally:
+                tmp_stats.unlink(missing_ok=True)
+            print(f"Generated sumstats: {args.sumstats} ({len(result):,} SNPs)")
+
+
     def ensure_gwas_inputs(args: argparse.Namespace) -> None:
         required = [
             args.sumstats,
@@ -322,10 +532,8 @@ with app.setup(hide_code=True):
             DEFAULT_BFILE,
         ):
             require_files(required)
-        female_pipeline = BASE_DIR / "notebooks" / "drosophila_female_lifespan_finemapping_pipeline.py"
-        require_files([female_pipeline])
-        print("Generating female lifespan GWAS inputs for MAGMA", flush=True)
-        subprocess.run([sys.executable, str(female_pipeline), "--stage", "gwas"], check=True)
+        print("Downloading and preparing MAGMA inputs", flush=True)
+        prepare_inputs(args)
         require_files(required)
 
 
@@ -411,7 +619,7 @@ with app.setup(hide_code=True):
                     chrom = fields[0].removeprefix("chr")
                     chrom = CHROM_MAP.get(chrom, chrom)
                     if chrom not in CHROM_MAP.values():
-                        raise ValueError(f"Unsupported chromosome at {bim_path}:{line_number}")
+                        continue
                     position = int(fields[3])
                     if position < 1 or fields[1] in {"", "."}:
                         raise ValueError(f"Invalid SNP ID or position at {bim_path}:{line_number}")
@@ -496,7 +704,9 @@ with app.setup(hide_code=True):
         return output_path
 
 
-    def prepare_magma_bfile(source_prefix: Path, output_prefix: Path, force: bool = False) -> Path:
+    def prepare_magma_bfile(
+        source_prefix: Path, output_prefix: Path, plink2_bin: str = "plink2", force: bool = False
+    ) -> Path:
         if not force and all(
             outputs_current(
                 [Path(f"{output_prefix}{extension}")],
@@ -507,45 +717,27 @@ with app.setup(hide_code=True):
             print(f"Using existing MAGMA PLINK reference: {output_prefix}")
             return output_prefix
         output_prefix.parent.mkdir(parents=True, exist_ok=True)
-        for extension in (".bed", ".fam"):
-            source = Path(f"{source_prefix}{extension}")
-            destination = Path(f"{output_prefix}{extension}")
-            temporary = Path(f"{destination}.tmp")
-            try:
-                temporary.unlink(missing_ok=True)
-                try:
-                    os.link(source, temporary)
-                except OSError as exc:
-                    if exc.errno != errno.EXDEV:
-                        raise
-                    shutil.copy2(source, temporary)
-                temporary.replace(destination)
-            finally:
-                temporary.unlink(missing_ok=True)
-
-        source_bim = Path(f"{source_prefix}.bim")
-        destination_bim = Path(f"{output_prefix}.bim")
-        temporary_bim = Path(f"{destination_bim}.tmp")
-        count = 0
+        plink2 = resolve_plink2_binary(plink2_bin)
+        supported_chroms = [c for c in CHROM_MAP if c not in {"23"}]
+        subprocess.run([
+            plink2, "--bfile", str(source_prefix),
+            "--chr", ",".join(supported_chroms),
+            "--allow-extra-chr",
+            "--make-bed",
+            "--out", str(output_prefix),
+        ], check=True)
+        bim = Path(f"{output_prefix}.bim")
+        tmp_bim = Path(f"{output_prefix}.bim.tmp")
         try:
-            with source_bim.open("r", encoding="utf-8") as source, temporary_bim.open(
-                "w", encoding="utf-8"
-            ) as destination:
-                for line_number, line in enumerate(source, start=1):
-                    fields = line.split()
-                    if len(fields) != 6:
-                        raise ValueError(f"Invalid BIM record at {source_bim}:{line_number}")
-                    chromosome = fields[0].removeprefix("chr")
-                    chromosome = CHROM_MAP.get(chromosome, chromosome)
-                    if chromosome not in CHROM_MAP.values():
-                        raise ValueError(f"Unsupported chromosome at {source_bim}:{line_number}")
-                    destination.write("\t".join((chromosome, *fields[1:])) + "\n")
-                    count += 1
-            if count == 0:
-                raise ValueError(f"No SNP records found in {source_bim}")
-            temporary_bim.replace(destination_bim)
+            with bim.open() as src, tmp_bim.open("w") as dst:
+                for line in src:
+                    fields = line.split("\t", 1)
+                    chrom = CHROM_MAP.get(fields[0].removeprefix("chr"), fields[0])
+                    dst.write(chrom + "\t" + fields[1])
+            tmp_bim.replace(bim)
         finally:
-            temporary_bim.unlink(missing_ok=True)
+            tmp_bim.unlink(missing_ok=True)
+        count = sum(1 for _ in bim.open())
         print(f"Prepared MAGMA PLINK reference with {count} SNPs: {output_prefix}")
         return output_prefix
 
@@ -567,7 +759,7 @@ with app.setup(hide_code=True):
         )
         gene_locations = write_gene_locations(gtf, output_dir / "gene_locations.tsv", force=True)
         snp_locations = write_snp_locations(bfile, output_dir / "snp_locations.tsv", force=True)
-        prepared_bfile = prepare_magma_bfile(bfile, output_dir / "merged_qc_magma", force=True)
+        prepared_bfile = prepare_magma_bfile(bfile, output_dir / "merged_qc_magma", force=True, plink2_bin="plink2")
         annotation = run_annotation(
             magma_bin, snp_locations, gene_locations, output_dir / "dgrp_lifespan_female"
         )
@@ -1195,7 +1387,7 @@ with app.setup(hide_code=True):
             gene_locations = write_gene_locations(args.gtf, gene_locations, force=args.force)
             snp_locations = write_snp_locations(args.bfile, snp_locations, force=args.force)
             pvalues = write_magma_pvalues(args.sumstats, pvalues, force=args.force)
-            bfile = prepare_magma_bfile(args.bfile, bfile, force=args.force)
+            bfile = prepare_magma_bfile(args.bfile, bfile, plink2_bin=args.plink2_bin, force=args.force)
 
         if args.stage in {"all", "prepare", "sets"}:
             if args.stage == "sets":
