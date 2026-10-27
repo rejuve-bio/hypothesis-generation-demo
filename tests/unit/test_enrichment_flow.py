@@ -5,14 +5,14 @@ import pytest
 
 from src.catlas_census_mapping import CatlasMappingError
 from src.flows import enrichment as flow_module
-from src.services.enrich import EnrichrAPIUnavailableError
+from src.services.enrich import EnrichrAPIUnavailableError, NoEnrichmentFoundError
 from src.services.prolog import PrologNoEvidenceError, PrologServiceError
 
 
-def _configure_flow(monkeypatch, immediate_task_factory, graphs, *, enrich_table=None):
+def _configure_flow(monkeypatch, immediate_task_factory, graphs):
     hypotheses = MagicMock()
     gene_expression = MagicMock()
-    gene_expression.get_tissue_selection.return_value = None
+    gene_expression.get_tissue_selection.return_value = {"tissue_name": "Liver"}
     gene_expression.get_ldsc_results_for_project.return_value = []
     enrichr = MagicMock()
     enrichr.to_symbol.side_effect = lambda value: {
@@ -23,14 +23,13 @@ def _configure_flow(monkeypatch, immediate_task_factory, graphs, *, enrich_table
         "IRF8": "ENSG00000140968",
         "GENE2": "ENSG2",
     }.get(value)
-    enrichr.run.return_value = (
-        [{"Term": "inflammatory response"}]
-        if enrich_table is None
-        else enrich_table
-    )
+    enrichr.run.return_value = [{"Term": "inflammatory response"}]
     enrichr.annotate_graph_gene_names.side_effect = deepcopy
     llm = MagicMock()
     llm.get_relevant_go.return_value = [{"id": "GO:1", "name": "response", "genes": ["STAT1"]}]
+    rank_go_terms_resilient = MagicMock(
+        return_value=[{"id": "GO:1", "name": "response", "genes": ["STAT1"]}]
+    )
     deps = {
         "tasks": MagicMock(),
         "redis_url": "redis://unused",
@@ -38,7 +37,11 @@ def _configure_flow(monkeypatch, immediate_task_factory, graphs, *, enrich_table
         "llm": llm,
         "hypotheses": hypotheses,
         "gene_expression": gene_expression,
+        "rank_go_terms_resilient": rank_go_terms_resilient,
     }
+    monkeypatch.setattr(
+        flow_module, "rank_go_terms_resilient", rank_go_terms_resilient
+    )
 
     monkeypatch.setattr(flow_module.Config, "from_env", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr(flow_module, "create_dependencies", lambda _config: deps)
@@ -69,10 +72,10 @@ def test_happy_path_runs_enrichr_filters_go_and_saves(
     )
 
     assert result == ({"id": "enrich-1"}, 200)
-    deps["enrichr"].run.assert_called_once_with("IRF8")
-    deps["llm"].get_relevant_go.assert_called_once_with(
-        "Ulcerative colitis", [{"Term": "inflammatory response"}]
+    deps["enrichr"].run.assert_called_once_with(
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
     )
+    deps["rank_go_terms_resilient"].assert_called_once()
     assert created[0][:6] == (
         "user-1", "project-1", "rs16940186", "Ulcerative colitis", "IRF8",
         [{"id": "GO:1", "name": "response", "genes": ["STAT1"]}],
@@ -86,10 +89,9 @@ def test_happy_path_runs_enrichr_filters_go_and_saves(
                     "enrich_id": "enrich-1",
                     "child_enrich_ids": [],
                     "skipped_enrich_ids": [],
+                    "enrichment_warnings": [],
                     "status": "pending",
-                    "enrichment_effective_mode": "non_tissue",
-                    "non_tissue_specific_fallback": False,
-                    "attempted_ldsc_cell_type": None,
+                    "attempted_ldsc_cell_type": "Liver",
                 },
             ),
         ]
@@ -146,18 +148,114 @@ def test_graph_without_direct_causal_gene_is_skipped_while_valid_graph_proceeds(
     assert final_patch["skipped_enrich_ids"] == ["enrich-1"]
 
 
-def test_empty_enrichr_result_saves_graph_with_empty_go_terms(
+def _no_enrichment(gene="IRF8", reason="no_coexpressed_genes"):
+    return NoEnrichmentFoundError(
+        f"No genes are significantly co-expressed with {gene} in 'Liver'.",
+        reason=reason,
+        gene=gene,
+        tissue="Liver",
+    )
+
+
+def test_no_enrichment_for_one_graph_is_skipped_with_reason_while_other_proceeds(
     monkeypatch, immediate_task_factory, sample_graph
 ):
+    second = deepcopy(sample_graph)
+    second["nodes"][0]["id"] = "ENSG2"
+    second["edges"][0]["target"] = "ENSG2"
     deps, created = _configure_flow(
-        monkeypatch, immediate_task_factory, [sample_graph], enrich_table=[]
+        monkeypatch, immediate_task_factory, [sample_graph, second]
     )
+    deps["enrichr"].run.side_effect = [
+        _no_enrichment(),
+        [{"Term": "ok"}],
+    ]
+
     result = flow_module.enrichment_flow.fn(
         "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
     )
-    assert result == ({"id": "enrich-1"}, 200)
-    assert created[0][5] == []
-    deps["llm"].get_relevant_go.assert_not_called()
+
+    assert result == ({"id": "enrich-2"}, 200)
+    skipped, successful = created
+    assert skipped[8:] == (
+        "skipped", "No genes are significantly co-expressed with IRF8 in 'Liver'."
+    )
+    assert successful[4] == "GENE2"
+    final_patch = deps["hypotheses"].update_hypothesis.call_args.args[1]
+    assert final_patch["enrichment_warnings"] == [{
+        "code": "causal_graphs_skipped",
+        "message": (
+            "1 of 2 causal graphs for rs16940186 were skipped and have no "
+            "hypothesis. See 'skipped' for why."
+        ),
+        "skipped": [{
+            "graph_index": 0,
+            "causal_gene": "IRF8",
+            "reason": "no_coexpressed_genes",
+            "message": "No genes are significantly co-expressed with IRF8 in 'Liver'.",
+        }],
+    }]
+
+
+def test_no_enrichment_for_every_graph_fails_with_clear_reason(
+    monkeypatch, immediate_task_factory, sample_graph
+):
+    second = deepcopy(sample_graph)
+    second["prob"]["value"] = 0.1
+    deps, created = _configure_flow(
+        monkeypatch, immediate_task_factory, [sample_graph, second]
+    )
+    deps["enrichr"].run.side_effect = _no_enrichment(reason="no_significant_go_terms")
+
+    with pytest.raises(NoEnrichmentFoundError, match="No enrichment results were found"):
+        flow_module.enrichment_flow.fn(
+            "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+        )
+
+    fail_call = deps["hypotheses"].update_hypothesis.call_args
+    assert fail_call.args[1]["status"] == "failed"
+    assert fail_call.args[1]["error_detail"] == {
+        "error_type": "no_enrichment_found",
+        "reason": "no_significant_go_terms",
+        "message": fail_call.args[1]["error"],
+        "tissue": "Liver",
+        "variant": "rs16940186",
+    }
+
+
+def test_no_tissue_available_fails_before_running_enrichment(
+    monkeypatch, immediate_task_factory, sample_graph
+):
+    deps, created = _configure_flow(monkeypatch, immediate_task_factory, [sample_graph])
+    deps["gene_expression"].get_tissue_selection.return_value = None
+    deps["gene_expression"].get_ldsc_results_for_project.return_value = []
+
+    with pytest.raises(NoEnrichmentFoundError, match="No tissue is set"):
+        flow_module.enrichment_flow.fn(
+            "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+        )
+
+    deps["enrichr"].run.assert_not_called()
+
+
+def test_enrichr_failure_outranks_no_enrichment_when_nothing_completes(
+    monkeypatch, immediate_task_factory, sample_graph
+):
+    second = deepcopy(sample_graph)
+    second["nodes"][0]["id"] = "ENSG2"
+    second["edges"][0]["target"] = "ENSG2"
+    deps, _ = _configure_flow(
+        monkeypatch, immediate_task_factory, [sample_graph, second]
+    )
+    deps["enrichr"].run.side_effect = [
+        _no_enrichment(),
+        EnrichrAPIUnavailableError("Enrichr down"),
+    ]
+
+    with pytest.raises(EnrichrAPIUnavailableError, match="or had no enrichment results"):
+        flow_module.enrichment_flow.fn(
+            "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
+        )
 
 
 def test_enrichr_failure_for_one_graph_does_not_abort_other_graphs(
@@ -171,7 +269,7 @@ def test_enrichr_failure_for_one_graph_does_not_abort_other_graphs(
     )
     deps["enrichr"].run.side_effect = [
         EnrichrAPIUnavailableError("Enrichr unavailable"),
-        [{"Term": "ok"}],
+        ([{"Term": "ok"}], [{"Term": "ok"}]),
     ]
 
     result = flow_module.enrichment_flow.fn(
@@ -214,24 +312,6 @@ def test_tissue_selection_uses_coexpression_background(
     deps["enrichr"].run.assert_called_once_with(
         "IRF8", tissue_name="Liver", coexpression_data="coexpression"
     )
-
-
-def test_tissue_empty_result_falls_back_to_standard_enrichment(
-    monkeypatch, immediate_task_factory, sample_graph
-):
-    deps, created = _configure_flow(monkeypatch, immediate_task_factory, [sample_graph])
-    deps["gene_expression"].get_tissue_selection.return_value = {"tissue_name": "Liver"}
-    deps["enrichr"].run.side_effect = [[], [{"Term": "fallback"}]]
-
-    flow_module.enrichment_flow.fn(
-        "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
-    )
-
-    assert deps["enrichr"].run.call_args_list == [
-        call("IRF8", tissue_name="Liver", coexpression_data="coexpression"),
-        call("IRF8"),
-    ]
-    assert created[0][6]["non_tissue_specific_fallback"] is True
 
 
 def test_zero_graphs_after_retry_raises_no_evidence_error(
@@ -363,7 +443,9 @@ def test_shared_causal_gene_reuses_cached_enrichment(
     )
 
     assert result == ({"id": "enrich-1"}, 200)
-    deps["enrichr"].run.assert_called_once_with("IRF8")
+    deps["enrichr"].run.assert_called_once_with(
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+    )
     assert len(created) == 2
     assert created[0][5] == created[1][5]
 
