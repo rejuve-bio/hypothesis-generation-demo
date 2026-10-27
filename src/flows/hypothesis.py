@@ -157,8 +157,9 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
             node["name"] = enrichr.to_symbol(node.get("name") or node_id)
 
     if prolog_gene_ids:
-        gene_entities = [f"gene({gene_id})" for gene_id in prolog_gene_ids]
-        query = f"maplist(gene_name, {gene_entities}, X)".replace("'", "")
+        # quote ids so prolog doesn't interpret them as vars or atoms
+        gene_entities = [f"gene('{gene_id}')" for gene_id in prolog_gene_ids]
+        query = f"maplist(gene_name, [{', '.join(gene_entities)}], X)"
         gene_lookup_failed = False
         try:
             prolog_gene_names = execute_gene_query.submit(query, hypothesis_id).result()

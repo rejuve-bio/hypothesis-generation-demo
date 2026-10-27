@@ -1,5 +1,5 @@
 settings:
-  prolog_base: /data1/biocypher-kg/output/hsa/prolog_out_v4
+  prolog_base: /mnt/prolog_out_v3
 
 kbs:
   # === Gencode ===
@@ -7,7 +7,7 @@ kbs:
     path: gencode/gene
     nodes: true
     edges: false
-    loaded: true
+    loaded: false
 
   gencode_transcript:
     path: gencode/transcript
@@ -32,7 +32,7 @@ kbs:
     path: refseq
     nodes: false
     edges: true
-    loaded: true
+    loaded: false
 
   # === Pathways / Ontologies ===
   pathway:
@@ -100,7 +100,7 @@ kbs:
     path: tflink
     nodes: false
     edges: true
-    loaded: true
+    loaded: false
 
   hocomoco:
     path: hocomoco
@@ -160,43 +160,43 @@ kbs:
     path: catlas_ccre/enhancer
     nodes: true
     edges: false
-    loaded: true
+    loaded: false
 
   catlas_ccre_enhancer_clo:
     path: catlas_ccre/enhancer/clo
     nodes: false
     edges: true
-    loaded: true
+    loaded: false
 
   catlas_ccre_enhancer_uberon:
     path: catlas_ccre/enhancer/uberon
     nodes: false
     edges: true
-    loaded: true
+    loaded: false
 
   catlas_ccre_promoter:
     path: catlas_ccre/promoter
     nodes: true
     edges: false
-    loaded: true
+    loaded: false
 
   catlas_ccre_promoter_clo:
     path: catlas_ccre/promoter/clo
     nodes: false
     edges: true
-    loaded: true
+    loaded: false
 
   catlas_ccre_promoter_uberon:
     path: catlas_ccre/promoter/uberon
     nodes: false
     edges: true
-    loaded: true
+    loaded: false
 
   catlas_ccre_abc_enhancer:
     path: catlas_ccre/abc/enhancer
     nodes: false
     edges: true
-    loaded: true
+    loaded: false
 
   catlas_ccre_abc_promoter:
     path: catlas_ccre/abc/promoter
@@ -245,7 +245,7 @@ kbs:
     path: gtex/eqtl
     nodes: false
     edges: true
-    loaded: true
+    loaded: false
 
   gtex_expression:
     path: gtex/expression
@@ -257,7 +257,7 @@ kbs:
     path: bgee
     nodes: false
     edges: true
-    loaded: true
+    loaded: false
 
   coxpressdb:
     path: coxpressdb
@@ -276,7 +276,7 @@ kbs:
     path: dbsnp
     nodes: true
     edges: false
-    loaded: true
+    loaded: false
 
   dbvar_variant:
     path: dbvar
@@ -300,7 +300,7 @@ kbs:
     path: tadmap
     nodes: true
     edges: true
-    loaded: true
+    loaded: false
 
   topld_eur:
     path: top_ld/EUR

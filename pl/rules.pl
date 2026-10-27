@@ -52,9 +52,11 @@ regulatory_effect_2(S, G, Enh) :-
     in_regulatory_region(S, Enh),
     activity_by_contact(Enh, G, _Score).
 
-regulatory_effect_1(S, G, Enh) :-
-    in_regulatory_region(S, Enh),
-    associated_with(Enh, G).
+regulatory_effect_1(S, G, enhancer(EnhId)) :-
+    in_regulatory_region(S, enhancer(EnhId)),
+    atomic_list_concat([EnhId, '_grch38'], EnhGrch38),
+    associated_with(enhancer(EnhGrch38), RawGene),
+    upcase_gene(RawGene, G).
 
 eqtl_association(Variant, Gene) :-
     hideme(qtl_association(eqtl, Variant, Gene)).

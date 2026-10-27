@@ -14,6 +14,18 @@
 open_db :- 
   ( db_opened ->
       true
+  ; getenv('PGOT_HOST', Host) ->
+      getenv('PGOT_PORT', Port),
+      getenv('PGOT_DB', DB),
+      getenv('PGOT_USER', User),
+      format(atom(ConnStr),
+             'Driver={PostgreSQL Unicode};Server=~w;Port=~w;Database=~w;Uid=~w;',
+             [Host, Port, DB, User]),
+      odbc_driver_connect(ConnStr, _,
+                          [alias(opnt),
+                           open(once),
+                           encoding(utf8)]),
+      assertz(db_opened)
   ; odbc_connect('PGOT', _, 
                     [alias(opnt), 
                      open(once),
@@ -47,7 +59,7 @@ candidate_genes(S, Genes) :-
     union(InTadGenes, ClosestGenes, Genes).
   %maplist(gene_name, InTadGenes, Genes).
 
-gene_id(Name, gene(Id)) :-
+gene_id(Name, Id) :-
     open_db,
     upcase_atom(Name, UName),
     sql_quote(UName, QName),
@@ -99,6 +111,10 @@ variant_locus(RsId, Chr, Pos, Ref, Alt) :-
            WHERE rsids @> ARRAY[~w]::varchar[]
           LIMIT 1', [QRsId]),
         db_query(SQL, row(Chr, Pos, Ref, Alt)).
+
+variant_id(snp(RsId), Id) :-
+    variant_locus(RsId, Chr, Pos, Ref, Alt),
+    format(atom(Id), 'chr~w:~w-~w-~w>~w', [Chr, Pos, Pos, Ref, Alt]).
 
 % Closest gene to a variant (by distance to gene body)
 closest_gene(snp(RsId), gene(GeneId)) :-

@@ -71,8 +71,12 @@ handle_query(Request) :-
                 findall(X, gene_id(Name, X), Results)
             ;   Query = gene_name(Gene, X) ->
                 findall(X, gene_name(Gene, X), Results)
+            ;   Query = maplist(gene_name, Genes, X) ->
+                (maplist(gene_name, Genes, Results) -> true ; Results = [])
             ;   Query = variant_id(Variant, X) ->
                 findall(X, variant_id(Variant, X), Results)
+            ;   Query = maplist(variant_id, Variants, X) ->
+                (maplist(variant_id, Variants, Results) -> true ; Results = [])
             ;   Query = term_name(Term, Name) ->
                 findall(Term, term_name(Term, Name), RawResults),
                 % Extract IDs from compound terms like efo(ID)
