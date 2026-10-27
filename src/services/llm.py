@@ -4,7 +4,7 @@ from typing import List
 import scipy.spatial
 
 from pydantic import BaseModel
-from llama_index.core.llms import ChatMessage
+from llama_index.core.llms import ChatMessage, ChatResponse
 from llama_index.llms.openai import OpenAI
 from llama_index.llms.anthropic import Anthropic
 import openai
@@ -34,13 +34,33 @@ class GoTerm(BaseModel):
 class Response(BaseModel):
     terms: List[GoTerm]
 
+class OpenAICompatibleLLM:
+    """Chat client for any OpenAI-compatible server (e.g. local vLLM Gemma), configured via LLM_BASE_URL / LLM_API_KEY / LLM_MODEL."""
+
+    def __init__(self, base_url, api_key, model, temperature=0.0):
+        self.client = openai.OpenAI(base_url=base_url, api_key=api_key or "none")
+        self.model = model
+        self.temperature = temperature
+
+    def chat(self, messages):
+        response = self.client.chat.completions.create(
+            model=self.model,
+            temperature=self.temperature,
+            messages=[{"role": str(getattr(m.role, "value", m.role)), "content": m.content} for m in messages],
+            response_format={"type": "json_object"},  # all prompts in this class expect JSON
+        )
+        return ChatResponse(message=ChatMessage(role="assistant", content=response.choices[0].message.content))
+
 class LLM:
 
     def __init__(self, llm="gpt4", temperature=0.0):
 
-        
+
         self.temperature = temperature
-        if llm == "gpt4":
+        if os.getenv("LLM_BASE_URL"):
+            self.llm = OpenAICompatibleLLM(os.getenv("LLM_BASE_URL"), os.getenv("LLM_API_KEY"),
+                                           os.getenv("LLM_MODEL", "gemma4"), temperature)
+        elif llm == "gpt4":
             #Check that the openai key is available
             try:
                 openai_api_key = os.getenv("OPENAI_API_KEY")
