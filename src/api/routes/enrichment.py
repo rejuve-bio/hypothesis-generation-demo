@@ -15,6 +15,7 @@ from src.api.dependencies import (
     get_gene_expression_handler,
     get_hypothesis_handler,
     get_project_handler,
+    parse_thread_id,
 )
 from src.api.auth import get_current_user_id
 from src.api.schemas import (
@@ -106,6 +107,7 @@ async def post_enrich(
     variant: str | None = Query(None),
     project_id: str | None = Query(None),
     tissue_name: str | None = Query(None),
+    thread_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     projects: ProjectHandler = Depends(get_project_handler),
     hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
@@ -122,6 +124,7 @@ async def post_enrich(
     variant = variant or payload.get("variant")
     project_id = project_id or payload.get("project_id")
     seed = int(payload.get("seed", 42))
+    thread_id = parse_thread_id(thread_id or payload.get("thread_id"))
 
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
@@ -183,6 +186,7 @@ async def post_enrich(
     )
 
     if existing_hypothesis:
+        hypotheses.tag_hypothesis_thread(existing_hypothesis["id"], thread_id)
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
@@ -212,6 +216,8 @@ async def post_enrich(
         "created_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds") + "Z",
         "task_history": [],
     }
+    if thread_id:
+        hypothesis_data["thread_ids"] = [thread_id]
 
     hypotheses.create_hypothesis(current_user_id, hypothesis_data)
 

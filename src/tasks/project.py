@@ -330,6 +330,7 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
             "phenotype": project.get("phenotype", ""),
             "gwas_file_id": project["gwas_file_id"],
             "created_at": project.get("created_at"),
+            "thread_id": project.get("thread_id"),
             
             # Summary counts at top level
             "total_credible_sets_count": total_credible_sets_count,

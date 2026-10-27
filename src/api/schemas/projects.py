@@ -47,6 +47,7 @@ class AnalysisPipelineStartResponse(BaseModel):
     project_id: str
     file_id: str
     message: str
+    thread_id: str | None = None
     sample_size: int | None = None
     sample_size_source: str | None = None
     sample_size_message: str | None = None

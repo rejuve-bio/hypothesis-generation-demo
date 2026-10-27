@@ -11,6 +11,14 @@ class HypothesisHandler(BaseHandler):
         super().__init__(uri, db_name)
         self.hypothesis_collection = self.db['hypotheses']
         self.enrich_collection = self.db['enrich']
+        self._create_indexes()
+
+    def _create_indexes(self):
+        """Create indexes for chat-thread lookups"""
+        try:
+            self.hypothesis_collection.create_index([('user_id', 1), ('thread_ids', 1)])
+        except Exception as e:
+            logger.warning(f"Could not create thread indexes (may already exist): {e}")
     
     def create_hypothesis(self, user_id, data):
         """Create a new hypothesis"""
@@ -19,12 +27,14 @@ class HypothesisHandler(BaseHandler):
         created_id = data.get('id', str(result.inserted_id))
         return {'message': 'Hypothesis created', 'id': created_id}, 201
 
-    def get_hypotheses(self, user_id=None, hypothesis_id=None):
+    def get_hypotheses(self, user_id=None, hypothesis_id=None, thread_id=None):
         """Get hypotheses"""
         query = {}
         
         if user_id:
             query['user_id'] = user_id
+        if thread_id:
+            query['thread_ids'] = thread_id
         if hypothesis_id:
             query['id'] = hypothesis_id
             hypothesis = self.hypothesis_collection.find_one(query)
@@ -66,6 +76,15 @@ class HypothesisHandler(BaseHandler):
             hypothesis['_id'] = str(hypothesis['_id'])
 
         return hypothesis
+
+    def tag_hypothesis_thread(self, hypothesis_id, thread_id):
+        """Add a chat thread to a hypothesis; threads accumulate since hypotheses are reused across chats."""
+        if not thread_id:
+            return
+        self.hypothesis_collection.update_one(
+            {'id': hypothesis_id},
+            {'$addToSet': {'thread_ids': thread_id}}
+        )
 
     def get_hypothesis_by_enrich(self, user_id, enrich_id):
         """Get hypothesis by enrichment ID"""
@@ -112,7 +131,7 @@ class HypothesisHandler(BaseHandler):
                 "status": "pending",
             }
         )
-        for field in ("summary", "graph", "go_id"):
+        for field in ("summary", "graph", "go_id", "thread_ids"):
             new_doc.pop(field, None)
         self.hypothesis_collection.insert_one(new_doc)
         logger.info(

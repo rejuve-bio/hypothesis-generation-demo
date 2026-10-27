@@ -38,7 +38,7 @@ from src.db import (
 )
 from src.tasks.project import count_gwas_records, get_project_with_full_data
 from src.api.auth import get_current_user_id, get_current_user_email
-from src.api.dependencies import get_demo_template_handler
+from src.api.dependencies import get_demo_template_handler, parse_thread_id
 from src.api.schemas import (
     AnalysisPipelineStartResponse,
     BulkDeleteProjectsOkResponse,
@@ -75,6 +75,7 @@ router = APIRouter(tags=["projects"])
 )
 async def get_projects(
     id: str | None = Query(None),
+    thread_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     projects: ProjectHandler = Depends(get_project_handler),
     analysis: AnalysisHandler = Depends(get_analysis_handler),
@@ -114,7 +115,8 @@ async def get_projects(
             response_data = serialize_datetime_fields(response_data)
         return JSONResponse(content=response_data, status_code=status_code)
 
-    raw_projects = projects.get_projects(current_user_id)
+    thread_id = parse_thread_id(thread_id)
+    raw_projects = projects.get_projects(current_user_id, thread_id=thread_id)
     enhanced_projects: list[dict] = []
 
     for project in raw_projects:
@@ -123,6 +125,7 @@ async def get_projects(
             "name": project["name"],
             "phenotype": project.get("phenotype", ""),
             "created_at": project.get("created_at"),
+            "thread_id": project.get("thread_id"),
         }
 
         file_metadata = files.get_file_metadata(current_user_id, project["gwas_file_id"])
@@ -181,6 +184,10 @@ async def get_projects(
             demo_templates=demo_templates,
         )
         enhanced_projects.append(enhanced)
+
+    if thread_id:
+        # Demo templates belong to no thread; forks used in it are already listed.
+        return ProjectsListResponse(projects=serialize_datetime_fields(enhanced_projects))
 
     existing_ids = {project["id"] for project in enhanced_projects}
     demo_entries = build_demo_template_summaries(
@@ -296,6 +303,7 @@ async def post_analysis_pipeline(
     sample_size: str | None = Form(None),
     phenotype: str | None = Form(None),
     ref_genome: str | None = Form(None),
+    thread_id: str | None = Form(None),
     current_user_id: str = Depends(get_current_user_id),
     projects: ProjectHandler = Depends(get_project_handler),
     files: FileHandler = Depends(get_file_handler),
@@ -306,6 +314,7 @@ async def post_analysis_pipeline(
 ):
     try:
         form = await request.form()
+        thread_id = parse_thread_id(thread_id)
 
         def preserve_explicit_empty(name: str, value):
             if name in form and form.get(name) == "":
@@ -655,6 +664,7 @@ async def post_analysis_pipeline(
             ref_genome=ref_genome,
             analysis_parameters=analysis_parameters,
             user_email=current_user_email,
+            thread_id=thread_id,
         )
 
         metadata_dir = os.path.join("data", "metadata", str(current_user_id))
@@ -719,6 +729,7 @@ async def post_analysis_pipeline(
             project_id=project_id,
             file_id=file_metadata_id,
             message="Analysis pipeline started successfully",
+            thread_id=thread_id,
             **sample_size_resolution.to_api_dict(),
         )
 
