@@ -274,5 +274,5 @@ tests/fixtures/*
 #images
 src/static/*
 
-# Docs
-docs/
+# Derived cache of GO term gene counts; regenerated from the Enrichr library on demand.
+data/go_term_sizes.json

@@ -16,6 +16,7 @@ from src.api.dependencies import (
     get_hypothesis_handler,
     get_llm,
     get_project_handler,
+    parse_thread_id,
 )
 from src.api.auth import get_current_user_id
 from src.api.schemas import (
@@ -55,6 +56,13 @@ router = APIRouter(tags=["hypothesis"])
 _HYPOTHESIS_FLOW_WAIT_TIMEOUT = float(os.getenv("HYPOTHESIS_FLOW_WAIT_TIMEOUT", "120"))
 
 
+def _hypothesis_warnings(doc: dict | None) -> list:
+    """Enrichment warnings followed by hypothesis warnings."""
+    if not doc:
+        return []
+    return [*doc.get("enrichment_warnings", []), *doc.get("warnings", [])]
+
+
 def _response_from_hypothesis_document(
     hypothesis_id: str,
     doc: dict | None,
@@ -68,7 +76,7 @@ def _response_from_hypothesis_document(
         "hypothesis_id": hypothesis_id,
         "summary": doc.get("summary") if doc else None,
         "graph": doc.get("graph") if doc else None,
-        "warnings": doc.get("warnings", []) if doc else [],
+        "warnings": _hypothesis_warnings(doc),
     }
     if enrich_id is not None:
         response["enrich_id"] = enrich_id
@@ -106,6 +114,7 @@ def _mark_hypothesis_failed(
 )
 async def get_hypothesis(
     id: str | None = Query(None),
+    thread_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
     enrichment: EnrichmentHandler = Depends(get_enrichment_handler),
@@ -161,7 +170,7 @@ async def get_hypothesis(
                 "result": enrich_data,
                 "summary": hypothesis.get("summary"),
                 "graph": hypothesis.get("graph"),
-                "warnings": hypothesis.get("warnings", []),
+                "warnings": _hypothesis_warnings(hypothesis),
             }
 
             if "tissue_rankings" in hypothesis:
@@ -206,6 +215,7 @@ async def get_hypothesis(
             "task_history": public_task_history_entries(last_pending_task),
             "probability": confidence,
             "hypotheses": related_hypotheses,
+            "warnings": _hypothesis_warnings(hypothesis),
         }
 
         if "tissue_rankings" in hypothesis:
@@ -258,8 +268,10 @@ async def get_hypothesis(
         status_data["tissue_selected"] = selected_tissue
         return FlexibleDict.model_validate(serialize_datetime_fields(status_data))
 
-    # List all hypotheses for the user
-    all_hypotheses = hypotheses.get_hypotheses(user_id=current_user_id)
+    # List all hypotheses for the user, optionally limited to one chat thread
+    all_hypotheses = hypotheses.get_hypotheses(
+        user_id=current_user_id, thread_id=parse_thread_id(thread_id)
+    )
     formatted: list[dict] = []
     for hypothesis in all_hypotheses:
         pending_tasks = [
@@ -277,7 +289,13 @@ async def get_hypothesis(
             "status": normalize_status_responses(hypothesis.get("status")),
             "task_history": public_task_history_entries(last_pending_task),
         }
-        for field in ("enrich_id", "biological_context", "causal_gene"):
+        for field in (
+            "enrich_id",
+            "project_id",
+            "thread_ids",
+            "biological_context",
+            "causal_gene",
+        ):
             if field in hypothesis and hypothesis.get(field) is not None:
                 entry[field] = hypothesis[field]
 
@@ -295,6 +313,7 @@ async def get_hypothesis(
 async def post_hypothesis(
     id: str | None = Query(None, alias="id"),
     go: str | None = Query(None),
+    thread_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
     enrichment: EnrichmentHandler = Depends(get_enrichment_handler),
@@ -305,6 +324,7 @@ async def post_hypothesis(
     """Generate hypothesis synchronously and return graph + summary immediately."""
     enrich_id = id
     go_id = go
+    thread_id = parse_thread_id(thread_id)
 
     if not go_id:
         raise HTTPException(status_code=400, detail="go (GO term ID) is required")
@@ -324,6 +344,7 @@ async def post_hypothesis(
         )
 
     write_ctx = resolved
+    hypotheses.tag_hypothesis_thread(write_ctx.hypothesis_id, thread_id)
 
     def run_hypothesis_deployment_blocking():
         return invoke_hypothesis_deployment(

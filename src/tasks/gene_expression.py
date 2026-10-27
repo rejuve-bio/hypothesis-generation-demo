@@ -899,7 +899,7 @@ def get_coexpression_matrix_for_tissue(gene, cell_type, k=500, batch_size=1000):
 
     if gene not in context.all_genes_list:
         logger.warning(f"Gene of interest '{gene}' not found in dataset")
-        return [], [], context.all_genes_list
+        return [], [], context.genes
 
     if gene in context.gene_index:
         gene_col = context.gene_index[gene]
@@ -916,7 +916,7 @@ def get_coexpression_matrix_for_tissue(gene, cell_type, k=500, batch_size=1000):
             logger.warning(
                 f"Gene '{gene}' was in feature list but row metadata missing; skipping coexpression"
             )
-            return [], [], context.all_genes_list
+            return [], [], context.genes
         other_genes = context.genes
         other_matrix = context.matrix
 
@@ -932,7 +932,7 @@ def get_coexpression_matrix_for_tissue(gene, cell_type, k=500, batch_size=1000):
             f"Too few cells with non-zero expression for gene '{gene}' in "
             f"ldsc cell type '{cell_type}'"
         )
-        return [], [], context.all_genes_list
+        return [], [], context.genes
 
     gene_expr_sub = gene_expr[nonzero_mask]
     cell_sums_sub = context.cell_sums[nonzero_mask]
@@ -955,7 +955,7 @@ def get_coexpression_matrix_for_tissue(gene, cell_type, k=500, batch_size=1000):
 
     if np.sum(valid_genes) == 0:
         logger.warning("No genes with sufficient expression for correlation")
-        return [], [], context.all_genes_list
+        return [], [], context.genes
 
     all_expr_filtered = all_expr[:, valid_genes]
     other_genes_filtered = other_genes[valid_genes]
@@ -1003,7 +1003,10 @@ def get_coexpression_matrix_for_tissue(gene, cell_type, k=500, batch_size=1000):
     top_positive = sorted_correlations[:k]
     top_negative = sorted_correlations[-k:]
 
-    return top_positive, top_negative, context.all_genes_list
+    # Third element is the enrichment background: the tissue-filtered set,
+    # not all_genes_list (the full Census feature table, ordered by Ensembl
+    # id, so a slice of it is an alphabetical sample of the genome).
+    return top_positive, top_negative, context.genes
 
 @task(log_prints=True)
 def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_id):
