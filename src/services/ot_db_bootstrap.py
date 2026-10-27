@@ -18,7 +18,21 @@ Both load paths build into the `ot_staging` schema and are swapped into
 never see a partial table and the marker always describes data that exists.
 A crashed run just leaves `ot_staging` behind, which the next run drops.
 
-Snapshots are published manually with scripts/pg_releases.py (publish_snapshot).
+Configuration (.env):
+  OT_RELEASE                   required; pinned release, e.g. 25.09 ('latest' is
+                               rejected). Must include FinnGen R12 studies.
+  OT_DB_BOOTSTRAP              auto (default) | minio-only | ebi-only | skip (CI)
+  OT_DB_SNAPSHOT_MINIO_PREFIX  default pg-releases/opentargets
+  OT_DB_SNAPSHOT_CACHE_DIR     local snapshot download dir, default data/pg_releases
+
+Operations:
+  - After a server loads a new release from EBI, publish it so other
+    deployments restore it from MinIO instead (publish_snapshot):
+        uv run python scripts/pg_releases.py publish   # --force to overwrite
+        uv run python scripts/pg_releases.py list
+  - To force a reload, clear the marker and re-run the bootstrap:
+        DELETE FROM ot_load_state;   -- in credible-sets-postgres
+        docker compose up ot-db-bootstrap
 """
 
 import datetime as _dt
