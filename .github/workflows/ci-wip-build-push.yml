@@ -1,0 +1,190 @@
+name: CI - Build and Push (wip)
+
+on:
+  push:
+    branches: [ wip ]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [ wip ]
+
+permissions:
+  contents: read
+
+env:
+  DOCKER_HUB_ORG: rejuvebio
+
+jobs:
+  code-quality-analysis:
+    runs-on: [self-hosted, dev-runner]
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Run pylint
+      run: |
+        python -m pip install --upgrade pip pylint
+        pylint . --output-format=json > pylint-report.json || true
+
+    - name: SonarQube Scan
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+      uses: sonarsource/sonarqube-scan-action@master
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: https://dev.rejuve.bio:5058
+      with:
+        args: >
+          -Dsonar.projectKey=hypothesis-generation-demo-wip
+          -Dsonar.sources=.
+          -Dsonar.host.url=https://dev.rejuve.bio:5058
+          -Dsonar.token=${{ secrets.SONAR_TOKEN }}
+          -Dsonar.python.pylint.reportPaths=pylint-report.json
+          -Dsonar.exclusions=**/venv/**,**/__pycache__/**,**/data/**,**/pl/**,**/prolog_out_ci/**,**/external_data_ci/**,.github/**
+
+    - name: SonarQube Quality Gate
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+      uses: sonarsource/sonarqube-quality-gate-action@master
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      continue-on-error: true
+
+  build-and-test-all:
+    needs: [code-quality-analysis]
+    runs-on: [self-hosted, dev-runner]
+    env:
+      COMPOSE: docker compose -p hgd-ci-wip --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.ci.override.yml
+    steps:
+    - name: Pre-cleanup
+      run: |
+        docker run --rm -v "$GITHUB_WORKSPACE:/workspace" alpine:latest sh -c "chmod -R 777 /workspace" 2>/dev/null || true
+        [ -f .env ] || touch .env
+        [ -f docker/docker-compose.yml ] && $COMPOSE down -v --remove-orphans 2>/dev/null || true
+
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+
+    - name: TruffleHog Secret Scan
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.repository.default_branch }}
+        head: HEAD
+        extra_args: --only-verified
+
+    - name: Is merge commit
+      id: check-merge
+      run: |
+        if [ "${{ github.event_name }}" == "push" ] && [ $(git rev-list --parents -n 1 HEAD | wc -w) -gt 2 ]; then
+          echo "is_merge=true" >> $GITHUB_OUTPUT
+        else
+          echo "is_merge=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Login to Docker Hub
+      if: steps.check-merge.outputs.is_merge == 'true'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+    - name: Prepare CI env
+      run: |
+        cp .env.ci.example .env
+        cp config/odbc.ini.example config/odbc.ini
+        mkdir -p prolog_out_ci external_data_ci data
+
+    - name: Build and validate services
+      id: validate
+      run: |
+        set -e
+        $COMPOSE build
+        $COMPOSE up -d
+        sleep 90
+        FAILED=""
+        for s in $($COMPOSE ps --all --services); do
+          STATE=$($COMPOSE ps --all --format '{{.Service}} {{.State}}' | awk -v s="$s" '$1==s{print $2}')
+          if [ "$STATE" = "running" ]; then
+            echo "[OK] $s"
+          else
+            echo "[FAIL] $s ($STATE)"; $COMPOSE logs "$s"; FAILED="$FAILED $s"
+          fi
+        done
+        [ -z "$FAILED" ] || { echo "Failed:$FAILED"; exit 1; }
+
+    - name: Pushable services
+      id: services
+      run: |
+        LIST=$($COMPOSE config --format json --no-interpolate | python3 -c "
+        import sys, json
+        c = json.load(sys.stdin)
+        print(' '.join(sorted(n for n, s in c['services'].items() if 'build' in s and not s.get('profiles'))))
+        ")
+        echo "list=$LIST" >> $GITHUB_OUTPUT
+
+    - name: Tag and push (wip, wip-<sha>, wip-latest)
+      if: steps.check-merge.outputs.is_merge == 'true'
+      run: |
+        SHA=$(echo ${{ github.sha }} | cut -c1-7)
+        for s in ${{ steps.services.outputs.list }}; do
+          ID=$($COMPOSE images -q $s); REPO="${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-${s}"
+          for T in wip wip-$SHA wip-latest; do docker tag $ID $REPO:$T && docker push $REPO:$T; done
+        done
+
+    - name: Remove old wip-<sha> tags (keep 2)
+      if: steps.check-merge.outputs.is_merge == 'true'
+      run: |
+        for s in ${{ steps.services.outputs.list }}; do
+          REPO="${{ env.DOCKER_HUB_ORG }}/hypothesis-generation-${s}"
+          TAGS=$(curl -s -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+            "https://hub.docker.com/v2/repositories/${REPO}/tags?page_size=100" | python3 -c "
+        import sys, json
+        t = [x for x in json.load(sys.stdin).get('results', []) if x['name'].startswith('wip-') and len(x['name']) == 11]
+        for x in sorted(t, key=lambda x: x['last_updated'])[:-2]: print(x['name'])
+        ")
+          for T in $TAGS; do
+            curl -s -X DELETE -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" "https://hub.docker.com/v2/repositories/${REPO}/tags/${T}/"
+          done
+        done
+
+    - name: Cleanup
+      if: always()
+      run: |
+        $COMPOSE down -v --remove-orphans 2>/dev/null || true
+        docker run --rm -v "$GITHUB_WORKSPACE:/workspace" alpine:latest sh -c "chmod -R 777 /workspace" || true
+        rm -f .env config/odbc.ini
+        docker system prune -f
+
+    - name: Trigger CD (deploy-wip)
+      if: steps.check-merge.outputs.is_merge == 'true'
+      run: |
+        SHA=$(echo ${{ github.sha }} | cut -c1-7)
+        curl -sfL -X POST -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/${{ github.repository }}/dispatches \
+          -d "{\"event_type\":\"deploy-wip\",\"client_payload\":{\"image_tag\":\"wip-${SHA}\"}}"
+
+  notify:
+    runs-on: [self-hosted, dev-runner]
+    needs: [build-and-test-all]
+    if: always() && github.event_name == 'push'
+    steps:
+    - uses: dawidd6/action-send-mail@4226df7daafa6fc901a43789c49bf7ab309066e7 # v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "CI wip ${{ needs.build-and-test-all.result }} - Hypothesis Generation"
+        to: ${{ secrets.RECIEVER_EMAIL }}
+        from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
+        body: |
+          CI wip: ${{ needs.build-and-test-all.result }}
+          Commit: ${{ github.sha }} (${{ github.actor }})
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
