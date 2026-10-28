@@ -175,6 +175,12 @@ class GoTerm(BaseModel):
 class Response(BaseModel):
     terms: List[GoTerm]
 
+class GraphSummary(BaseModel):
+    summary: str
+
+class ChatResponse(BaseModel):
+    response: str
+
 class LLM:
 
     def __init__(self, llm="gpt4", temperature=0.0):
@@ -629,47 +635,72 @@ class LLM:
         return subset_go
     
     def summarize_graph(self, graph):
-        system_prompt = f"""You are an expert in biology and genetics. You have been provided with a graph provides a hypothesis for the connection of a SNP to a phenotype in terms of genes and Go terms. 
-                   Your task is to summarize the graph in 150 words or less. Return your response in JSON format with the key 'summary'. Don't add any additional information to the response."""
-        
+        system_prompt = (
+            "You are an expert in biology and genetics. You have been provided with a graph "
+            "that provides a hypothesis for the connection of a SNP to a phenotype in terms "
+            "of genes and GO terms. Your task is to summarize the graph in 150 words or less. "
+            "Return your response in JSON format with the key 'summary'. Don't add any "
+            "additional information to the response."
+        )
         query = f"Graph: {graph}"
         messages = [
-                        ChatMessage(role="system", content=system_prompt),
-                        ChatMessage(role="user", content=query),
-                    ]
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+        ]
+        client = _make_go_llm_client()
+        llm_model = os.getenv("GO_LLM_MODEL", _DEFAULT_GO_LLM_MODEL)
 
-        response = self.llm.chat(messages).message.content
-        print(f"LLM Response: {response}")
+        response = client.chat.completions.create(
+            model=llm_model,
+            temperature=self.temperature,
+            messages=messages,
+        )
+        raw = _strip_json_fence(response.choices[0].message.content or "")
         try:
-            response = json.loads(response)
-            return response["summary"]
-        except:
-            response = self.llm.chat(messages).message.content #retry
-            response = json.loads(response)
-            return response["summary"]
+            return GraphSummary.model_validate_json(raw).summary
+        except Exception:
+            response = client.chat.completions.create(
+                model=llm_model,
+                temperature=self.temperature,
+                messages=messages,
+            )
+            raw = _strip_json_fence(response.choices[0].message.content or "")
+            return GraphSummary.model_validate_json(raw).summary
         
     
     def chat(self, query, graph):
         """
         Given a graph as a context, chat with the LLM
         """
-        
-        system_prompt = f"""You are an expert in biology and genetics. 
-        Use the provided graph, which describes a potential hypothesis as to why a SNP is causally related to a phenotype, as a context and answer the query. Your answer should be 100 words or less.
-        
-        Return your response in JSON format. JSON key should be `response`. Don't add any additional information to the response."""
-                     
+        system_prompt = (
+            "You are an expert in biology and genetics. "
+            "Use the provided graph, which describes a potential hypothesis as to why a SNP "
+            "is causally related to a phenotype, as a context and answer the query. Your answer "
+            "should be 100 words or less. "
+            "Return your response in JSON format. JSON key should be `response`. Don't add any "
+            "additional information to the response."
+        )
         query = f"Graph: {graph}\nQuery: {query}"
         messages = [
-                        ChatMessage(role="system", content=system_prompt),
-                        ChatMessage(role="user", content=query),
-                    ]
-        response = self.llm.chat(messages).message.content
-        print(f"LLM Response: {response}")
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+        ]
+        client = _make_go_llm_client()
+        llm_model = os.getenv("GO_LLM_MODEL", _DEFAULT_GO_LLM_MODEL)
+
+        response = client.chat.completions.create(
+            model=llm_model,
+            temperature=self.temperature,
+            messages=messages,
+        )
+        raw = _strip_json_fence(response.choices[0].message.content or "")
         try:
-            response = json.loads(response)
-            return response["response"]
-        except:
-            response = self.llm.chat(messages).message.content
-            response = json.loads(response)
-            return response["response"]
+            return ChatResponse.model_validate_json(raw).response
+        except Exception:
+            response = client.chat.completions.create(
+                model=llm_model,
+                temperature=self.temperature,
+                messages=messages,
+            )
+            raw = _strip_json_fence(response.choices[0].message.content or "")
+            return ChatResponse.model_validate_json(raw).response
