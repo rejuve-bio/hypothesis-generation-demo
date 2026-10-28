@@ -17,6 +17,7 @@ class EnrichPostBody(BaseModel):
     tissue_name: str | None = None
     thread_id: str | None = None
     seed: int = 42
+    p_value_threshold: float | None = None
 
     @field_validator("seed", mode="before")
     @classmethod

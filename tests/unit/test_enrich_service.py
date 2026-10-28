@@ -114,10 +114,10 @@ def test_no_significant_go_terms_raises_with_gene_count(monkeypatch):
     api = MagicMock()
     api.return_value.results = pd.DataFrame(
         {
-            "Gene_set": ["GO_Biological_Process_2023"],
-            "Term": ["some process (GO:1)"],
-            "Adjusted P-value": [0.4],
-            "Genes": ["GENE1;GENE2"],
+            "Gene_set": ["GO_Biological_Process_2023"] * 2,
+            "Term": ["some process (GO:1)", "other process (GO:2)"],
+            "Adjusted P-value": [0.4, 0.9],
+            "Genes": ["GENE1;GENE2", "GENE1"],
         }
     )
     monkeypatch.setattr(service.gp, "enrichr", api)
@@ -130,6 +130,27 @@ def test_no_significant_go_terms_raises_with_gene_count(monkeypatch):
 
     assert exc.value.reason == "no_significant_go_terms"
     assert "2 genes are co-expressed with GENE1 in 'Liver'" in str(exc.value)
+    assert "from 0.4 (most significant: 'some process') to 0.9" in str(exc.value)
+    assert "(least significant: 'other process')" in str(exc.value)
+    detail = exc.value.as_detail()
+    assert (detail["min_adjusted_p"], detail["max_adjusted_p"]) == (0.4, 0.9)
+
+def test_p_value_threshold_controls_which_go_terms_pass(monkeypatch):
+    enrich = _enrich()
+    enrich.get_coexpression_net = MagicMock(return_value=(["ENSG1"], ["ENSG1", "ENSG2"]))
+    raw = pd.DataFrame(
+        {
+            "Gene_set": ["s"],
+            "Term": ["some process (GO:1)"],
+            "Adjusted P-value": [0.08],
+            "Genes": ["GENE1;GENE2"],
+        }
+    )
+    monkeypatch.setattr(service.gp, "enrichr", MagicMock(return_value=MagicMock(results=raw)))
+
+    with pytest.raises(service.NoEnrichmentFoundError):
+        enrich.run("GENE1", tissue_name="Liver")
+    assert list(enrich.run("GENE1", tissue_name="Liver", p_value_threshold=0.1)["ID"]) == ["GO:1"]
 
 
 def test_no_significant_go_terms_message_reports_the_configured_floor(monkeypatch):

@@ -11,6 +11,14 @@ from src.db import (
 )
 from src.services.storage import create_minio_client_from_env
 
+
+def significance_floor(override: float | None = None) -> float:
+    """Max adjusted p-value for a GO term to count as a real enrichment hit."""
+    if override is not None:
+        return override
+    return float(os.getenv("GO_SIGNIFICANCE_MAX_P", "0.05"))
+
+
 class Config:
     """Centralized configuration for the application"""
     

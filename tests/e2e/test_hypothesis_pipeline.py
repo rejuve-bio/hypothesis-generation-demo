@@ -13,15 +13,9 @@ class InMemoryEnrichment:
     def __init__(self):
         self.documents = {}
 
-    def check_enrich(self, user_id, phenotype, variant):
-        return any(
-            doc["user_id"] == user_id
-            and doc["phenotype"] == phenotype
-            and doc["variant"] == variant
-            for doc in self.documents.values()
-        )
-
-    def get_enrich_by_phenotype_and_variant(self, phenotype, variant, user_id=None):
+    def get_enrich_by_phenotype_and_variant(
+        self, phenotype, variant, user_id=None, p_value_thresholds=None
+    ):
         return next(
             (
                 deepcopy(doc)
@@ -29,6 +23,10 @@ class InMemoryEnrichment:
                 if doc["phenotype"] == phenotype
                 and doc["variant"] == variant
                 and (user_id is None or doc["user_id"] == user_id)
+                and (
+                    p_value_thresholds is None
+                    or doc["causal_graph"].get("p_value_threshold") in p_value_thresholds
+                )
             ),
             None,
         )

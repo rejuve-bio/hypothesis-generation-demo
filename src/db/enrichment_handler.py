@@ -56,13 +56,17 @@ class EnrichmentHandler(BaseHandler):
         enrich = self.enrich_collection.find_one(query)
         return enrich is not None
 
-    def get_enrich_by_phenotype_and_variant(self, phenotype, variant_id, user_id=None):
-        """Get enrichment by phenotype and variant"""
+    def get_enrich_by_phenotype_and_variant(
+        self, phenotype, variant_id, user_id=None, p_value_thresholds=None
+    ):
+        """Get enrichment by phenotype and variant, optionally run with one of ``p_value_thresholds``."""
         query = {
             'phenotype': phenotype,
             'variant': variant_id,
             'user_id': user_id
         }
+        if p_value_thresholds is not None:
+            query['causal_graph.p_value_threshold'] = {'$in': list(p_value_thresholds)}
         
         enrich = self.enrich_collection.find_one(query)
         

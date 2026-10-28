@@ -7,7 +7,7 @@ from prefect import flow
 from prefect_dask import DaskTaskRunner
 from src.services.status_tracker import TaskState
 
-from src.config import Config, create_dependencies
+from src.config import Config, create_dependencies, significance_floor
 from src.catlas_census_mapping import CatlasMappingError
 from src.services.enrich import EnrichrAPIUnavailableError, NoEnrichmentFoundError
 from src.services.prolog import PrologNoEvidenceError, PrologServiceError
@@ -44,13 +44,17 @@ def _skipped_graphs_warnings(skipped_graphs, total_graphs, variant):
     persist_result=False,
     task_runner=DaskTaskRunner(address=os.getenv("DASK_ADDRESS"))
 )
-def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_id, seed):
+def enrichment_flow(
+    current_user_id, phenotype, variant, hypothesis_id, project_id, seed,
+    p_value_threshold=None,
+):
     """
     Fully project-based enrichment flow that initializes dependencies from centralized config
     """
     # Initialize dependencies from environment variables
     config = Config.from_env()
     deps = create_dependencies(config)
+    p_value_threshold = significance_floor(p_value_threshold)
 
     # Initialize StatusTracker for Prefect context
     from src.services.status_tracker import StatusTracker
@@ -66,11 +70,21 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
         logger.info(f"Running project-based enrichment for project {project_id}, variant {variant}")
 
         # Check for existing enrichment data
-        enrich = check_enrich.submit(current_user_id, variant, phenotype, hypothesis_id).result()
+        enrich = check_enrich.submit(
+            current_user_id, variant, phenotype, hypothesis_id, p_value_threshold
+        ).result()
 
         if enrich:
             logger.info("Retrieved enrich data from saved db")
             return {"id": enrich['id']}, 200
+
+        hypotheses.update_hypothesis(hypothesis_id, {
+            "status": "pending",
+            "error": None,
+            "error_detail": None,
+            "skipped_enrich_ids": [],
+            "enrichment_warnings": [],
+        })
 
         candidate_genes = get_candidate_genes.submit(variant, hypothesis_id).result()
         graphs_list = get_relevant_gene_proof.submit(variant, hypothesis_id, seed).result()
@@ -193,6 +207,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
 
             enrichment_run_meta = {
                 "attempted_ldsc_cell_type": selected_tissue,
+                "p_value_threshold": p_value_threshold,
             }
 
             if use_shared_enrichment and this_causal_gene in shared_enrichment_cache:
@@ -219,7 +234,8 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                     ).result()
                     enrich_tbl = enrichr.run(
                         this_causal_gene, tissue_name=selected_tissue,
-                        coexpression_data=coexpression_data
+                        coexpression_data=coexpression_data,
+                        p_value_threshold=p_value_threshold,
                     )
                 except NoEnrichmentFoundError as exc:
                     no_enrichment_by_gene[this_causal_gene] = exc
@@ -295,6 +311,7 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                     causal_gene=this_causal_gene,
                     max_candidates=config.go_llm_prefilter_k,
                     llm=llm,
+                    floor=p_value_threshold,
                 )
                 if any(g.get("ranking_degraded") for g in relevant_gos or []):
                     logger.warning(
@@ -374,6 +391,20 @@ def enrichment_flow(current_user_id, phenotype, variant, hypothesis_id, project_
                 reason=reasons.pop() if len(reasons) == 1 else "multiple_reasons",
                 tissue=selected_tissue,
                 variant=variant,
+                min_adjusted_p=min(
+                    (
+                        exc.min_adjusted_p for exc in no_enrichment_by_gene.values()
+                        if exc.min_adjusted_p is not None
+                    ),
+                    default=None,
+                ),
+                max_adjusted_p=max(
+                    (
+                        exc.max_adjusted_p for exc in no_enrichment_by_gene.values()
+                        if exc.max_adjusted_p is not None
+                    ),
+                    default=None,
+                ),
             )
 
         all_enrich_ids = [e['enrich_id'] for e in enrichment_data]

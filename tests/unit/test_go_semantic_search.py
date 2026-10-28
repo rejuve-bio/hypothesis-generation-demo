@@ -74,7 +74,7 @@ def test_rank_go_terms_by_strategy_dispatches_hybrid_to_hybrid_llm(monkeypatch):
     hybrid_mock.assert_called_once_with(
         "phenotype", tbl, k=5, causal_gene="GENE1", prefilter_k=100,
         backend="local", embedding_model=None,
-        llm=None,
+        llm=None, floor=None,
     )
 
 
@@ -353,6 +353,15 @@ def test_enforce_floor_keeps_null_pick_when_no_real_candidate_is_left():
     assert [r["id"] for r in repaired] == ["GO:1", "GO:3"]
     assert repaired[1]["below_significance_floor"] is True
     assert "floor_substituted" not in repaired[1]
+
+
+def test_enforce_floor_uses_the_requested_threshold_over_the_default():
+    shortlisted = _shortlist([("GO:1", "looser hit", 0.08, "GENE1", 0.9)])
+    picks = [{"id": "GO:1", "name": "looser hit", "p": 0.08, "rank": 1, "genes": ["GENE1"]}]
+
+    repaired = service.enforce_significance_floor(picks, shortlisted, k=1, floor=0.1)
+
+    assert "below_significance_floor" not in repaired[0]
 
 
 def test_enforce_floor_leaves_all_significant_results_untouched():

@@ -202,11 +202,11 @@ def _resolve_score_weights() -> tuple[float, float, float]:
     return tuple(w / total for w in raw)
 
 
-def significance_floor() -> float:
+def significance_floor(override: Optional[float] = None) -> float:
     """Max adjusted p-value for a term to count as a real enrichment hit."""
     from src.services.enrich import significance_floor as _floor
 
-    return _floor()
+    return _floor(override)
 
 
 EMBEDDING_BATCH_SIZE = 1024
@@ -308,6 +308,7 @@ def prefilter_go_candidates_union(
     causal_gene: Optional[str] = None,
     embedding_model: Optional[str] = None,
     pvalue_k: Optional[int] = None,
+    floor: Optional[float] = None,
 ) -> pd.DataFrame:
     """Shortlist: `pvalue_k` terms by adjusted p-value, the rest by hybrid score."""
     if enrich_tbl is None or len(enrich_tbl) == 0:
@@ -322,7 +323,7 @@ def prefilter_go_candidates_union(
 
     # Score only what can survive the floor. Embedding the whole pool meant
     # ~2,500 requests per run to then discard all but ~40 of them.
-    floor = significance_floor()
+    floor = significance_floor(floor)
     pvalues = pd.to_numeric(enrich_tbl["Adjusted P-value"], errors="coerce")
     candidates = enrich_tbl[pvalues < floor]
     if len(candidates) == 0:
@@ -380,7 +381,7 @@ def prefilter_go_candidates_union(
 
 
 def enforce_significance_floor(
-    results: list[dict], shortlisted: pd.DataFrame, k: int
+    results: list[dict], shortlisted: pd.DataFrame, k: int, floor: Optional[float] = None
 ) -> list[dict]:
     """Replace sub-floor picks with the best unused real hits.
     """
@@ -389,7 +390,7 @@ def enforce_significance_floor(
     if "Adjusted P-value" not in shortlisted.columns:
         return results
 
-    floor = significance_floor()
+    floor = significance_floor(floor)
     picked_ids = {str(r.get("id", "")).strip() for r in results}
     sort_col = "score" if "score" in shortlisted.columns else "Adjusted P-value"
     ascending = sort_col == "Adjusted P-value"
@@ -539,6 +540,7 @@ def rank_go_terms_degraded(
     k: int = 10,
     causal_gene: Optional[str] = None,
     embedding_model: Optional[str] = None,
+    floor: Optional[float] = None,
 ) -> list[dict]:
     """Rank without an LLM. Results are marked `ranking_degraded`."""
     if enrich_tbl is None or len(enrich_tbl) == 0:
@@ -553,6 +555,7 @@ def rank_go_terms_degraded(
             ),
             causal_gene=causal_gene,
             embedding_model=embedding_model,
+            floor=floor,
         )
     except Exception as exc:
         # Embeddings are a separate service and may be down too.
@@ -560,13 +563,13 @@ def rank_go_terms_degraded(
             f"Embedding scoring unavailable during degraded ranking ({exc}); "
             "falling back to significance and specificity only."
         )
-        shortlisted = _score_without_embeddings(enrich_tbl)
+        shortlisted = _score_without_embeddings(enrich_tbl, floor)
     if shortlisted is None or len(shortlisted) == 0:
         return []
 
     ranked = shortlisted.sort_values("score", ascending=False).head(k)
     results = _rows_to_results(ranked, "score")
-    results = enforce_significance_floor(results, shortlisted, k=k)
+    results = enforce_significance_floor(results, shortlisted, k=k, floor=floor)
     results = enforce_specificity_quota(results, shortlisted, k=k)
     logger.info(
         f"Degraded GO ranking: {len(results)} terms chosen by score from "
@@ -584,11 +587,13 @@ def rank_go_terms_degraded(
     ]
 
 
-def _score_without_embeddings(enrich_tbl: pd.DataFrame) -> pd.DataFrame:
+def _score_without_embeddings(
+    enrich_tbl: pd.DataFrame, floor: Optional[float] = None
+) -> pd.DataFrame:
     """Shortlist scored on statistics and specificity, with no embedding call."""
     data = enrich_tbl.copy()
     pvalues = pd.to_numeric(data["Adjusted P-value"], errors="coerce")
-    floor = significance_floor()
+    floor = significance_floor(floor)
     above = data[pvalues < floor]
     pool = (above if len(above) > 0 else data).copy()
     pool["similarity"] = 0.0
@@ -608,6 +613,7 @@ def rank_go_terms_resilient(
     causal_gene: Optional[str] = None,
     max_candidates: Optional[int] = None,
     llm=None,
+    floor: Optional[float] = None,
 ) -> list[dict]:
     """Normal ranking, then an opt-in second model, then a model-free ranking.
 
@@ -623,6 +629,7 @@ def rank_go_terms_resilient(
             causal_gene=causal_gene,
             max_candidates=max_candidates,
             llm=llm,
+            floor=floor,
         )
     except Exception as exc:
         logger.warning(f"GO ranking failed (strategy={strategy}): {exc}")
@@ -650,12 +657,13 @@ def rank_go_terms_resilient(
                     causal_gene=causal_gene,
                     max_candidates=max_candidates,
                     llm=llm,
+                    floor=floor,
                 )
             except Exception as exc:
                 logger.warning(f"Fallback backend {fallback} also failed: {exc}")
 
     return rank_go_terms_degraded(
-        phenotype, enrich_tbl, k=k, causal_gene=causal_gene
+        phenotype, enrich_tbl, k=k, causal_gene=causal_gene, floor=floor
     )
 
 
@@ -669,6 +677,7 @@ def rank_go_terms_hybrid_llm(
     model: Optional[str] = None,
     embedding_model: Optional[str] = None,
     llm=None,
+    floor: Optional[float] = None,
 ) -> list[dict]:
     """Embedding+p-value union prefilter, then one LLM rerank.
 
@@ -700,6 +709,7 @@ def rank_go_terms_hybrid_llm(
         causal_gene=causal_gene,
         embedding_model=embedding_model,
         pvalue_k=pvalue_k,
+        floor=floor,
     )
     logger.info(
         f"Hybrid LLM GO ranking: union prefilter kept {len(shortlisted)} of "
@@ -723,7 +733,7 @@ def rank_go_terms_hybrid_llm(
         prefiltered=True,
     )
 
-    results = enforce_significance_floor(results, shortlisted, k=k)
+    results = enforce_significance_floor(results, shortlisted, k=k, floor=floor)
     results = enforce_specificity_quota(results, shortlisted, k=k)
     for entry in results:
         entry["prefilter"] = "pvalue_embedding_union"
@@ -777,6 +787,7 @@ def rank_go_terms_by_strategy(
     embedding_model: Optional[str] = None,
     max_candidates: Optional[int] = None,
     llm=None,
+    floor: Optional[float] = None,
 ) -> list[dict]:
     if isinstance(strategy, str) or strategy is None:
         strategy = parse_go_semantic_strategy(strategy)
@@ -791,6 +802,7 @@ def rank_go_terms_by_strategy(
             backend=llm_backend_for_strategy(strategy),
             embedding_model=embedding_model,
             llm=llm,
+            floor=floor,
         )
     if strategy in (
         GoSemanticStrategy.LLM,
