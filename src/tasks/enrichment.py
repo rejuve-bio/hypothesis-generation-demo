@@ -44,6 +44,16 @@ def extract_causal_gene_from_graph(graph, variant_nodes):
     if not gene_nodes:
         return None, None
 
+    explicit_causal_gene = graph.get("causal_gene")
+    if explicit_causal_gene:
+        gene_node = next(
+            (g for g in gene_nodes if g.get("id") == explicit_causal_gene),
+            None,
+        )
+        if gene_node:
+            return gene_node.get("id", ""), gene_node.get("name", "")
+        return explicit_causal_gene, ""
+
     # Find genes directly connected to SNPs
     snp_ids = [n.get("id", n.get("name", "")) for n in variant_nodes]
     directly_connected_genes = []

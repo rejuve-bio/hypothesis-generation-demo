@@ -81,6 +81,14 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
 
     causal_gene_symbol = enrichr.to_symbol(causal_gene)
     causal_gene_ensembl = enrichr.to_ensembl_id(causal_gene_symbol) or causal_gene.lower()
+    causal_gene_ensembl = next(
+        node["id"]
+        for node in nodes
+        if node["type"] == "gene"
+        and node["id"].upper() in {
+            causal_gene_ensembl.upper(), causal_gene_symbol.upper()
+        }
+    )
     logger.info(
         f"Using causal gene from enrichment: {causal_gene_symbol} "
         f"(Ensembl: {causal_gene_ensembl})"
