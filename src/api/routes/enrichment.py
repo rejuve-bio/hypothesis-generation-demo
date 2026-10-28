@@ -46,6 +46,22 @@ from src.catlas_census_mapping import CatlasMappingError, validate_ldsc_tissue_m
 router = APIRouter(tags=["enrichment"])
 
 
+def _p_value_threshold(value) -> float | None:
+    """Adjusted p-value cutoff for GO terms, None for the default; 400 unless 0 < value <= 1."""
+    if value is None or value == "":
+        return None
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        threshold = None
+    if threshold is None or not 0 < threshold <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="p_value_threshold must be greater than 0 and at most 1",
+        )
+    return threshold
+
+
 @router.get(
     "/enrich",
     response_model=Union[FlexibleDict, FlexibleList, EnrichmentsListResponse],
@@ -107,6 +123,7 @@ async def post_enrich(
     variant: str | None = Query(None),
     project_id: str | None = Query(None),
     tissue_name: str | None = Query(None),
+    p_value_threshold: float | None = Query(None),
     thread_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     projects: ProjectHandler = Depends(get_project_handler),
@@ -124,6 +141,9 @@ async def post_enrich(
     variant = variant or payload.get("variant")
     project_id = project_id or payload.get("project_id")
     seed = int(payload.get("seed", 42))
+    p_value_threshold = _p_value_threshold(
+        p_value_threshold if p_value_threshold is not None else payload.get("p_value_threshold")
+    )
     thread_id = parse_thread_id(thread_id or payload.get("thread_id"))
 
     if not project_id:
@@ -197,6 +217,7 @@ async def post_enrich(
                 hypothesis_id=existing_hypothesis["id"],
                 project_id=project_id,
                 seed=seed,
+                p_value_threshold=p_value_threshold,
             ),
         )
         return EnrichPostAcceptedResponse(
@@ -231,6 +252,7 @@ async def post_enrich(
             hypothesis_id=hypothesis_id,
             project_id=project_id,
             seed=seed,
+            p_value_threshold=p_value_threshold,
         ),
     )
     return EnrichPostAcceptedResponse(

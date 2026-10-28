@@ -73,9 +73,11 @@ def test_happy_path_runs_enrichr_filters_go_and_saves(
 
     assert result == ({"id": "enrich-1"}, 200)
     deps["enrichr"].run.assert_called_once_with(
-        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression",
+        p_value_threshold=0.05,
     )
     deps["rank_go_terms_resilient"].assert_called_once()
+    assert deps["rank_go_terms_resilient"].call_args.kwargs["floor"] == 0.05
     assert created[0][:6] == (
         "user-1", "project-1", "rs16940186", "Ulcerative colitis", "IRF8",
         [{"id": "GO:1", "name": "response", "genes": ["STAT1"]}],
@@ -148,12 +150,16 @@ def test_graph_without_direct_causal_gene_is_skipped_while_valid_graph_proceeds(
     assert final_patch["skipped_enrich_ids"] == ["enrich-1"]
 
 
-def _no_enrichment(gene="IRF8", reason="no_coexpressed_genes"):
+def _no_enrichment(
+    gene="IRF8", reason="no_coexpressed_genes", min_adjusted_p=None, max_adjusted_p=None
+):
     return NoEnrichmentFoundError(
         f"No genes are significantly co-expressed with {gene} in 'Liver'.",
         reason=reason,
         gene=gene,
         tissue="Liver",
+        min_adjusted_p=min_adjusted_p,
+        max_adjusted_p=max_adjusted_p,
     )
 
 
@@ -205,7 +211,9 @@ def test_no_enrichment_for_every_graph_fails_with_clear_reason(
     deps, created = _configure_flow(
         monkeypatch, immediate_task_factory, [sample_graph, second]
     )
-    deps["enrichr"].run.side_effect = _no_enrichment(reason="no_significant_go_terms")
+    deps["enrichr"].run.side_effect = _no_enrichment(
+        reason="no_significant_go_terms", min_adjusted_p=0.08, max_adjusted_p=0.97
+    )
 
     with pytest.raises(NoEnrichmentFoundError, match="No enrichment results were found"):
         flow_module.enrichment_flow.fn(
@@ -220,6 +228,8 @@ def test_no_enrichment_for_every_graph_fails_with_clear_reason(
         "message": fail_call.args[1]["error"],
         "tissue": "Liver",
         "variant": "rs16940186",
+        "min_adjusted_p": 0.08,
+        "max_adjusted_p": 0.97,
     }
 
 
@@ -310,7 +320,8 @@ def test_tissue_selection_uses_coexpression_background(
     )
 
     deps["enrichr"].run.assert_called_once_with(
-        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression",
+        p_value_threshold=0.05,
     )
 
 
@@ -326,8 +337,11 @@ def test_zero_graphs_after_retry_raises_no_evidence_error(
         )
 
     assert created == []
-    assert deps["hypotheses"].update_hypothesis.call_count == 1
-    fail_call = deps["hypotheses"].update_hypothesis.call_args
+    reset_call, fail_call = deps["hypotheses"].update_hypothesis.call_args_list
+    assert reset_call.args[1] == {
+        "status": "pending", "error": None, "error_detail": None,
+        "skipped_enrich_ids": [], "enrichment_warnings": [],
+    }
     assert fail_call.args[0] == "hyp-1"
     assert fail_call.args[1]["status"] == "failed"
     assert "No causal-gene evidence" in fail_call.args[1]["error"]
@@ -444,7 +458,8 @@ def test_shared_causal_gene_reuses_cached_enrichment(
 
     assert result == ({"id": "enrich-1"}, 200)
     deps["enrichr"].run.assert_called_once_with(
-        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression",
+        p_value_threshold=0.05,
     )
     assert len(created) == 2
     assert created[0][5] == created[1][5]
@@ -467,7 +482,8 @@ def test_no_tissue_selection_falls_back_to_top_ldsc_tissue(
         "user-1", "project-1", limit=1, format="selection"
     )
     deps["enrichr"].run.assert_called_once_with(
-        "IRF8", tissue_name="Liver", coexpression_data="coexpression"
+        "IRF8", tissue_name="Liver", coexpression_data="coexpression",
+        p_value_threshold=0.05,
     )
 
 

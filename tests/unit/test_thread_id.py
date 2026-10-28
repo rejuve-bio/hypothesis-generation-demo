@@ -186,6 +186,7 @@ def _run_post_enrich(monkeypatch, hypotheses, thread_id):
             variant=None,
             project_id=None,
             tissue_name=None,
+            p_value_threshold=None,
             thread_id=None,
             current_user_id="user-1",
             projects=projects,

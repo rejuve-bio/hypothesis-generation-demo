@@ -10,7 +10,7 @@ import gseapy as gp
 import pandas as pd
 from loguru import logger
 
-from src.config import Config
+from src.config import Config, significance_floor
 from src.tasks.gene_expression import get_coexpression_matrix_for_tissue
 
 
@@ -18,11 +18,6 @@ _ENSG_RE = re.compile(r"^ENSG\d+$", re.IGNORECASE)
 
 # Enrichr returns all-NaN p-values for genome-scale backgrounds (~60k genes).
 _MAX_BACKGROUND_SIZE = 20000
-
-
-def significance_floor() -> float:
-    """Max adjusted p-value for a GO term to count as a real enrichment hit."""
-    return float(os.getenv("GO_SIGNIFICANCE_MAX_P", "0.05"))
 
 
 _GO_ID_IN_TERM_RE = re.compile(r"\((GO:\d+)\)")
@@ -151,12 +146,16 @@ class NoEnrichmentFoundError(ValueError):
         gene: str | None = None,
         tissue: str | None = None,
         variant: str | None = None,
+        min_adjusted_p: float | None = None,
+        max_adjusted_p: float | None = None,
     ) -> None:
         super().__init__(message)
         self.reason = reason
         self.gene = gene
         self.tissue = tissue
         self.variant = variant
+        self.min_adjusted_p = min_adjusted_p
+        self.max_adjusted_p = max_adjusted_p
 
     def as_detail(self) -> dict[str, str]:
         detail = {
@@ -167,6 +166,10 @@ class NoEnrichmentFoundError(ValueError):
         for key in ("gene", "tissue", "variant"):
             value = getattr(self, key)
             if value:
+                detail[key] = value
+        for key in ("min_adjusted_p", "max_adjusted_p"):
+            value = getattr(self, key)
+            if value is not None:
                 detail[key] = value
         return detail
 
@@ -428,25 +431,41 @@ class Enrich:
 
         return res, causal_gene_symbol, gene_list
 
-    def run(self, relevant_gene, tissue_name=None, coexpression_data=None):
+    def run(
+        self, relevant_gene, tissue_name=None, coexpression_data=None, p_value_threshold=None
+    ):
         """Significantly enriched GO terms for a gene's co-expression network."""
         res, causal_gene_symbol, gene_list = self._run_enrichr(
             relevant_gene, tissue_name, coexpression_data
         )
         all_terms = self._process_enrichment_results(res)
-        floor = significance_floor()
-        enriched = all_terms[
-            pd.to_numeric(all_terms["Adjusted P-value"], errors="coerce") < floor
-        ].copy()
+        floor = significance_floor(p_value_threshold)
+        pvalues = pd.to_numeric(all_terms["Adjusted P-value"], errors="coerce")
+        enriched = all_terms[pvalues < floor].copy()
         if enriched.empty:
+            min_adjusted_p = max_adjusted_p = None
+            p_range = ""
+            if pvalues.notna().any():
+                most = all_terms.loc[pvalues.idxmin()]
+                least = all_terms.loc[pvalues.idxmax()]
+                min_adjusted_p = float(pvalues.min())
+                max_adjusted_p = float(pvalues.max())
+                p_range = (
+                    f" Adjusted p-values range from {min_adjusted_p:.3g} (most significant: "
+                    f"'{most['Term']}') to {max_adjusted_p:.3g} (least significant: "
+                    f"'{least['Term']}'); set p_value_threshold within this range to "
+                    "include terms."
+                )
             raise NoEnrichmentFoundError(
                 f"{len(gene_list)} genes are co-expressed with {causal_gene_symbol} in "
                 f"'{tissue_name}', but no GO Biological Process term is significantly "
-                f"enriched among them (adjusted p < {floor:g}). Selecting a "
-                "different tissue may give a result.",
+                f"enriched among them (adjusted p < {floor:g}).{p_range} Selecting a "
+                "different tissue may also give a result.",
                 reason="no_significant_go_terms",
                 gene=causal_gene_symbol,
                 tissue=tissue_name,
+                min_adjusted_p=min_adjusted_p,
+                max_adjusted_p=max_adjusted_p,
             )
         logger.info(
             f"Enrichr returned {len(all_terms)} GO terms; "
