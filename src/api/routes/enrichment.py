@@ -15,6 +15,7 @@ from src.api.dependencies import (
     get_gene_expression_handler,
     get_hypothesis_handler,
     get_project_handler,
+    parse_thread_id,
 )
 from src.api.auth import get_current_user_id
 from src.api.schemas import (
@@ -39,16 +40,16 @@ from src.services.demo import (
 )
 from src.run_deployment import invoke_enrichment_deployment
 from src.utils import serialize_datetime_fields
-from src.config import DEFAULT_P_VALUE_THRESHOLD, Config
+from src.config import Config
 from src.catlas_census_mapping import CatlasMappingError, validate_ldsc_tissue_mapping
 
 router = APIRouter(tags=["enrichment"])
 
 
-def _p_value_threshold(value) -> float:
-    """Adjusted p-value cutoff for GO terms; 400 unless 0 < value <= 1."""
+def _p_value_threshold(value) -> float | None:
+    """Adjusted p-value cutoff for GO terms, None for the default; 400 unless 0 < value <= 1."""
     if value is None or value == "":
-        return DEFAULT_P_VALUE_THRESHOLD
+        return None
     try:
         threshold = float(value)
     except (TypeError, ValueError):
@@ -123,6 +124,7 @@ async def post_enrich(
     project_id: str | None = Query(None),
     tissue_name: str | None = Query(None),
     p_value_threshold: float | None = Query(None),
+    thread_id: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     projects: ProjectHandler = Depends(get_project_handler),
     hypotheses: HypothesisHandler = Depends(get_hypothesis_handler),
@@ -142,6 +144,7 @@ async def post_enrich(
     p_value_threshold = _p_value_threshold(
         p_value_threshold if p_value_threshold is not None else payload.get("p_value_threshold")
     )
+    thread_id = parse_thread_id(thread_id or payload.get("thread_id"))
 
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
@@ -203,6 +206,7 @@ async def post_enrich(
     )
 
     if existing_hypothesis:
+        hypotheses.tag_hypothesis_thread(existing_hypothesis["id"], thread_id)
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
@@ -233,6 +237,8 @@ async def post_enrich(
         "created_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds") + "Z",
         "task_history": [],
     }
+    if thread_id:
+        hypothesis_data["thread_ids"] = [thread_id]
 
     hypotheses.create_hypothesis(current_user_id, hypothesis_data)
 

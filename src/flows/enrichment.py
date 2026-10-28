@@ -7,10 +7,11 @@ from prefect import flow
 from prefect_dask import DaskTaskRunner
 from src.services.status_tracker import TaskState
 
-from src.config import DEFAULT_P_VALUE_THRESHOLD, Config, create_dependencies
+from src.config import Config, create_dependencies, significance_floor
 from src.catlas_census_mapping import CatlasMappingError
 from src.services.enrich import EnrichrAPIUnavailableError, NoEnrichmentFoundError
 from src.services.prolog import PrologNoEvidenceError, PrologServiceError
+from src.services.go_semantic_search import rank_go_terms_resilient
 from src.tasks import (
     check_enrich,
     get_candidate_genes,
@@ -45,7 +46,7 @@ def _skipped_graphs_warnings(skipped_graphs, total_graphs, variant):
 )
 def enrichment_flow(
     current_user_id, phenotype, variant, hypothesis_id, project_id, seed,
-    p_value_threshold=DEFAULT_P_VALUE_THRESHOLD,
+    p_value_threshold=None,
 ):
     """
     Fully project-based enrichment flow that initializes dependencies from centralized config
@@ -53,6 +54,7 @@ def enrichment_flow(
     # Initialize dependencies from environment variables
     config = Config.from_env()
     deps = create_dependencies(config)
+    p_value_threshold = significance_floor(p_value_threshold)
 
     # Initialize StatusTracker for Prefect context
     from src.services.status_tracker import StatusTracker
@@ -301,7 +303,22 @@ def enrichment_flow(
                     })
                     continue
 
-                relevant_gos = llm.get_relevant_go(phenotype, enrich_tbl)
+                relevant_gos = rank_go_terms_resilient(
+                    phenotype,
+                    enrich_tbl,
+                    k=10,
+                    strategy=config.go_semantic_strategy,
+                    causal_gene=this_causal_gene,
+                    max_candidates=config.go_llm_prefilter_k,
+                    llm=llm,
+                    floor=p_value_threshold,
+                )
+                if any(g.get("ranking_degraded") for g in relevant_gos or []):
+                    logger.warning(
+                        f"GO terms for gene {this_causal_gene} were ranked "
+                        "without a language model; results are marked "
+                        "ranking_degraded."
+                    )
 
                 # Cache if shared
                 if use_shared_enrichment:
@@ -560,6 +577,7 @@ def child_enrichment_batch_flow(current_user_id, child_enrich_ids, parent_hypoth
     # Get parent hypothesis to extract project_id
     parent_hypothesis = hypotheses.get_hypotheses(current_user_id, parent_hypothesis_id)
     parent_project_id = parent_hypothesis.get('project_id') if parent_hypothesis else None
+    parent_thread_ids = parent_hypothesis.get('thread_ids') if parent_hypothesis else None
 
     for enrich_id in child_enrich_ids:
         logger.info(f"[CHILD_BATCH] Processing child enrichment {enrich_id}")
@@ -618,6 +636,8 @@ def child_enrichment_batch_flow(current_user_id, child_enrich_ids, parent_hypoth
 
             if parent_project_id:
                 hypothesis_data["project_id"] = parent_project_id
+            if parent_thread_ids:
+                hypothesis_data["thread_ids"] = list(parent_thread_ids)
 
             hypotheses.create_hypothesis(current_user_id, hypothesis_data)
             logger.info(f"[CHILD_BATCH] Created hypothesis record {new_hypothesis_id} for child enrichment {enrich_id}")

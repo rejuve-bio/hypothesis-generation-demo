@@ -15,6 +15,7 @@ class EnrichPostBody(BaseModel):
     variant: str | None = None
     project_id: str | None = None
     tissue_name: str | None = None
+    thread_id: str | None = None
     seed: int = 42
     p_value_threshold: float | None = None
 

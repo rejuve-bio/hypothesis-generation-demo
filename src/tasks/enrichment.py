@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 from prefect import task
-from src.config import DEFAULT_P_VALUE_THRESHOLD
+from src.config import significance_floor
 from src.services.status_tracker import TaskState, status_tracker
 from src.utils import emit_task_update, get_deps
 
@@ -76,7 +76,7 @@ def extract_causal_gene_from_graph(graph, variant_nodes):
 @task(retries=2)
 def check_enrich(
     current_user_id, variant, phenotype, hypothesis_id,
-    p_value_threshold=DEFAULT_P_VALUE_THRESHOLD,
+    p_value_threshold=None,
 ):
     """Return an existing enrichment for variant and phenotype run at ``p_value_threshold``."""
     try:
@@ -89,8 +89,9 @@ def check_enrich(
         deps = get_deps()
         enrichment = deps["enrichment"]
 
+        p_value_threshold = significance_floor(p_value_threshold)
         thresholds = [p_value_threshold]
-        if p_value_threshold == DEFAULT_P_VALUE_THRESHOLD:
+        if p_value_threshold == significance_floor():
             thresholds.append(None)
         enrich = enrichment.get_enrich_by_phenotype_and_variant(
             phenotype, variant, current_user_id, p_value_thresholds=thresholds

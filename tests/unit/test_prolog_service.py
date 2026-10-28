@@ -103,3 +103,49 @@ def test_get_gene_ids_falls_back_to_gene_name_on_empty_result(monkeypatch, prolo
     result = prolog.get_gene_ids(["IRF8"])
 
     assert result == ["IRF8"]
+
+
+def test_server_defaults_to_host_and_port_without_url():
+    prolog = PrologQuery(host="prolog-service", port=4242)
+
+    assert prolog.server == "http://prolog-service:4242"
+    assert prolog.headers == {}
+
+
+def test_url_overrides_host_and_port_and_sends_api_key(monkeypatch):
+    prolog = PrologQuery(
+        host="prolog-service", port=4242,
+        url="https://prolog.example.org/prolog/", api_key="secret",
+    )
+    get = MagicMock(return_value=_FakeResponse(json_data={"candidate_genes": []}))
+    monkeypatch.setattr("src.services.prolog.requests.get", get)
+
+    prolog.get_candidate_genes("rs16940186")
+
+    assert get.call_args.args[0] == "https://prolog.example.org/prolog/api/hypgen/candidate_genes"
+    assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer secret"}
+
+
+@pytest.mark.parametrize("url", ["prolog.example.org", "ftp://prolog.example.org", "https://"])
+def test_invalid_url_is_rejected(url):
+    with pytest.raises(ValueError, match="Invalid Prolog server URL"):
+        PrologQuery(host="prolog-service", port=4242, url=url)
+
+
+def test_api_key_over_plain_http_is_rejected():
+    with pytest.raises(ValueError, match="plain http"):
+        PrologQuery(host="prolog-service", port=4242, url="http://prolog.example.org", api_key="secret")
+
+
+def test_config_reads_url_and_api_key_from_env(monkeypatch):
+    from src.config import Config
+
+    monkeypatch.setenv("SWIPL_URL", "https://prolog.example.org/prolog")
+    monkeypatch.setenv("SWIPL_API_KEY", "secret")
+    config = Config.from_env()
+    assert (config.swipl_url, config.swipl_api_key) == ("https://prolog.example.org/prolog", "secret")
+
+    monkeypatch.setenv("SWIPL_URL", "")
+    monkeypatch.delenv("SWIPL_API_KEY")
+    config = Config.from_env()
+    assert (config.swipl_url, config.swipl_api_key) == (None, None)

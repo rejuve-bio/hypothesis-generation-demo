@@ -27,6 +27,9 @@ def _configure_flow(monkeypatch, immediate_task_factory, graphs):
     enrichr.annotate_graph_gene_names.side_effect = deepcopy
     llm = MagicMock()
     llm.get_relevant_go.return_value = [{"id": "GO:1", "name": "response", "genes": ["STAT1"]}]
+    rank_go_terms_resilient = MagicMock(
+        return_value=[{"id": "GO:1", "name": "response", "genes": ["STAT1"]}]
+    )
     deps = {
         "tasks": MagicMock(),
         "redis_url": "redis://unused",
@@ -34,7 +37,11 @@ def _configure_flow(monkeypatch, immediate_task_factory, graphs):
         "llm": llm,
         "hypotheses": hypotheses,
         "gene_expression": gene_expression,
+        "rank_go_terms_resilient": rank_go_terms_resilient,
     }
+    monkeypatch.setattr(
+        flow_module, "rank_go_terms_resilient", rank_go_terms_resilient
+    )
 
     monkeypatch.setattr(flow_module.Config, "from_env", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr(flow_module, "create_dependencies", lambda _config: deps)
@@ -69,9 +76,8 @@ def test_happy_path_runs_enrichr_filters_go_and_saves(
         "IRF8", tissue_name="Liver", coexpression_data="coexpression",
         p_value_threshold=0.05,
     )
-    deps["llm"].get_relevant_go.assert_called_once_with(
-        "Ulcerative colitis", [{"Term": "inflammatory response"}]
-    )
+    deps["rank_go_terms_resilient"].assert_called_once()
+    assert deps["rank_go_terms_resilient"].call_args.kwargs["floor"] == 0.05
     assert created[0][:6] == (
         "user-1", "project-1", "rs16940186", "Ulcerative colitis", "IRF8",
         [{"id": "GO:1", "name": "response", "genes": ["STAT1"]}],
@@ -166,7 +172,10 @@ def test_no_enrichment_for_one_graph_is_skipped_with_reason_while_other_proceeds
     deps, created = _configure_flow(
         monkeypatch, immediate_task_factory, [sample_graph, second]
     )
-    deps["enrichr"].run.side_effect = [_no_enrichment(), [{"Term": "ok"}]]
+    deps["enrichr"].run.side_effect = [
+        _no_enrichment(),
+        [{"Term": "ok"}],
+    ]
 
     result = flow_module.enrichment_flow.fn(
         "user-1", "Trait", "rs16940186", "hyp-1", "project-1", 3
@@ -270,7 +279,7 @@ def test_enrichr_failure_for_one_graph_does_not_abort_other_graphs(
     )
     deps["enrichr"].run.side_effect = [
         EnrichrAPIUnavailableError("Enrichr unavailable"),
-        [{"Term": "ok"}],
+        ([{"Term": "ok"}], [{"Term": "ok"}]),
     ]
 
     result = flow_module.enrichment_flow.fn(

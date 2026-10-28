@@ -20,6 +20,23 @@ POPULATION_LABELS: dict[str, str] = {
 }
 
 
+MAX_THREAD_ID_LENGTH = 256
+
+
+def normalize_thread_id(value: str | None) -> str | None:
+    """Trim a client chat thread id; blank -> None, over the max length -> ValueError."""
+    if value is None:
+        return None
+    thread_id = str(value).strip()
+    if not thread_id:
+        return None
+    if len(thread_id) > MAX_THREAD_ID_LENGTH:
+        raise ValueError(
+            f"thread_id must be at most {MAX_THREAD_ID_LENGTH} characters"
+        )
+    return thread_id
+
+
 def get_population_label(code: str | None) -> str | None:
     """Return the human-readable population name for a given population code.
     """

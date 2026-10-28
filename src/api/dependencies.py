@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi import HTTPException
+
 from src.config import Config
 from src.container import Container
 from src.db import (
@@ -18,6 +20,7 @@ from src.db import (
 )
 from src.services.llm import LLM
 from src.services.prolog import PrologQuery
+from src.utils import normalize_thread_id
 
 _container: Container | None = None
 
@@ -94,3 +97,11 @@ def get_gwas_library_handler() -> GWASLibraryHandler:
 
 def get_demo_template_handler() -> DemoTemplateHandler:
     return _container.demo_template_handler()
+
+
+def parse_thread_id(value: str | None) -> str | None:
+    """Normalize a request's optional chat thread id, rejecting bad input with 400."""
+    try:
+        return normalize_thread_id(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

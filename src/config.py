@@ -11,7 +11,13 @@ from src.db import (
 )
 from src.services.storage import create_minio_client_from_env
 
-DEFAULT_P_VALUE_THRESHOLD = 0.05
+
+def significance_floor(override: float | None = None) -> float:
+    """Max adjusted p-value for a GO term to count as a real enrichment hit."""
+    if override is not None:
+        return override
+    return float(os.getenv("GO_SIGNIFICANCE_MAX_P", "0.05"))
+
 
 class Config:
     """Centralized configuration for the application"""
@@ -22,6 +28,8 @@ class Config:
         self.go_map = None
         self.swipl_host = "localhost"
         self.swipl_port = 4242
+        self.swipl_url = None
+        self.swipl_api_key = None
         self.mongodb_uri = None
         self.db_name = None
         self.redis_url = None
@@ -58,6 +66,8 @@ class Config:
         self.catlas_celltype_cl_mapping_json = (
             "data/catlas_celltype_cl_mapping.json"
         )
+        self.go_llm_prefilter_k = 250
+        self.go_semantic_strategy = "llm"
         self.mail_username = ""
         self.mail_password = ""
         self.mail_from = ""
@@ -76,6 +86,8 @@ class Config:
         config.go_map = args.go_map
         config.swipl_host = args.swipl_host
         config.swipl_port = args.swipl_port
+        config.swipl_url = os.getenv("SWIPL_URL") or None
+        config.swipl_api_key = os.getenv("SWIPL_API_KEY") or None
         config.embedding_model = getattr(args, 'embedding_model', config.embedding_model)
         # Flask-specific arguments (if present)
         config.host = getattr(args, 'host', config.host)
@@ -96,6 +108,8 @@ class Config:
         config.go_map = os.getenv("GO_MAP")
         config.swipl_host = os.getenv("SWIPL_HOST", "localhost")
         config.swipl_port = int(os.getenv("SWIPL_PORT", "4242"))
+        config.swipl_url = os.getenv("SWIPL_URL") or None
+        config.swipl_api_key = os.getenv("SWIPL_API_KEY") or None
         config.mongodb_uri = os.getenv("MONGODB_URI")
         config.db_name = os.getenv("DB_NAME")
         config.embedding_model = os.getenv("EMBEDDING_MODEL", "w601sxs/b1ade-embed-kd")
@@ -138,6 +152,8 @@ class Config:
             "CATLAS_CELLTYPE_CL_MAPPING_JSON",
             "data/catlas_celltype_cl_mapping.json",
         )
+        config.go_llm_prefilter_k = int(os.getenv("GO_LLM_PREFILTER_K", "250"))
+        config.go_semantic_strategy = os.getenv("GO_SEMANTIC_STRATEGY", "llm")
         config.mail_username = os.getenv("MAIL_USERNAME", "")
         config.mail_password = os.getenv("MAIL_PASSWORD", "")
         config.mail_from = os.getenv("MAIL_FROM", "")
@@ -186,7 +202,9 @@ def create_dependencies(config):
     
     prolog_query = PrologQuery(
         host=config.swipl_host,
-        port=config.swipl_port
+        port=config.swipl_port,
+        url=config.swipl_url,
+        api_key=config.swipl_api_key,
     )
     
     # Use environment variables for MongoDB connection

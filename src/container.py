@@ -40,6 +40,8 @@ class Container(containers.DeclarativeContainer):
         PrologQuery,
         host=config.provided.swipl_host,
         port=config.provided.swipl_port,
+        url=config.provided.swipl_url,
+        api_key=config.provided.swipl_api_key,
     )
 
     enrichr = providers.ThreadSafeSingleton(

@@ -24,8 +24,16 @@ class ProjectHandler(BaseHandler):
         self.enrich_collection = self.db['enrich']
         self.analysis_results_collection = self.db['analysis_results']
         self.file_metadata_collection = self.db['file_metadata']
+        self._create_indexes()
+
+    def _create_indexes(self):
+        """Create indexes for chat-thread lookups"""
+        try:
+            self.projects_collection.create_index([('user_id', 1), ('thread_id', 1)])
+        except Exception as e:
+            logger.warning(f"Could not create thread indexes (may already exist): {e}")
     
-    def create_project(self, user_id, name, gwas_file_id, phenotype,population, ref_genome, analysis_parameters=None, user_email=None):
+    def create_project(self, user_id, name, gwas_file_id, phenotype,population, ref_genome, analysis_parameters=None, user_email=None, thread_id=None):
         """Create a new project"""
         project_data = {
             'user_id': user_id,
@@ -39,13 +47,26 @@ class ProjectHandler(BaseHandler):
             'ref_genome': ref_genome,
             'analysis_parameters': analysis_parameters or {},
             "user_email": user_email,
+            "thread_id": thread_id,
         }
         result = self.projects_collection.insert_one(project_data)
         return str(result.inserted_id)
 
-    def get_projects(self, user_id, project_id=None):
-        """Get projects for a user"""
+    def get_projects(self, user_id, project_id=None, thread_id=None):
+        """Get a user's projects; with thread_id, those created or used in that chat."""
         query = {'user_id': user_id}
+        if thread_id and not project_id:
+            used_project_ids = [
+                ObjectId(pid)
+                for pid in self.hypothesis_collection.distinct(
+                    'project_id', {'user_id': user_id, 'thread_ids': thread_id}
+                )
+                if pid and ObjectId.is_valid(pid)
+            ]
+            query['$or'] = [
+                {'thread_id': thread_id},
+                {'_id': {'$in': used_project_ids}},
+            ]
         if project_id:
             query['_id'] = ObjectId(project_id)
             project = self.projects_collection.find_one(query)
@@ -429,6 +450,8 @@ class ProjectHandler(BaseHandler):
             }
         )
         new_project.pop("demo_slug", None)
+        # A user's fork is reused across chats, so it carries no single thread.
+        new_project.pop("thread_id", None)
         self.projects_collection.insert_one(new_project)
 
         project_query = {"user_id": template_user_id, "project_id": template_project_id}
