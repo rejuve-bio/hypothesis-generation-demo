@@ -144,13 +144,16 @@ def test_graph_without_direct_causal_gene_is_skipped_while_valid_graph_proceeds(
     assert final_patch["skipped_enrich_ids"] == ["enrich-1"]
 
 
-def _no_enrichment(gene="IRF8", reason="no_coexpressed_genes", min_adjusted_p=None):
+def _no_enrichment(
+    gene="IRF8", reason="no_coexpressed_genes", min_adjusted_p=None, max_adjusted_p=None
+):
     return NoEnrichmentFoundError(
         f"No genes are significantly co-expressed with {gene} in 'Liver'.",
         reason=reason,
         gene=gene,
         tissue="Liver",
         min_adjusted_p=min_adjusted_p,
+        max_adjusted_p=max_adjusted_p,
     )
 
 
@@ -200,7 +203,7 @@ def test_no_enrichment_for_every_graph_fails_with_clear_reason(
         monkeypatch, immediate_task_factory, [sample_graph, second]
     )
     deps["enrichr"].run.side_effect = _no_enrichment(
-        reason="no_significant_go_terms", min_adjusted_p=0.08
+        reason="no_significant_go_terms", min_adjusted_p=0.08, max_adjusted_p=0.97
     )
 
     with pytest.raises(NoEnrichmentFoundError, match="No enrichment results were found"):
@@ -217,6 +220,7 @@ def test_no_enrichment_for_every_graph_fails_with_clear_reason(
         "tissue": "Liver",
         "variant": "rs16940186",
         "min_adjusted_p": 0.08,
+        "max_adjusted_p": 0.97,
     }
 
 

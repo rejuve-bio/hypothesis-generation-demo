@@ -381,6 +381,13 @@ def enrichment_flow(
                     ),
                     default=None,
                 ),
+                max_adjusted_p=max(
+                    (
+                        exc.max_adjusted_p for exc in no_enrichment_by_gene.values()
+                        if exc.max_adjusted_p is not None
+                    ),
+                    default=None,
+                ),
             )
 
         all_enrich_ids = [e['enrich_id'] for e in enrichment_data]

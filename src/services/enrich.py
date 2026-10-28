@@ -39,6 +39,7 @@ class NoEnrichmentFoundError(ValueError):
         tissue: str | None = None,
         variant: str | None = None,
         min_adjusted_p: float | None = None,
+        max_adjusted_p: float | None = None,
     ) -> None:
         super().__init__(message)
         self.reason = reason
@@ -46,6 +47,7 @@ class NoEnrichmentFoundError(ValueError):
         self.tissue = tissue
         self.variant = variant
         self.min_adjusted_p = min_adjusted_p
+        self.max_adjusted_p = max_adjusted_p
 
     def as_detail(self) -> dict[str, str]:
         detail = {
@@ -57,8 +59,10 @@ class NoEnrichmentFoundError(ValueError):
             value = getattr(self, key)
             if value:
                 detail[key] = value
-        if self.min_adjusted_p is not None:
-            detail["min_adjusted_p"] = self.min_adjusted_p
+        for key in ("min_adjusted_p", "max_adjusted_p"):
+            value = getattr(self, key)
+            if value is not None:
+                detail[key] = value
         return detail
 
 
@@ -291,23 +295,29 @@ class Enrich:
 
         enriched = self._process_enrichment_results(res, p_value_threshold)
         if enriched.empty:
-            min_adjusted_p, best_term = None, ""
+            min_adjusted_p = max_adjusted_p = None
+            p_range = ""
             if not res.empty:
-                best = res.loc[res["Adjusted P-value"].idxmin()]
-                min_adjusted_p = float(best["Adjusted P-value"])
-                best_term = (
-                    f" The most significant term was '{best['Term'].split('(')[0].strip()}' "
-                    f"(adjusted p = {min_adjusted_p:.3g}); a higher p_value_threshold would include it."
+                most = res.loc[res["Adjusted P-value"].idxmin()]
+                least = res.loc[res["Adjusted P-value"].idxmax()]
+                min_adjusted_p = float(most["Adjusted P-value"])
+                max_adjusted_p = float(least["Adjusted P-value"])
+                p_range = (
+                    f" Adjusted p-values range from {min_adjusted_p:.3g} (most significant: "
+                    f"'{most['Term'].split('(')[0].strip()}') to {max_adjusted_p:.3g} "
+                    f"(least significant: '{least['Term'].split('(')[0].strip()}'); "
+                    "set p_value_threshold within this range to include terms."
                 )
             raise NoEnrichmentFoundError(
                 f"{len(gene_list)} genes are co-expressed with {causal_gene_symbol} in "
                 f"'{tissue_name}', but no GO Biological Process term is significantly "
-                f"enriched among them (adjusted p < {p_value_threshold:g}).{best_term} "
+                f"enriched among them (adjusted p < {p_value_threshold:g}).{p_range} "
                 "Selecting a different tissue may also give a result.",
                 reason="no_significant_go_terms",
                 gene=causal_gene_symbol,
                 tissue=tissue_name,
                 min_adjusted_p=min_adjusted_p,
+                max_adjusted_p=max_adjusted_p,
             )
         return enriched
 
