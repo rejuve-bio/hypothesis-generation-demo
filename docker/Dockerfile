@@ -1,6 +1,7 @@
 #  For susie 0.12.35
 #  Use an official Python runtime as a parent image
-FROM python:3.10-bookworm
+FROM python:3.12-bookworm
+ENV UV_PYTHON_PREFERENCE=only-system
 
 # Install all system dependencies in one layer
 RUN apt-get update && apt-get install -y \
@@ -43,12 +44,10 @@ RUN mkdir -p /opt/plink2 && \
     find /opt/plink2 -name "plink2" -type f -exec ln -sf {} /usr/local/bin/plink2 \; && \
     rm /tmp/plink2.zip
 
-RUN mkdir -p /opt/gcta && \
-    wget -q https://yanglab.westlake.edu.cn/software/gcta/bin/gcta-1.94.4-linux-kernel-3-x86_64.zip -O /tmp/gcta.zip && \
-    unzip -q /tmp/gcta.zip -d /opt/gcta && \
-    find /opt/gcta -name "gcta64" -type f -exec chmod +x {} \; && \
-    find /opt/gcta -name "gcta64" -type f -exec ln -sf {} /usr/local/bin/gcta64 \; && \
-    rm /tmp/gcta.zip
+# GCTA (COJO): official static build from GitHub releases, checksum-verified
+RUN curl -fsSL -o /usr/local/bin/gcta64 https://github.com/jianyangqt/gcta/releases/download/v1.94.1/gcta-1.94.1-linux-x86_64-static && \
+    echo "dbb2b5e5d51e278328ff297a403d3dd8ee5f5280f0b6d3d8db74b3e7fead7b49  /usr/local/bin/gcta64" | sha256sum -c - && \
+    chmod +x /usr/local/bin/gcta64
 
 # Install htslib (bgzip, tabix), bcftools, samtools, and Java (required by Nextflow)
 RUN apt-get update && apt-get install -y \
@@ -189,11 +188,11 @@ RUN chmod +x /app/entrypoint.sh
 # Clone gwas-sumstats-harmoniser repository
 RUN rm -rf gwas-sumstats-harmoniser && git clone https://github.com/EBISPOT/gwas-sumstats-harmoniser.git
 # Create separate Python environment for harmonizer
-RUN python3 -m venv /opt/harmonizer-venv
+RUN uv venv --python 3.10 --python-preference managed /opt/harmonizer-venv
 
 # Install harmonizer dependencies using uv for better performance
 ENV UV_HARMONIZER_VENV=/opt/harmonizer-venv
-RUN uv pip install --python=/opt/harmonizer-venv/bin/python -r gwas-sumstats-harmoniser/environments/requirements.txt
+RUN echo "setuptools<81" > /tmp/build-constraints.txt && uv pip install -b /tmp/build-constraints.txt --python=/opt/harmonizer-venv/bin/python -r gwas-sumstats-harmoniser/environments/requirements.txt
 
 # Also install minimal harmonizer deps in main venv (without gwas-sumstats-tools to avoid pydantic conflict)
 RUN uv pip install 'duckdb>=0.9.2' 'pyliftover>=0.4'
