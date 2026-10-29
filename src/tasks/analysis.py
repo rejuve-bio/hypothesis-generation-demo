@@ -122,7 +122,7 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
     The Nextflow subprocess is skipped entirely (the file is used as-is, minus
     the shared column-validation / N / variant_id post-processing below, which
     always still runs) only when *opentargets_study_id* resolves to a real
-    study in OpenTargets' own `opentargets_studies` or `gwas_study_index`
+    GWAS study in OpenTargets' own `study` or `gwas_study_index`
     tables — i.e. this file is confirmed to have come from OpenTargets, which
     pre-harmonizes everything it publishes. If no study_id is given, or it
     isn't found in either table, harmonization proceeds as normal.
