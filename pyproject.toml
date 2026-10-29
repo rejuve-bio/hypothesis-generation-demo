@@ -3,7 +3,7 @@ name = "hypothesis-generation-demo"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.10,<3.11"
 dependencies = [
     "outlines",
     "fastapi",
@@ -11,8 +11,8 @@ dependencies = [
     "gunicorn",
     "redis",
     "python-multipart",
-    "gseapy",
-    #    "faiss-gpu",
+    "gseapy==1.1.8",
+    "faiss-gpu",
     "python-dotenv",
     "PyJWT==2.9.0",
     "pymongo",
@@ -24,8 +24,11 @@ dependencies = [
     "llama-index-llms-anthropic",
     "pengines",
     "prefect>=2.14.0,<3.0.0",
+    "anyio>=3.7.1,<4.14",
     "asyncpg",
     "bokeh>=3.1.0",
+
+
     "requests",
     "gwaslab",
     "cyvcf2",
@@ -39,15 +42,15 @@ dependencies = [
     "tiledbsoma",
     "cellxgene-census",
     "loguru>=0.7.3",
-    "numpy<2",
+
+    "numpy<2",             
     "optuna>=4.3.0",
-    "pandas>=2.2.3",
-    "pyarrow>=17.0.0",
+    "pandas>=2.2.3",         
+    "pyarrow>=17.0.0",       
     "pysam>=0.23.1",
     "ruff>=0.11.12",
     "scikit-learn>=1.6.1",
     "scipy>=1.15.3",
-    "tqdm>=4.66.0",
     "watchdog>=6.0.0",
     "boto3>=1.35.0",
     "prefect-dask",
