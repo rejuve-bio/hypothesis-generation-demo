@@ -140,6 +140,15 @@ edge_to_json([[label(Relation), source(Subject), target(Object)]|Edges],
       edge_to_json(Edges, EdgesJSON).
 
 
+create_json_graph([relevant_gene(gene(CausalGene), _)|Terms], JSONGraph) :-
+    !,
+    extract_nodes_edges(Terms, NodesList, EdgesList),
+    sort(NodesList, SortedNodes),
+    sort(EdgesList, SortedEdges),
+    node_to_json(SortedNodes, NodesJSON),
+    edge_to_json(SortedEdges, EdgesJSON),
+    JSONGraph = json([nodes=NodesJSON, edges=EdgesJSON, causal_gene=CausalGene]).
+
 create_json_graph([_|Terms], JSONGraph) :-
     extract_nodes_edges(Terms, NodesList, EdgesList),
     sort(NodesList, SortedNodes),
@@ -161,7 +170,8 @@ json_proof_tree([Proof-Count|T], NumSamples, [Graph|TGraph]) :- !,
 json_proof_tree(Proof-Count, NumSamples, Graph) :-
   extract_ground_terms(Proof, Terms),
   create_json_graph(Terms, JsonGraph),
-  JsonGraph = json([nodes=Nodes, edges=Edges]),
+  JsonGraph = json(Fields),
   Prob is Count / NumSamples,
-  UpdatedGraph = json([nodes=Nodes, edges=Edges, prob=json([value=Prob])]),
-    atom_json_term(Graph, UpdatedGraph, []).
+  append(Fields, [prob=json([value=Prob])], UpdatedFields),
+  UpdatedGraph = json(UpdatedFields),
+  atom_json_term(Graph, UpdatedGraph, []).
