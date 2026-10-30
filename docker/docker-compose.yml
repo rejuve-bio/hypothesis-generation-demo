@@ -24,8 +24,17 @@ services:
       dockerfile: docker/Dockerfile.prolog
     ports:
       - "127.0.0.1:${PROLOG_PORT}:4242"
+    environment:
+      - PGOT_HOST=${PGOT_HOST:-/var/run/postgresql}
+      - PGOT_PORT=${PGOT_PORT:-5432}
+      - PGOT_DB=${PGOT_DB:-opentargets}
+      - PGOT_USER=${PGOT_USER:-postgres}
+    env_file:
+      - ../.env
     volumes:
       - ../pl:/app/pl
+      - ../config:/app/config
+      - /var/run/postgresql:/var/run/postgresql
       - ${PROLOG_OUT_V2_PATH}:/mnt/prolog_out_v2
       - ${PROLOG_OUT_V3_PATH}:/mnt/prolog_out_v3
     networks:
@@ -77,9 +86,9 @@ services:
       - MONGODB_URI=${MONGODB_URI}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
-      - GO_LLM_URL=${GEMMA_BASE_URL}
-      - GO_LLM_KEY=${GEMMA_API_KEY}
-      - GO_LLM_MODEL=${GEMMA_MODEL}
+      - GO_LLM_URL=${LLM_BASE_URL}
+      - GO_LLM_KEY=${LLM_API_KEY}
+      - GO_LLM_MODEL=${LLM_MODEL}
       - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
       - CREDIBLE_SETS_DB_PORT=5432
       - CREDIBLE_SETS_DB_NAME=${CREDIBLE_SETS_DB_NAME}
@@ -90,6 +99,13 @@ services:
     volumes:
       - ..:/app
       - ../data:/app/data
+      - ${EXTERNAL_DATA_PATH}:/app/data/external_data
+      - ${EXTERNAL_DATA_PATH}/OSF:/app/data/OSF
+      - ${EXTERNAL_DATA_PATH}/ldscores:/app/data/ldscores
+      - ${EXTERNAL_DATA_PATH}/ldsc:/app/data/ldsc
+      - ${EXTERNAL_DATA_PATH}/cts:/app/data/cts
+      - ${EXTERNAL_DATA_PATH}/1000Genomes_phase3:/app/data/1000Genomes_phase3
+      - ${EXTERNAL_DATA_PATH}/harmonizer_ref:/app/data/harmonizer_ref
     depends_on:
       dask-scheduler:
         condition: service_healthy
@@ -140,15 +156,22 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - JWT_SECRET=${JWT_SECRET}
       - MAIL_PASSWORD=${MAIL_PASSWORD}
-      - GO_LLM_URL=${GEMMA_BASE_URL}
-      - GO_LLM_KEY=${GEMMA_API_KEY}
-      - GO_LLM_MODEL=${GEMMA_MODEL}
+      - GO_LLM_URL=${LLM_BASE_URL}
+      - GO_LLM_KEY=${LLM_API_KEY}
+      - GO_LLM_MODEL=${LLM_MODEL}
       - REDIS_URL=redis://redis:6379
     env_file:
       - ../.env
     volumes:
       - ..:/app
       - ../data:/app/data
+      - ${EXTERNAL_DATA_PATH}:/app/data/external_data
+      - ${EXTERNAL_DATA_PATH}/OSF:/app/data/OSF
+      - ${EXTERNAL_DATA_PATH}/ldscores:/app/data/ldscores
+      - ${EXTERNAL_DATA_PATH}/ldsc:/app/data/ldsc
+      - ${EXTERNAL_DATA_PATH}/cts:/app/data/cts
+      - ${EXTERNAL_DATA_PATH}/1000Genomes_phase3:/app/data/1000Genomes_phase3
+      - ${EXTERNAL_DATA_PATH}/harmonizer_ref:/app/data/harmonizer_ref
     depends_on:
       mongo:
         condition: service_healthy
@@ -156,6 +179,8 @@ services:
         condition: service_healthy
       dask-scheduler:
         condition: service_healthy
+      prolog-service:
+        condition: service_started
       redis:
         condition: service_healthy
     command: >
@@ -302,6 +327,13 @@ services:
     volumes:
       - ..:/app
       - ../data:/app/data
+      - ${EXTERNAL_DATA_PATH}:/app/data/external_data
+      - ${EXTERNAL_DATA_PATH}/OSF:/app/data/OSF
+      - ${EXTERNAL_DATA_PATH}/ldscores:/app/data/ldscores
+      - ${EXTERNAL_DATA_PATH}/ldsc:/app/data/ldsc
+      - ${EXTERNAL_DATA_PATH}/cts:/app/data/cts
+      - ${EXTERNAL_DATA_PATH}/1000Genomes_phase3:/app/data/1000Genomes_phase3
+      - ${EXTERNAL_DATA_PATH}/harmonizer_ref:/app/data/harmonizer_ref
     env_file:
       - ../.env
     command: >
@@ -328,6 +360,9 @@ services:
       - UV_PROJECT_ENVIRONMENT=/opt/flask-venv
       - DASK_ADDRESS=tcp://dask-scheduler:8786
       - PYTHONPATH=/app
+      - SKIP_SEED=true
+      - SWIPL_HOST=prolog-service
+      - SWIPL_PORT=4242
       - ENSEMBL_HGNC_MAP=/app/data/ensembl_to_hgnc.pkl
       - HGNC_ENSEMBL_MAP=/app/data/hgnc_to_ensembl.pkl
       - GO_MAP=/app/data/go_map.pkl
@@ -337,9 +372,9 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - MAIL_PASSWORD=${MAIL_PASSWORD}
-      - GO_LLM_URL=${GEMMA_BASE_URL}
-      - GO_LLM_KEY=${GEMMA_API_KEY}
-      - GO_LLM_MODEL=${GEMMA_MODEL}
+      - GO_LLM_URL=${LLM_BASE_URL}
+      - GO_LLM_KEY=${LLM_API_KEY}
+      - GO_LLM_MODEL=${LLM_MODEL}
       - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
       - CREDIBLE_SETS_DB_PORT=5432
       - CREDIBLE_SETS_DB_NAME=${CREDIBLE_SETS_DB_NAME}
@@ -349,6 +384,8 @@ services:
       prefect-service:
         condition: service_healthy
       dask-scheduler:
+        condition: service_healthy
+      prolog-service:
         condition: service_started
       mongo:
         condition: service_healthy
