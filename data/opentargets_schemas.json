@@ -1,0 +1,929 @@
+{
+  "source": "Open Targets Platform",
+  "database": "/data1/abdu/opentargets/opentargets.db",
+  "all_tables_in_db": [
+    "biosample",
+    "coloc",
+    "coloc_with_genes",
+    "credible_set",
+    "credible_set_variants",
+    "enhancer",
+    "expression",
+    "gencode_gene",
+    "gencode_transcript",
+    "gencode_exon",
+    "catlas_ccre",
+    "catlas_cell_ontology",
+    "catlas_abc_scores",
+    "tadmap_tad",
+    "tadmap_tad_gene",
+    "remap_tfbs",
+    "dorothea_tf_target",
+    "tflink_tf_target",
+    "htftarget_tf_target",
+    "study",
+    "variant"
+  ],
+  "tables": {
+    "biosample": {
+      "table_name": "biosample",
+      "row_count": 35744,
+      "columns": [
+        {
+          "name": "biosampleId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "biosampleName",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "description",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "xrefs",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "synonyms",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "parents",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "ancestors",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "children",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "descendants",
+          "type": "VARCHAR[]",
+          "nullable": true
+        }
+      ]
+    },
+    "credible_set": {
+      "table_name": "credible_set",
+      "row_count": 3491182,
+      "columns": [
+        {
+          "name": "studyLocusId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "studyId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "variantId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "chromosome",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "position",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "region",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "beta",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "zScore",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "pValueMantissa",
+          "type": "FLOAT",
+          "nullable": true
+        },
+        {
+          "name": "pValueExponent",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "effectAlleleFrequencyFromSource",
+          "type": "FLOAT",
+          "nullable": true
+        },
+        {
+          "name": "standardError",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "subStudyDescription",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "qualityControls",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "finemappingMethod",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "credibleSetIndex",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "credibleSetlog10BF",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "purityMeanR2",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "purityMinR2",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "locusStart",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "locusEnd",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "sampleSize",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "ldSet",
+          "type": "STRUCT(tagVariantId VARCHAR, r2Overall DOUBLE)[]",
+          "nullable": true
+        },
+        {
+          "name": "locus",
+          "type": "STRUCT(is95CredibleSet BOOLEAN, is99CredibleSet BOOLEAN, logBF DOUBLE, posteriorProbability DOUBLE, variantId VARCHAR, pValueMantissa FLOAT, pValueExponent INTEGER, beta DOUBLE, standardError DOUBLE, r2Overall DOUBLE)[]",
+          "nullable": true
+        },
+        {
+          "name": "confidence",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "studyType",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "isTransQtl",
+          "type": "BOOLEAN",
+          "nullable": true
+        }
+      ]
+    },
+    "expression": {
+      "table_name": "expression",
+      "row_count": 50482,
+      "columns": [
+        {
+          "name": "id",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "tissues",
+          "type": "STRUCT(efo_code VARCHAR, \"label\" VARCHAR, organs VARCHAR[], anatomical_systems VARCHAR[], rna STRUCT(\"value\" DOUBLE, zscore INTEGER, \"level\" INTEGER, unit VARCHAR), protein STRUCT(reliability BOOLEAN, \"level\" INTEGER, cell_type STRUCT(\"name\" VARCHAR, reliability BOOLEAN, \"level\" INTEGER)[]))[]",
+          "nullable": true
+        }
+      ]
+    },
+    "study": {
+      "table_name": "study",
+      "row_count": 2001827,
+      "columns": [
+        {
+          "name": "studyId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "geneId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "projectId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "studyType",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "traitFromSource",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "traitFromSourceMappedIds",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "biosampleFromSourceId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "pubmedId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "publicationTitle",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "publicationFirstAuthor",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "publicationDate",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "publicationJournal",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "backgroundTraitFromSourceMappedIds",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "initialSampleSize",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "nCases",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "nControls",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "nSamples",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "cohorts",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "ldPopulationStructure",
+          "type": "STRUCT(ldPopulation VARCHAR, relativeSampleSize DOUBLE)[]",
+          "nullable": true
+        },
+        {
+          "name": "discoverySamples",
+          "type": "STRUCT(sampleSize INTEGER, ancestry VARCHAR)[]",
+          "nullable": true
+        },
+        {
+          "name": "replicationSamples",
+          "type": "STRUCT(sampleSize INTEGER, ancestry VARCHAR)[]",
+          "nullable": true
+        },
+        {
+          "name": "qualityControls",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "analysisFlags",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "summarystatsLocation",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "hasSumstats",
+          "type": "BOOLEAN",
+          "nullable": true
+        },
+        {
+          "name": "condition",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "sumstatQCValues",
+          "type": "STRUCT(QCCheckName VARCHAR, QCCheckValue FLOAT)[]",
+          "nullable": true
+        },
+        {
+          "name": "diseaseIds",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "backgroundDiseaseIds",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "biosampleId",
+          "type": "VARCHAR",
+          "nullable": true
+        }
+      ]
+    },
+    "variant": {
+      "table_name": "variant",
+      "row_count": 7432549,
+      "columns": [
+        {
+          "name": "variantId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "chromosome",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "position",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "referenceAllele",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "alternateAllele",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "variantEffect",
+          "type": "STRUCT(\"method\" VARCHAR, assessment VARCHAR, score FLOAT, assessmentFlag VARCHAR, targetId VARCHAR, normalisedScore DOUBLE)[]",
+          "nullable": true
+        },
+        {
+          "name": "mostSevereConsequenceId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "transcriptConsequences",
+          "type": "STRUCT(variantFunctionalConsequenceIds VARCHAR[], aminoAcidChange VARCHAR, uniprotAccessions VARCHAR[], isEnsemblCanonical BOOLEAN, codons VARCHAR, distanceFromFootprint BIGINT, distanceFromTss BIGINT, appris VARCHAR, maneSelect VARCHAR, targetId VARCHAR, impact VARCHAR, lofteePrediction VARCHAR, siftPrediction FLOAT, polyphenPrediction FLOAT, consequenceScore FLOAT, transcriptIndex INTEGER, approvedSymbol VARCHAR, biotype VARCHAR, transcriptId VARCHAR)[]",
+          "nullable": true
+        },
+        {
+          "name": "rsIds",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "hgvsId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "alleleFrequencies",
+          "type": "STRUCT(populationName VARCHAR, alleleFrequency DOUBLE)[]",
+          "nullable": true
+        },
+        {
+          "name": "dbXrefs",
+          "type": "STRUCT(id VARCHAR, \"source\" VARCHAR)[]",
+          "nullable": true
+        },
+        {
+          "name": "variantDescription",
+          "type": "VARCHAR",
+          "nullable": true
+        }
+      ]
+    },
+    "coloc": {
+      "table_name": "coloc",
+      "row_count": 217914314,
+      "columns": [
+        {
+          "name": "leftStudyLocusId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "rightStudyLocusId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "rightStudyType",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "chromosome",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "colocalisationMethod",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "numberColocalisingVariants",
+          "type": "BIGINT",
+          "nullable": true
+        },
+        {
+          "name": "h3",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "h4",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "clpp",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "betaRatioSignAverage",
+          "type": "DOUBLE",
+          "nullable": true
+        }
+      ]
+    },
+    "coloc_with_genes": {
+      "table_name": "coloc_with_genes",
+      "row_count": 197641134,
+      "columns": [
+        {
+          "name": "gwas_locus_id",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "h4",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "colocalisationMethod",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "qtl_type",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "qtl_locus_id",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "gene_id",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "tissue",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "qtl_study_id",
+          "type": "VARCHAR",
+          "nullable": true
+        }
+      ]
+    },
+    "credible_set_variants": {
+      "table_name": "credible_set_variants",
+      "row_count": 89296370,
+      "columns": [
+        {
+          "name": "studyLocusId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "studyId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "finemappingMethod",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "qualityControls",
+          "type": "VARCHAR[]",
+          "nullable": true
+        },
+        {
+          "name": "region",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "is95CredibleSet",
+          "type": "BOOLEAN",
+          "nullable": true
+        },
+        {
+          "name": "is99CredibleSet",
+          "type": "BOOLEAN",
+          "nullable": true
+        },
+        {
+          "name": "logBF",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "pip",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "variantId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "pValueMantissa",
+          "type": "FLOAT",
+          "nullable": true
+        },
+        {
+          "name": "pValueExponent",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "beta",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "standardError",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "r2Overall",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "confidence",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "studyType",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "isTransQtl",
+          "type": "BOOLEAN",
+          "nullable": true
+        }
+      ]
+    },
+    "enhancer": {
+      "table_name": "enhancer",
+      "row_count": 48810390,
+      "columns": [
+        {
+          "name": "biosampleId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "geneId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "chromosome",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "start",
+          "type": "BIGINT",
+          "nullable": true
+        },
+        {
+          "name": "end",
+          "type": "BIGINT",
+          "nullable": true
+        },
+        {
+          "name": "score",
+          "type": "DOUBLE",
+          "nullable": true
+        },
+        {
+          "name": "distanceToTss",
+          "type": "INTEGER",
+          "nullable": true
+        },
+        {
+          "name": "resourceScore",
+          "type": "STRUCT(\"name\" VARCHAR, \"value\" FLOAT)[]",
+          "nullable": true
+        },
+        {
+          "name": "datasourceId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "intervalType",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "pmid",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "biosampleName",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "biosampleFromSourceId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "studyId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "intervalId",
+          "type": "VARCHAR",
+          "nullable": true
+        },
+        {
+          "name": "qualityControls",
+          "type": "VARCHAR[]",
+          "nullable": true
+        }
+      ]
+    },
+    "gencode_gene": {
+      "table_name": "gencode_gene",
+      "source": "GENCODE v46 (GRCh38.p14)",
+      "parquet_path": "/data1/abdu/opentargets/gencode/gene.parquet",
+      "columns": [
+        { "name": "geneId", "type": "VARCHAR", "nullable": false },
+        { "name": "geneName", "type": "VARCHAR", "nullable": true },
+        { "name": "geneType", "type": "VARCHAR", "nullable": true },
+        { "name": "chromosome", "type": "VARCHAR", "nullable": false },
+        { "name": "start", "type": "INTEGER", "nullable": false },
+        { "name": "end", "type": "INTEGER", "nullable": false },
+        { "name": "strand", "type": "VARCHAR", "nullable": false },
+        { "name": "source", "type": "VARCHAR", "nullable": true },
+        { "name": "level", "type": "INTEGER", "nullable": true },
+        { "name": "hgncId", "type": "VARCHAR", "nullable": true },
+        { "name": "havanaGene", "type": "VARCHAR", "nullable": true }
+      ]
+    },
+    "gencode_transcript": {
+      "table_name": "gencode_transcript",
+      "source": "GENCODE v46 (GRCh38.p14)",
+      "parquet_path": "/data1/abdu/opentargets/gencode/transcript.parquet",
+      "columns": [
+        { "name": "transcriptId", "type": "VARCHAR", "nullable": false },
+        { "name": "geneId", "type": "VARCHAR", "nullable": false },
+        { "name": "transcriptName", "type": "VARCHAR", "nullable": true },
+        { "name": "transcriptType", "type": "VARCHAR", "nullable": true },
+        { "name": "chromosome", "type": "VARCHAR", "nullable": false },
+        { "name": "start", "type": "INTEGER", "nullable": false },
+        { "name": "end", "type": "INTEGER", "nullable": false },
+        { "name": "strand", "type": "VARCHAR", "nullable": false },
+        { "name": "source", "type": "VARCHAR", "nullable": true },
+        { "name": "level", "type": "INTEGER", "nullable": true },
+        { "name": "tag", "type": "VARCHAR[]", "nullable": true },
+        { "name": "transcriptSupportLevel", "type": "VARCHAR", "nullable": true },
+        { "name": "proteinId", "type": "VARCHAR", "nullable": true },
+        { "name": "ccdsId", "type": "VARCHAR", "nullable": true }
+      ]
+    },
+    "gencode_exon": {
+      "table_name": "gencode_exon",
+      "source": "GENCODE v46 (GRCh38.p14)",
+      "parquet_path": "/data1/abdu/opentargets/gencode/exon.parquet",
+      "columns": [
+        { "name": "exonId", "type": "VARCHAR", "nullable": false },
+        { "name": "transcriptId", "type": "VARCHAR", "nullable": false },
+        { "name": "geneId", "type": "VARCHAR", "nullable": false },
+        { "name": "exonNumber", "type": "INTEGER", "nullable": false },
+        { "name": "chromosome", "type": "VARCHAR", "nullable": false },
+        { "name": "start", "type": "INTEGER", "nullable": false },
+        { "name": "end", "type": "INTEGER", "nullable": false },
+        { "name": "strand", "type": "VARCHAR", "nullable": false }
+      ]
+    },
+    "catlas_ccre": {
+      "table_name": "catlas_ccre",
+      "source": "CATlas v1 (Zhang et al., Cell 2021)",
+      "parquet_path": "/data1/abdu/opentargets/catlas/ccre.parquet",
+      "columns": [
+        { "name": "cCREId", "type": "VARCHAR", "nullable": false },
+        { "name": "chromosome", "type": "VARCHAR", "nullable": false },
+        { "name": "start", "type": "INTEGER", "nullable": false },
+        { "name": "end", "type": "INTEGER", "nullable": false },
+        { "name": "class", "type": "VARCHAR", "nullable": false },
+        { "name": "inFetal", "type": "BOOLEAN", "nullable": false },
+        { "name": "inAdult", "type": "BOOLEAN", "nullable": false },
+        { "name": "creModule", "type": "INTEGER", "nullable": true }
+      ]
+    },
+    "catlas_cell_ontology": {
+      "table_name": "catlas_cell_ontology",
+      "source": "CATlas v1 (Zhang et al., Cell 2021)",
+      "parquet_path": "/data1/abdu/opentargets/catlas/cell_ontology.parquet",
+      "columns": [
+        { "name": "cellType", "type": "VARCHAR", "nullable": false },
+        { "name": "ontologyId", "type": "VARCHAR", "nullable": true },
+        { "name": "cre_key", "type": "VARCHAR", "nullable": true }
+      ]
+    },
+    "catlas_abc_scores": {
+      "table_name": "catlas_abc_scores",
+      "source": "CATlas v1 ABC model (Zhang et al., Cell 2021)",
+      "parquet_path": "/data1/abdu/opentargets/catlas/abc_scores.parquet",
+      "columns": [
+        { "name": "cellType", "type": "VARCHAR", "nullable": false },
+        { "name": "cCREId", "type": "VARCHAR", "nullable": true },
+        { "name": "chromosome", "type": "VARCHAR", "nullable": false },
+        { "name": "cCREStart", "type": "INTEGER", "nullable": false },
+        { "name": "cCREEnd", "type": "INTEGER", "nullable": false },
+        { "name": "geneId", "type": "VARCHAR", "nullable": true },
+        { "name": "geneSymbol", "type": "VARCHAR", "nullable": false },
+        { "name": "abcScore", "type": "FLOAT", "nullable": false },
+        { "name": "distance", "type": "INTEGER", "nullable": false }
+      ]
+    },
+    "tadmap_tad": {
+      "table_name": "tadmap_tad",
+      "source": "TADMap (Singh & Berger, bioRxiv 2021)",
+      "parquet_path": "/data1/abdu/opentargets/tadmap/tad.parquet",
+      "columns": [
+        { "name": "tadId", "type": "VARCHAR", "nullable": false },
+        { "name": "chromosome", "type": "VARCHAR", "nullable": false },
+        { "name": "start", "type": "INTEGER", "nullable": false },
+        { "name": "end", "type": "INTEGER", "nullable": false },
+        { "name": "geneCount", "type": "INTEGER", "nullable": false }
+      ]
+    },
+    "tadmap_tad_gene": {
+      "table_name": "tadmap_tad_gene",
+      "source": "TADMap (Singh & Berger, bioRxiv 2021)",
+      "parquet_path": "/data1/abdu/opentargets/tadmap/tad_gene.parquet",
+      "columns": [
+        { "name": "tadId", "type": "VARCHAR", "nullable": false },
+        { "name": "geneSymbol", "type": "VARCHAR", "nullable": false },
+        { "name": "geneId", "type": "VARCHAR", "nullable": true }
+      ]
+    },
+    "remap_tfbs": {
+      "table_name": "remap_tfbs",
+      "source": "ReMap 2022 (Hammal et al., NAR 2022)",
+      "parquet_path": "/data1/abdu/opentargets/remap/tfbs/",
+      "partitioned": true,
+      "partition_key": "chromosome",
+      "columns": [
+        { "name": "chromosome", "type": "VARCHAR", "nullable": false },
+        { "name": "start", "type": "INTEGER", "nullable": false },
+        { "name": "end", "type": "INTEGER", "nullable": false },
+        { "name": "tfName", "type": "VARCHAR", "nullable": false },
+        { "name": "tfGeneId", "type": "VARCHAR", "nullable": true },
+        { "name": "biotype", "type": "VARCHAR", "nullable": true }
+      ]
+    },
+    "dorothea_tf_target": {
+      "table_name": "dorothea_tf_target",
+      "source": "DoRothEA (Garcia-Alonso et al., Genome Res 2019)",
+      "parquet_path": "/data1/abdu/opentargets/dorothea/tf_target.parquet",
+      "columns": [
+        { "name": "id", "type": "VARCHAR", "nullable": false },
+        { "name": "tf", "type": "VARCHAR", "nullable": false },
+        { "name": "tfId", "type": "VARCHAR", "nullable": false },
+        { "name": "gene", "type": "VARCHAR", "nullable": false },
+        { "name": "geneId", "type": "VARCHAR", "nullable": false },
+        { "name": "effect", "type": "VARCHAR", "nullable": true },
+        { "name": "confidence", "type": "VARCHAR", "nullable": true },
+        { "name": "isCurated", "type": "BOOLEAN", "nullable": false },
+        { "name": "isChipseq", "type": "BOOLEAN", "nullable": false },
+        { "name": "isMotif", "type": "BOOLEAN", "nullable": false },
+        { "name": "isGtex", "type": "BOOLEAN", "nullable": false },
+        { "name": "pubmedId", "type": "VARCHAR", "nullable": true },
+        { "name": "keggPathway", "type": "VARCHAR", "nullable": true }
+      ]
+    },
+    "tflink_tf_target": {
+      "table_name": "tflink_tf_target",
+      "source": "TFLink (Liska et al., NAR 2022)",
+      "parquet_path": "/data1/abdu/opentargets/tflink/tf_target.parquet",
+      "columns": [
+        { "name": "id", "type": "VARCHAR", "nullable": false },
+        { "name": "tf", "type": "VARCHAR", "nullable": false },
+        { "name": "tfId", "type": "VARCHAR", "nullable": false },
+        { "name": "gene", "type": "VARCHAR", "nullable": false },
+        { "name": "geneId", "type": "VARCHAR", "nullable": false },
+        { "name": "detectionMethod", "type": "VARCHAR", "nullable": true },
+        { "name": "pubmedId", "type": "VARCHAR", "nullable": true },
+        { "name": "sourceDatabase", "type": "VARCHAR", "nullable": true },
+        { "name": "smallScaleEvidence", "type": "BOOLEAN", "nullable": false }
+      ]
+    },
+    "htftarget_tf_target": {
+      "table_name": "htftarget_tf_target",
+      "source": "hTFtarget (Zhang et al., NAR 2020)",
+      "parquet_path": "/data1/abdu/opentargets/htftarget/tf_target.parquet",
+      "columns": [
+        { "name": "id", "type": "VARCHAR", "nullable": false },
+        { "name": "tf", "type": "VARCHAR", "nullable": false },
+        { "name": "tfId", "type": "VARCHAR", "nullable": false },
+        { "name": "gene", "type": "VARCHAR", "nullable": false },
+        { "name": "geneId", "type": "VARCHAR", "nullable": false },
+        { "name": "tissue", "type": "VARCHAR", "nullable": true }
+      ]
+    }
+  }
+}

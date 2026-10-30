@@ -1,6 +1,5 @@
 :- use_module(library(optparse)).
-:- use_module(library(interpolate)).
-:- initialization(main).
+:- initialization(main, main).
 
 % Define the main entry point
 main :-

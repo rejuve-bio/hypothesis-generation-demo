@@ -221,6 +221,16 @@ data/OSF
 data/cts
 data/peaks
 data/raw
+data/loo
+data/per_chr
+data/multi_chr
+data/chr*
+
+# Logs
+logs/
+
+# Docs
+docs/
 data/ldsc
 data/ldsc_test
 data/gene_expression
@@ -237,6 +247,10 @@ data/chr16
 data/per_chr
 diagrams
 docs
+data/loo
+data/per_chr
+data/multi_chr
+data/chr*
 
 # Logs
 logs/

@@ -629,6 +629,7 @@ def child_enrichment_batch_flow(current_user_id, child_enrich_ids, parent_hypoth
                 "go_id": go_id,
                 "phenotype": phenotype,
                 "variant": variant,
+                "causal_gene": enrich_data.get("causal_gene"),
                 "status": "pending",
                 "created_at": datetime.now(timezone.utc).isoformat(timespec='milliseconds') + "Z",
                 "task_history": [],
