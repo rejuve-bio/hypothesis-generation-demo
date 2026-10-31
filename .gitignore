@@ -205,3 +205,6 @@ data/ldsc
 
 # Logs
 logs/
+
+# k8s overlay values kept out of the repo
+k8s/compute/overlays/*/infisical.env

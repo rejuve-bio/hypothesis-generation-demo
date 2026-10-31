@@ -4,6 +4,15 @@ namespace: hypothesis-staging
 resources:
   - ../../base
   - infisical-secret.yaml
+configMapGenerator:
+  - name: infisical-config                 # from git-ignored infisical.env
+    envs: [infisical.env]
+    options: {disableNameSuffixHash: true}
+replacements:                              # fill InfisicalSecret placeholders from infisical-config
+  - source: {kind: ConfigMap, name: infisical-config, fieldPath: data.INFISICAL_HOST_API}
+    targets: [{select: {kind: InfisicalSecret}, fieldPaths: [spec.hostAPI]}]
+  - source: {kind: ConfigMap, name: infisical-config, fieldPath: data.INFISICAL_PROJECT_ID}
+    targets: [{select: {kind: InfisicalSecret}, fieldPaths: [spec.authentication.universalAuth.secretsScope.projectId]}]
 images:                                    # CD overrides with staging-<sha> via kubectl set image
   - {name: rejuvebio/hypothesis-generation-api-service, newTag: staging}
   - {name: rejuvebio/hypothesis-generation-dask-worker, newTag: staging}

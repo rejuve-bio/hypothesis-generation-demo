@@ -7,6 +7,14 @@ resources:
 configMapGenerator:                        # kb.yaml from config/; image only ships pl/
   - name: prolog-kb
     files: [kb.yaml]
+  - name: infisical-config                 # from git-ignored infisical.env
+    envs: [infisical.env]
+    options: {disableNameSuffixHash: true}
+replacements:                              # fill InfisicalSecret placeholders from infisical-config
+  - source: {kind: ConfigMap, name: infisical-config, fieldPath: data.INFISICAL_HOST_API}
+    targets: [{select: {kind: InfisicalSecret}, fieldPaths: [spec.hostAPI]}]
+  - source: {kind: ConfigMap, name: infisical-config, fieldPath: data.INFISICAL_PROJECT_ID}
+    targets: [{select: {kind: InfisicalSecret}, fieldPaths: [spec.authentication.universalAuth.secretsScope.projectId]}]
 images:                                    # CD overrides with wip-<sha> via kubectl set image
   - {name: rejuvebio/hypothesis-generation-api-service, newTag: wip}
   - {name: rejuvebio/hypothesis-generation-dask-worker, newTag: wip}
