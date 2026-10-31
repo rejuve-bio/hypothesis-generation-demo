@@ -48,17 +48,31 @@ spec:
               value: "5000"
             - name: REDIS_URL
               value: "redis://redis:6379"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hypothesis-secrets
+                  key: OpenAI
+            - name: CREDIBLE_SETS_DB_HOST
+              value: "credible-sets-postgres"
+            - name: CREDIBLE_SETS_DB_PORT
+              value: "5432"
           envFrom:
             - secretRef:
                 name: hypothesis-secrets
+            - secretRef:
+                name: hypothesis-env-secrets
           command:
             - "sh"
             - "-c"
             - "uv run dask worker tcp://dask-scheduler:8786 --nworkers 4 --nthreads 1 --memory-limit 40GB --preload src.dask_preload"
           resources:
             limits:
-              cpu: "8"
-              memory: "32Gi"
+              cpu: "28"
+              memory: "160Gi"
+            requests:
+              cpu: "14"
+              memory: "80Gi"
           volumeMounts:
             - name: app-source
               mountPath: /app

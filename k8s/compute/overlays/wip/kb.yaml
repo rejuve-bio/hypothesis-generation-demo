@@ -1,0 +1,344 @@
+settings:
+  # Container path (compose mounts PROLOG_OUT_V3_PATH here). Host path is
+  # /mnt/hdd_1/biocypher-kg/output/human/prolog_out_v3 for compile_kb.py.
+  prolog_base: /mnt/prolog_out_v3
+
+kbs:
+  # === Gencode ===
+  gencode_gene:
+    path: gencode/gene
+    nodes: true
+    edges: false
+    loaded: true
+
+  gencode_transcript:
+    path: gencode/transcript
+    nodes: true
+    edges: true
+    loaded: false
+
+  gencode_exon:
+    path: gencode/exon
+    nodes: true
+    edges: true
+    loaded: false
+
+  # === Genes / Proteins ===
+  uniprotkb:
+    path: uniprot
+    nodes: true
+    edges: true
+    loaded: false
+
+  refseq_closest_gene:
+    path: refseq
+    nodes: false
+    edges: true
+    loaded: true
+
+  # === Pathways / Ontologies ===
+  pathway:
+    path: reactome
+    nodes: true
+    edges: true
+    loaded: false
+
+  gaf:
+    path: gaf
+    nodes: false
+    edges: true
+    loaded: false
+
+  gene_ontology_biological_process:
+    path: gene_ontology/biological_process
+    nodes: true
+    edges: true
+    loaded: false
+
+  gene_ontology_cellular_component:
+    path: gene_ontology/cellular_component
+    nodes: true
+    edges: true
+    loaded: false
+
+  gene_ontology_molecular_function:
+    path: gene_ontology/molecular_function
+    nodes: true
+    edges: true
+    loaded: false
+
+  uberon:
+    path: uberon
+    nodes: true
+    edges: true
+    loaded: false
+
+  cell_line_ontology:
+    path: cell_line_ontology
+    nodes: true
+    edges: true
+    loaded: false
+
+  cell_ontology:
+    path: cell_ontology
+    nodes: true
+    edges: true
+    loaded: true
+
+  experimental_factor_ontology:
+    path: experimental_factor_ontology
+    nodes: true
+    edges: true
+    loaded: true
+
+  brenda_tissue_ontology:
+    path: brenda_tissue_ontology
+    nodes: true
+    edges: true
+    loaded: false
+
+  # === Regulatory / Epigenomics ===
+  tflink:
+    path: tflink
+    nodes: false
+    edges: true
+    loaded: true
+
+  hocomoco:
+    path: hocomoco
+    nodes: true
+    edges: false
+    loaded: false
+
+  encode_tfbs:
+    path: tfbs
+    nodes: true
+    edges: true
+    loaded: false
+
+  fabian:
+    path: fabian
+    nodes: false
+    edges: true
+    loaded: false
+
+  motif_diff:
+    path: MotifDiff
+    nodes: false
+    edges: true
+    loaded: false
+
+  abc:
+    path: abc
+    nodes: false
+    edges: true
+    loaded: false
+
+  enhancer_atlas:
+    path: enhancer_atlas
+    nodes: true
+    edges: true
+    loaded: true
+
+  epd_promoter:
+    path: epd
+    nodes: true
+    edges: true
+    loaded: true
+
+  ccre_enhancer:
+    path: ccre/enhancer_ccre
+    nodes: true
+    edges: true
+    loaded: false
+
+  ccre_promoter:
+    path: ccre/promoter_ccre
+    nodes: true
+    edges: true
+    loaded: false
+
+  catlas_ccre_enhancer:
+    path: catlas_ccre/enhancer
+    nodes: true
+    edges: false
+    loaded: true
+
+  catlas_ccre_enhancer_clo:
+    path: catlas_ccre/enhancer/clo
+    nodes: false
+    edges: true
+    loaded: true
+
+  catlas_ccre_enhancer_uberon:
+    path: catlas_ccre/enhancer/uberon
+    nodes: false
+    edges: true
+    loaded: true
+
+  catlas_ccre_promoter:
+    path: catlas_ccre/promoter
+    nodes: true
+    edges: false
+    loaded: true
+
+  catlas_ccre_promoter_clo:
+    path: catlas_ccre/promoter/clo
+    nodes: false
+    edges: true
+    loaded: true
+
+  catlas_ccre_promoter_uberon:
+    path: catlas_ccre/promoter/uberon
+    nodes: false
+    edges: true
+    loaded: true
+
+  catlas_ccre_abc_enhancer:
+    path: catlas_ccre/abc/enhancer
+    nodes: false
+    edges: true
+    loaded: true
+
+  catlas_ccre_abc_promoter:
+    path: catlas_ccre/abc/promoter
+    nodes: false
+    edges: true
+    loaded: true
+
+  dbsuper_super_enhancer:
+    path: dbsuper
+    nodes: true
+    edges: true
+    loaded: true
+
+  peregrine_enhancer:
+    path: peregrine
+    nodes: true
+    edges: true
+    loaded: true
+
+  roadmap_chromatin_state:
+    path: roadmap/chromatin_state
+    nodes: false
+    edges: true
+    loaded: false
+
+  roadmap_h3_mark:
+    path: roadmap/h3_mark
+    nodes: false
+    edges: true
+    loaded: false
+
+  roadmap_dhs:
+    path: roadmap/dhs
+    nodes: false
+    edges: true
+    loaded: false
+
+  tf_snp:
+    path: tf_snp
+    nodes: false
+    edges: true
+    loaded: false
+
+  # === Expression ===
+  gtex_eqtl:
+    path: gtex/eqtl
+    nodes: false
+    edges: true
+    loaded: true
+
+  gtex_expression:
+    path: gtex/expression
+    nodes: false
+    edges: true
+    loaded: false
+
+  bgee:
+    path: bgee
+    nodes: false
+    edges: true
+    loaded: true
+
+  coxpressdb:
+    path: coxpressdb
+    nodes: false
+    edges: true
+    loaded: false
+
+  # === Variants / Genomic ===
+  cadd:
+    path: cadd
+    nodes: true
+    edges: false
+    loaded: false
+
+  dbsnp:
+    path: dbsnp
+    nodes: true
+    edges: false
+    loaded: true
+
+  dbvar_variant:
+    path: dbvar
+    nodes: true
+    edges: false
+    loaded: false
+
+  dgv_variant:
+    path: dgv
+    nodes: true
+    edges: false
+    loaded: false
+
+  polyphen2:
+    path: polyphen-2
+    nodes: true
+    edges: false
+    loaded: false
+
+  tadmap:
+    path: tadmap
+    nodes: true
+    edges: true
+    loaded: true
+
+  topld_eur:
+    path: top_ld/EUR
+    nodes: false
+    edges: true
+    loaded: false
+
+  # === GWAS ===
+  gwas_downstream:
+    path: gwas/downstream
+    nodes: false
+    edges: true
+    loaded: false
+
+  gwas_ingene:
+    path: gwas/ingene
+    nodes: false
+    edges: true
+    loaded: false
+
+  gwas_upstream:
+    path: gwas/upstream
+    nodes: false
+    edges: true
+    loaded: false
+
+  # === Non-coding RNA ===
+  rna_central_non_coding_rna:
+    path: rna_central
+    nodes: true
+    edges: true
+    loaded: false
+
+  # === PPI ===
+  string:
+    path: string
+    nodes: false
+    edges: true
+    loaded: false

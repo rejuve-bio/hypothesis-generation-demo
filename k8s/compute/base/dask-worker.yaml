@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dask-worker
+spec:
+  replicas: 1
+  strategy: {type: Recreate}        # surge pod would exceed the limits.cpu quota
+  selector:
+    matchLabels: {app: dask-worker}
+  template:
+    metadata:
+      labels: {app: dask-worker}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      imagePullSecrets: [{name: dockerhub-creds}]
+      initContainers:
+        - name: wait-for-redis
+          image: redis:7-alpine
+          securityContext: {allowPrivilegeEscalation: false}
+          command: ["sh", "-c", "until redis-cli -h redis ping; do echo waiting for redis; sleep 2; done"]
+      containers:
+        - name: dask-worker
+          image: rejuvebio/hypothesis-generation-dask-worker:staging
+          imagePullPolicy: Always
+          securityContext: {allowPrivilegeEscalation: false}
+          env:
+            - {name: DASK_ADDRESS, value: "tcp://dask-scheduler:8786"}
+            - {name: PREFECT_API_URL, value: "http://prefect-service:4200/api"}
+            - {name: PYTHONPATH, value: "/app"}
+            - {name: SWIPL_HOST, value: "prolog-service"}
+            - {name: SWIPL_PORT, value: "4242"}
+            - {name: ENSEMBL_HGNC_MAP, value: "/app/data/ensembl_to_hgnc.pkl"}
+            - {name: HGNC_ENSEMBL_MAP, value: "/app/data/hgnc_to_ensembl.pkl"}
+            - {name: GO_MAP, value: "/app/data/go_map.pkl"}
+            - {name: SKIP_SEED, value: "true"}
+            - {name: REDIS_URL, value: "redis://redis:6379"}
+            - {name: CREDIBLE_SETS_DB_HOST, value: "credible-sets-postgres"}
+            - {name: CREDIBLE_SETS_DB_PORT, value: "5432"}
+          envFrom:
+            - secretRef: {name: hypothesis-secrets}
+            - secretRef: {name: hypothesis-env-secrets}
+          command: ["sh", "-c", "uv run dask worker tcp://dask-scheduler:8786 --nworkers 4 --nthreads 1 --memory-limit 40GB --preload src.dask_preload"]
+          resources:
+            requests: {cpu: "14", memory: 80Gi}
+            limits: {cpu: "28", memory: 160Gi}
+          volumeMounts:
+            - {name: runtime, mountPath: /app/data/projects, subPath: projects}
+            - {name: runtime, mountPath: /app/data/states, subPath: states}
+            - {name: runtime, mountPath: /app/data/temp, subPath: temp}
+            - {name: runtime, mountPath: /app/data/uploads, subPath: uploads}
+            - {name: runtime, mountPath: /app/data/metadata, subPath: metadata}
+            - {name: runtime, mountPath: /app/data/susie, subPath: susie}
+            - {name: refdata, mountPath: /app/data/ldscores, subPath: ldscores, readOnly: true}
+            - {name: refdata, mountPath: /app/data/cts, subPath: cts, readOnly: true}
+            - {name: refdata, mountPath: /app/data/OSF, subPath: OSF, readOnly: true}
+            - {name: refdata, mountPath: /app/data/ldsc, subPath: ldsc, readOnly: true}
+            - {name: refdata, mountPath: /app/data/harmonizer_ref, subPath: harmonizer_ref, readOnly: true}
+            - {name: refdata, mountPath: /app/data/1000Genomes_phase3/plink_format_b38, subPath: plink_format_b38, readOnly: true}
+            - {name: refdata, mountPath: /app/data/Manifest_201807.csv, subPath: Manifest_201807.csv, readOnly: true}
+            - {name: refdata, mountPath: /app/data/gwas_catalog_phenotypes.json, subPath: gwas_catalog_phenotypes.json, readOnly: true}
+      volumes:
+        - {name: runtime, persistentVolumeClaim: {claimName: app-runtime-data}}
+        - {name: refdata, persistentVolumeClaim: {claimName: reference-data, readOnly: true}}

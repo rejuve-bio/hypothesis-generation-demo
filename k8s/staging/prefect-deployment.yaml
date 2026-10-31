@@ -44,9 +44,20 @@ spec:
               value: "5000"
             - name: REDIS_URL
               value: "redis://redis:6379"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hypothesis-secrets
+                  key: OpenAI
+            - name: CREDIBLE_SETS_DB_HOST
+              value: "credible-sets-postgres"
+            - name: CREDIBLE_SETS_DB_PORT
+              value: "5432"
           envFrom:
             - secretRef:
                 name: hypothesis-secrets
+            - secretRef:
+                name: hypothesis-env-secrets
           command:
             - "bash"
             - "-c"
@@ -62,7 +73,7 @@ spec:
               tail -f /dev/null
           resources:
             limits:
-              memory: "8Gi"
+              memory: "16Gi"
           volumeMounts:
             - name: app-source
               mountPath: /app
@@ -75,3 +86,4 @@ spec:
         - name: app-data
           hostPath:
             path: /mnt/hdd_1/tesnim/hypothesis-generation_demo/data
+

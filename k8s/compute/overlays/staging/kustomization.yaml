@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hypothesis-staging
+resources:
+  - ../../base
+  - infisical-secret.yaml
+  - knowledge-graph-v2.yaml
+configMapGenerator:
+  - name: infisical-config                 # from git-ignored infisical.env
+    envs: [infisical.env]
+    options: {disableNameSuffixHash: true}
+replacements:                              # fill InfisicalSecret placeholders from infisical-config
+  - source: {kind: ConfigMap, name: infisical-config, fieldPath: data.INFISICAL_HOST_API}
+    targets: [{select: {kind: InfisicalSecret}, fieldPaths: [spec.hostAPI]}]
+  - source: {kind: ConfigMap, name: infisical-config, fieldPath: data.INFISICAL_PROJECT_ID}
+    targets: [{select: {kind: InfisicalSecret}, fieldPaths: [spec.authentication.universalAuth.secretsScope.projectId]}]
+images:                                    # CD overrides with staging-<sha> via kubectl set image
+  - {name: rejuvebio/hypothesis-generation-api-service, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-dask-worker, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-dask-scheduler, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-prefect-service, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-prefect-deployment, newTag: staging}
+  - {name: rejuvebio/hypothesis-generation-prolog-service, newTag: staging}
+patches:
+  - target: {kind: Deployment, name: prolog-service}  # staging code also loads /mnt/prolog_out_v2
+    patch: |-
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value: {name: kg-v2, persistentVolumeClaim: {claimName: knowledge-graph-v2, readOnly: true}}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value: {name: kg-v2, mountPath: /mnt/prolog_out_v2, readOnly: true}
+# API NodePort stays 30500 (base): nginx -> 127.0.0.1:30500

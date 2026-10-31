@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs: {app.kubernetes.io/part-of: hypothesis-generation}
+    includeSelectors: false
+resources:
+  - volumes.yaml
+  - datastores.yaml
+  - prolog.yaml
+  - dask-scheduler.yaml
+  - dask-worker.yaml
+  - prefect-service.yaml
+  - prefect-deployment.yaml
+  - api.yaml
+  - networkpolicy.yaml

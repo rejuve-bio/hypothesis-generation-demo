@@ -1,51 +1,56 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: dask-scheduler
+  name: prefect-service
   namespace: hypothesis-staging
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: dask-scheduler
+      app: prefect-service
   template:
     metadata:
       labels:
-        app: dask-scheduler
+        app: prefect-service
     spec:
       imagePullSecrets:
         - name: dockerhub-creds
       containers:
-        - name: dask-scheduler
-          image: rejuvebio/hypothesis-generation-dask-scheduler:staging
+        - name: prefect-service
+          image: rejuvebio/hypothesis-generation-prefect-service:staging
           imagePullPolicy: Always
           ports:
-            - containerPort: 8786
-            - containerPort: 8787
+            - containerPort: 4200
           env:
-            - name: PYTHONPATH
-              value: "/app"
-            - name: SKIP_SEED
-              value: "true"
-          command:
-            - "sh"
-            - "-c"
-            - "uv run dask scheduler --host 0.0.0.0 --port 8786 --dashboard-address :8787"
+            - name: PREFECT_API_URL
+              value: "http://prefect-service:4200/api"
+            - name: PREFECT_UI_API_URL
+              value: "https://dev.rejuve.bio:5054/api"
+            - name: UV_PROJECT_ENVIRONMENT
+              value: "/opt/prefect-venv"
+            - name: DASK_ADDRESS
+              value: "tcp://dask-scheduler:8786"
+            - name: PREFECT_API_DATABASE_CONNECTION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hypothesis-env-secrets 
+                  key: PREFECT_API_DATABASE_CONNECTION_URL
+          envFrom:
+            - secretRef:
+                name: hypothesis-secrets
+            - secretRef:
+                name: hypothesis-env-secrets
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: dask-scheduler
+  name: prefect-service
   namespace: hypothesis-staging
 spec:
   type: NodePort
   selector:
-    app: dask-scheduler
+    app: prefect-service
   ports:
-    - name: scheduler
-      port: 8786
-      targetPort: 8786
-    - name: dashboard
-      port: 8787
-      targetPort: 8787
-      nodePort: 30504
+    - port: 4200
+      targetPort: 4200
+      nodePort: 30502

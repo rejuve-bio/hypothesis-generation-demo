@@ -17,12 +17,13 @@ jobs:
       - name: Checkout current repository
         uses: actions/checkout@v4
 
-      - name: Setup kubectl
+      - name: Setup kubectl (job-temp kubeconfig)
+        env:
+          KCFG_DATA: ${{ secrets.KUBECONFIG_DEV }}
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_DEV }}" > ~/.kube/config
-          chmod 600 ~/.kube/config
-          echo "KUBECONFIG=$HOME/.kube/config" >> $GITHUB_ENV
+          umask 077
+          printf '%s\n' "$KCFG_DATA" > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> $GITHUB_ENV
 
       - name: Deploy to Kubernetes
         run: |
@@ -114,6 +115,10 @@ jobs:
 
             Check logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
+      - name: Remove kubeconfig
+        if: always()
+        run: rm -f "$RUNNER_TEMP/kubeconfig"
+
   deploy-staging:
     needs: deploy-dev
     environment: production
@@ -128,12 +133,13 @@ jobs:
       - name: Checkout current repository
         uses: actions/checkout@v4
 
-      - name: Setup kubectl
+      - name: Setup kubectl (job-temp kubeconfig)
+        env:
+          KCFG_DATA: ${{ secrets.KUBECONFIG_STAGING }}
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_STAGING }}" > ~/.kube/config
-          chmod 600 ~/.kube/config
-          echo "KUBECONFIG=$HOME/.kube/config" >> $GITHUB_ENV
+          umask 077
+          printf '%s\n' "$KCFG_DATA" > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> $GITHUB_ENV
 
       - name: Deploy to Kubernetes
         run: |
@@ -223,3 +229,58 @@ jobs:
             Triggered by: ${{ github.actor }}
 
             Check logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Remove kubeconfig
+        if: always()
+        run: rm -f "$RUNNER_TEMP/kubeconfig"
+
+  deploy-compute-staging:              
+    if: vars.COMPUTE_STAGING_ENABLED == 'true'
+    environment: compute-staging
+    runs-on: [self-hosted, compute-staging-runner]
+    env:
+      NAMESPACE: hypothesis-staging
+      TAG: ${{ github.event.client_payload.image_tag }}
+      KUBECTL: /opt/kubectl
+    steps:
+      - name: Validate image tag
+        run: |
+          [ -z "$TAG" ] && TAG=staging
+          [[ "$TAG" =~ ^staging(-[0-9a-f]{7}|-latest)?$ ]] || { echo "invalid tag: $TAG"; exit 1; }
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Update images
+        run: |
+          set -euo pipefail
+          img() { $KUBECTL -n $NAMESPACE set image deployment/$1 $2=rejuvebio/hypothesis-generation-$3:$TAG; }
+          img hypothesis-api     api                api-service
+          img prolog-service     prolog             prolog-service
+          img prefect-service    prefect-service    prefect-service
+          img prefect-deployment prefect-deployment prefect-deployment
+          img dask-scheduler     dask-scheduler     dask-scheduler
+          img dask-worker        dask-worker        dask-worker
+
+      - name: Wait for rollout
+        run: |
+          set -euo pipefail
+          for d in dask-scheduler prefect-service prefect-deployment dask-worker; do
+            $KUBECTL -n $NAMESPACE rollout status deployment/$d --timeout=15m
+          done
+          $KUBECTL -n $NAMESPACE rollout status deployment/hypothesis-api --timeout=100m   # GWAS seeding on first start
+          $KUBECTL -n $NAMESPACE rollout status deployment/prolog-service --timeout=120m   # KG load
+          $KUBECTL -n $NAMESPACE get pods
+
+      - name: Notify
+        if: always()
+        uses: dawidd6/action-send-mail@4226df7daafa6fc901a43789c49bf7ab309066e7 # v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "CD compute-staging ${{ job.status }} - Hypothesis Generation"
+          to: ${{ secrets.RECIEVER_EMAIL }}
+          from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            compute-staging deploy: ${{ job.status }} (tag ${{ env.TAG }})
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

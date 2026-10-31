@@ -1,0 +1,177 @@
+# Redis, Mongo, Prefect Postgres, credible-sets Postgres (local-path volumes under /data2/k3s).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          securityContext: {allowPrivilegeEscalation: false}
+          ports: [{containerPort: 6379}]
+          readinessProbe: {tcpSocket: {port: 6379}, periodSeconds: 10}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector: {app: redis}
+  ports: [{port: 6379, targetPort: 6379}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels: {app: mongo}
+  template:
+    metadata:
+      labels: {app: mongo}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: mongo
+          image: mongo:7.0
+          securityContext: {allowPrivilegeEscalation: false}
+          ports: [{containerPort: 27017}]
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom: {secretKeyRef: {name: hypothesis-env-secrets, key: MONGO_USER}}
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: hypothesis-env-secrets, key: MONGO_PASSWORD}}
+          readinessProbe: {tcpSocket: {port: 27017}, periodSeconds: 10}
+          resources:
+            requests: {cpu: 250m, memory: 1Gi}
+            limits: {cpu: "2", memory: 8Gi}
+          volumeMounts: [{name: mongo-data, mountPath: /data/db}]
+  volumeClaimTemplates:
+    - metadata: {name: mongo-data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources: {requests: {storage: 10Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+spec:
+  selector: {app: mongo}
+  ports: [{port: 27017, targetPort: 27017}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prefect-postgres
+spec:
+  serviceName: prefect-postgres
+  replicas: 1
+  selector:
+    matchLabels: {app: prefect-postgres}
+  template:
+    metadata:
+      labels: {app: prefect-postgres}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: prefect-postgres
+          image: postgres:15-alpine
+          securityContext: {allowPrivilegeEscalation: false}
+          ports: [{containerPort: 5432}]
+          env:
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: hypothesis-env-secrets, key: PREFECT_DB_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: hypothesis-env-secrets, key: PREFECT_DB_PASSWORD}}
+            - name: POSTGRES_DB
+              valueFrom: {secretKeyRef: {name: hypothesis-env-secrets, key: PREFECT_DB_NAME}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          readinessProbe:
+            exec: {command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 4Gi}
+          volumeMounts: [{name: prefect-postgres-data, mountPath: /var/lib/postgresql/data}]
+  volumeClaimTemplates:
+    - metadata: {name: prefect-postgres-data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources: {requests: {storage: 5Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prefect-postgres
+spec:
+  selector: {app: prefect-postgres}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: credible-sets-postgres
+spec:
+  serviceName: credible-sets-postgres
+  replicas: 1
+  selector:
+    matchLabels: {app: credible-sets-postgres}
+  template:
+    metadata:
+      labels: {app: credible-sets-postgres}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: credible-sets-postgres
+          image: postgres:15-alpine
+          securityContext: {allowPrivilegeEscalation: false}
+          ports: [{containerPort: 5432}]
+          env:
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: hypothesis-env-secrets, key: CREDIBLE_SETS_DB_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: hypothesis-env-secrets, key: CREDIBLE_SETS_DB_PASSWORD}}
+            - name: POSTGRES_DB
+              valueFrom: {secretKeyRef: {name: hypothesis-env-secrets, key: CREDIBLE_SETS_DB_NAME}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          readinessProbe:
+            exec: {command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 250m, memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+          volumeMounts: [{name: credible-sets-postgres-data, mountPath: /var/lib/postgresql/data}]
+  volumeClaimTemplates:
+    - metadata: {name: credible-sets-postgres-data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources: {requests: {storage: 20Gi}}    # ~5 GB of OpenTargets data + room
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: credible-sets-postgres
+spec:
+  selector: {app: credible-sets-postgres}
+  ports: [{port: 5432, targetPort: 5432}]

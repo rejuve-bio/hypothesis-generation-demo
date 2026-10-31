@@ -1,0 +1,46 @@
+# One-shot Job: loads the pinned OpenTargets release (OT_RELEASE) into credible-sets-postgres.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ot-db-bootstrap
+  namespace: hypothesis-staging
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: dockerhub-creds
+      containers:
+        - name: ot-db-bootstrap
+          image: rejuvebio/hypothesis-generation-dask-worker:staging
+          imagePullPolicy: Always
+          env:
+            - name: PYTHONPATH
+              value: "/app"
+            - name: CREDIBLE_SETS_DB_HOST
+              value: "credible-sets-postgres"
+            - name: CREDIBLE_SETS_DB_PORT
+              value: "5432"
+          envFrom:
+            - secretRef:
+                name: hypothesis-secrets
+            - secretRef:
+                name: hypothesis-env-secrets
+          command:
+            - "uv"
+            - "run"
+            - "python"
+            - "scripts/bootstrap_ot_db.py"
+          volumeMounts:
+            - name: app-source
+              mountPath: /app
+            - name: app-data
+              mountPath: /app/data
+      volumes:
+        - name: app-source
+          hostPath:
+            path: /mnt/hdd_1/tesnim/hypothesis-generation_demo
+        - name: app-data
+          hostPath:
+            path: /mnt/hdd_1/tesnim/hypothesis-generation_demo/data

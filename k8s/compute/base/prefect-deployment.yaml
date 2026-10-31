@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prefect-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: prefect-deployment}
+  template:
+    metadata:
+      labels: {app: prefect-deployment}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      imagePullSecrets: [{name: dockerhub-creds}]
+      initContainers:
+        - name: wait-for-redis
+          image: redis:7-alpine
+          securityContext: {allowPrivilegeEscalation: false}
+          command: ["sh", "-c", "until redis-cli -h redis ping; do echo waiting for redis; sleep 2; done"]
+      containers:
+        - name: prefect-deployment
+          image: rejuvebio/hypothesis-generation-prefect-deployment:staging
+          imagePullPolicy: Always
+          securityContext: {allowPrivilegeEscalation: false}
+          env:
+            - {name: PREFECT_API_URL, value: "http://prefect-service:4200/api"}
+            - {name: UV_PROJECT_ENVIRONMENT, value: "/opt/flask-venv"}
+            - {name: DASK_ADDRESS, value: "tcp://dask-scheduler:8786"}
+            - {name: PYTHONPATH, value: "/app"}
+            - {name: ENSEMBL_HGNC_MAP, value: "/app/data/ensembl_to_hgnc.pkl"}
+            - {name: HGNC_ENSEMBL_MAP, value: "/app/data/hgnc_to_ensembl.pkl"}
+            - {name: GO_MAP, value: "/app/data/go_map.pkl"}
+            - {name: SKIP_SEED, value: "true"}                 # api-service does the seeding
+            - {name: SWIPL_HOST, value: "prolog-service"}      # for Prefect worker subprocesses
+            - {name: SWIPL_PORT, value: "4242"}
+            - {name: REDIS_URL, value: "redis://redis:6379"}
+            - {name: CREDIBLE_SETS_DB_HOST, value: "credible-sets-postgres"}
+            - {name: CREDIBLE_SETS_DB_PORT, value: "5432"}
+          envFrom:
+            - secretRef: {name: hypothesis-secrets}
+            - secretRef: {name: hypothesis-env-secrets}
+          command:
+            - "bash"
+            - "-c"
+            - |
+              uv run prefect work-pool create 'analysis-pool' --type process --overwrite &&
+              uv run prefect work-pool update 'analysis-pool' --concurrency-limit 3 &&
+              uv run prefect work-pool create 'interactive-pool' --type process --overwrite &&
+              uv run prefect work-pool update 'interactive-pool' --concurrency-limit 10 &&
+              uv run prefect concurrency-limit create harmonize_tag 2 || true &&
+              uv run python src/deployments.py --ensembl-hgnc-map /app/data/ensembl_to_hgnc.pkl --hgnc-ensembl-map /app/data/hgnc_to_ensembl.pkl --go-map /app/data/go_map.pkl --swipl-host prolog-service --swipl-port 4242 &&
+              uv run prefect worker start --pool 'analysis-pool' --name 'heavy-worker' &
+              uv run prefect worker start --pool 'interactive-pool' --name 'light-worker' &
+              tail -f /dev/null
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "8", memory: 16Gi}
+          volumeMounts:
+            - {name: runtime, mountPath: /app/data/projects, subPath: projects}
+            - {name: runtime, mountPath: /app/data/states, subPath: states}
+            - {name: runtime, mountPath: /app/data/temp, subPath: temp}
+            - {name: runtime, mountPath: /app/data/uploads, subPath: uploads}
+            - {name: runtime, mountPath: /app/data/metadata, subPath: metadata}
+            - {name: runtime, mountPath: /app/data/susie, subPath: susie}
+            - {name: refdata, mountPath: /app/data/ldscores, subPath: ldscores, readOnly: true}
+            - {name: refdata, mountPath: /app/data/cts, subPath: cts, readOnly: true}
+            - {name: refdata, mountPath: /app/data/OSF, subPath: OSF, readOnly: true}
+            - {name: refdata, mountPath: /app/data/ldsc, subPath: ldsc, readOnly: true}
+            - {name: refdata, mountPath: /app/data/harmonizer_ref, subPath: harmonizer_ref, readOnly: true}
+            - {name: refdata, mountPath: /app/data/1000Genomes_phase3/plink_format_b38, subPath: plink_format_b38, readOnly: true}
+            - {name: refdata, mountPath: /app/data/Manifest_201807.csv, subPath: Manifest_201807.csv, readOnly: true}
+            - {name: refdata, mountPath: /app/data/gwas_catalog_phenotypes.json, subPath: gwas_catalog_phenotypes.json, readOnly: true}
+      volumes:
+        - {name: runtime, persistentVolumeClaim: {claimName: app-runtime-data}}
+        - {name: refdata, persistentVolumeClaim: {claimName: reference-data, readOnly: true}}

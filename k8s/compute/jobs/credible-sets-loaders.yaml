@@ -1,0 +1,52 @@
+# One-off loaders (run manually: kubectl apply -n <ns> -f). Alternative: pg_dump from an existing DB.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: credible-sets-loader
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      imagePullSecrets: [{name: dockerhub-creds}]
+      containers:
+        - name: credible-sets-loader
+          image: rejuvebio/hypothesis-generation-api-service:staging
+          securityContext: {allowPrivilegeEscalation: false}
+          env:
+            - {name: PYTHONPATH, value: "/app"}
+            - {name: CREDIBLE_SETS_DB_HOST, value: "credible-sets-postgres"}
+            - {name: CREDIBLE_SETS_DB_PORT, value: "5432"}
+          envFrom: [{secretRef: {name: hypothesis-env-secrets}}]
+          command: ["uv", "run", "python", "scripts/load_credible_sets_to_postgres.py", "--release", "latest"]
+          resources:
+            requests: {cpu: "1", memory: 4Gi}
+            limits: {cpu: "4", memory: 16Gi}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opentargets-studies-loader
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      imagePullSecrets: [{name: dockerhub-creds}]
+      containers:
+        - name: opentargets-studies-loader
+          image: rejuvebio/hypothesis-generation-api-service:staging
+          securityContext: {allowPrivilegeEscalation: false}
+          env:
+            - {name: PYTHONPATH, value: "/app"}
+            - {name: CREDIBLE_SETS_DB_HOST, value: "credible-sets-postgres"}
+            - {name: CREDIBLE_SETS_DB_PORT, value: "5432"}
+          envFrom: [{secretRef: {name: hypothesis-env-secrets}}]
+          command: ["uv", "run", "python", "scripts/load_opentargets_studies.py", "--release", "latest"]
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "2", memory: 8Gi}

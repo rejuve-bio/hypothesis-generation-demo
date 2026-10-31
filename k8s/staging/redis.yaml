@@ -14,7 +14,7 @@ spec:
         app: redis
     spec:
       containers:
-        - name: redis-kube
+        - name: redis-kubernetes
           image: redis:7-alpine
           ports:
             - containerPort: 6379

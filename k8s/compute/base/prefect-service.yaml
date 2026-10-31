@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prefect-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: prefect-service}
+  template:
+    metadata:
+      labels: {app: prefect-service}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      imagePullSecrets: [{name: dockerhub-creds}]
+      containers:
+        - name: prefect-service
+          image: rejuvebio/hypothesis-generation-prefect-service:staging
+          imagePullPolicy: Always
+          securityContext: {allowPrivilegeEscalation: false}
+          ports: [{containerPort: 4200}]
+          env:
+            - {name: PREFECT_API_URL, value: "http://prefect-service:4200/api"}
+            - {name: PREFECT_UI_API_URL, value: "http://localhost:4200/api"}   # UI via kubectl port-forward
+            - {name: UV_PROJECT_ENVIRONMENT, value: "/opt/prefect-venv"}
+            - {name: DASK_ADDRESS, value: "tcp://dask-scheduler:8786"}
+            - name: PREFECT_API_DATABASE_CONNECTION_URL
+              valueFrom: {secretKeyRef: {name: hypothesis-env-secrets, key: PREFECT_API_DATABASE_CONNECTION_URL}}
+          envFrom:
+            - secretRef: {name: hypothesis-secrets}
+            - secretRef: {name: hypothesis-env-secrets}
+          startupProbe:
+            httpGet: {path: /api/health, port: 4200}
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /api/health, port: 4200}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prefect-service
+spec:
+  selector: {app: prefect-service}      # ClusterIP only
+  ports:
+    - {port: 4200, targetPort: 4200}

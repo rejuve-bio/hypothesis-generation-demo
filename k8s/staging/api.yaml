@@ -42,9 +42,15 @@ spec:
               value: "/app/data/hgnc_to_ensembl.pkl"
             - name: GO_MAP
               value: "/app/data/go_map.pkl"
+            - name: CREDIBLE_SETS_DB_HOST
+              value: "credible-sets-postgres"
+            - name: CREDIBLE_SETS_DB_PORT
+              value: "5432"
           envFrom:
             - secretRef:
-                name: hypothesis-secrets
+                name: hypothesis-secrets        # Infisical synced
+            - secretRef:
+                name: hypothesis-env-secrets    # from .env file
           command:
             - "uv"
             - "run"
