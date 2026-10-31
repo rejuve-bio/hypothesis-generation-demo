@@ -4,6 +4,7 @@ metadata:
   name: dask-worker
 spec:
   replicas: 1
+  strategy: {type: Recreate}        # surge pod would exceed the limits.cpu quota
   selector:
     matchLabels: {app: dask-worker}
   template:
