@@ -1,0 +1,9 @@
+# Claim for the admin-made read-only PV hypothesis-staging-knowledge-graph-v2 (staging prolog loads prolog_out_v2).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: knowledge-graph-v2
+spec:
+  accessModes: [ReadOnlyMany]
+  storageClassName: ""
+  resources: {requests: {storage: 1Gi}}

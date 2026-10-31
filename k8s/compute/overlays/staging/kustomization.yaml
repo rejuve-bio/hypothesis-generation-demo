@@ -4,6 +4,7 @@ namespace: hypothesis-staging
 resources:
   - ../../base
   - infisical-secret.yaml
+  - knowledge-graph-v2.yaml
 configMapGenerator:
   - name: infisical-config                 # from git-ignored infisical.env
     envs: [infisical.env]
@@ -20,4 +21,13 @@ images:                                    # CD overrides with staging-<sha> via
   - {name: rejuvebio/hypothesis-generation-prefect-service, newTag: staging}
   - {name: rejuvebio/hypothesis-generation-prefect-deployment, newTag: staging}
   - {name: rejuvebio/hypothesis-generation-prolog-service, newTag: staging}
+patches:
+  - target: {kind: Deployment, name: prolog-service}  # staging code also loads /mnt/prolog_out_v2
+    patch: |-
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value: {name: kg-v2, persistentVolumeClaim: {claimName: knowledge-graph-v2, readOnly: true}}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value: {name: kg-v2, mountPath: /mnt/prolog_out_v2, readOnly: true}
 # API NodePort stays 30500 (base): nginx -> 127.0.0.1:30500

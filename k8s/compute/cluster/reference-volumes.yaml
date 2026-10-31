@@ -26,6 +26,18 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
+  name: hypothesis-staging-knowledge-graph-v2   # staging prolog also loads prolog_out_v2
+spec:
+  capacity: {storage: 1Gi}
+  accessModes: [ReadOnlyMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef: {namespace: hypothesis-staging, name: knowledge-graph-v2}
+  hostPath: {path: /srv/k8s-ro/kg_v2, type: Directory}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
   name: hypothesis-wip-reference-data
 spec:
   capacity: {storage: 1Gi}
