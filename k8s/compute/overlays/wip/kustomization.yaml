@@ -4,6 +4,9 @@ namespace: hypothesis-wip
 resources:
   - ../../base
   - infisical-secret.yaml
+configMapGenerator:                        # kb.yaml from config/; image only ships pl/
+  - name: prolog-kb
+    files: [kb.yaml]
 images:                                    # CD overrides with wip-<sha> via kubectl set image
   - {name: rejuvebio/hypothesis-generation-api-service, newTag: wip}
   - {name: rejuvebio/hypothesis-generation-dask-worker, newTag: wip}
@@ -17,7 +20,7 @@ patches:
       - op: replace
         path: /spec/ports/0/nodePort
         value: 30510
-  - target: {kind: Deployment, name: prolog-service}  # ODBC DSN for bioatomspace (Secret prolog-odbc)
+  - target: {kind: Deployment, name: prolog-service}  # ODBC DSN (Secret prolog-odbc) + kb.yaml
     patch: |-
       - op: add
         path: /spec/template/spec/volumes/-
@@ -25,3 +28,9 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/volumeMounts/-
         value: {name: odbc, mountPath: /root/.odbc.ini, subPath: odbc.ini, readOnly: true}
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value: {name: kb, configMap: {name: prolog-kb}}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value: {name: kb, mountPath: /app/config/kb.yaml, subPath: kb.yaml, readOnly: true}
