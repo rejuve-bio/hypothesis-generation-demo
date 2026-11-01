@@ -131,12 +131,11 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             except Exception as _cleanup_e:
                 logger.warning(f"[PIPELINE] Could not clean up {gwas_file_path}: {_cleanup_e}")
 
-        # Start LDSC + tissue analysis immediately after harmonization (runs in parallel)
-        logger.info(f"[PIPELINE] Starting LDSC + tissue analysis in parallel after harmonization")
-        ldsc_tissue_future = run_combined_ldsc_tissue_analysis.submit(
-            harmonized_file, output_dir, project_id, user_id
-        )
-        logger.info(f"[PIPELINE] LDSC + tissue analysis started in background")
+        def start_ldsc_tissue_analysis():
+            logger.info("[PIPELINE] Starting LDSC + tissue analysis in background")
+            return run_combined_ldsc_tissue_analysis.submit(
+                harmonized_file, output_dir, project_id, user_id
+            )
 
         # Check whether OpenTargets already has full study-level credible sets.
         # If so, skip filtering + COJO + SuSiE fine-mapping entirely and use OT
@@ -155,6 +154,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         combined_results = None
 
         if has_ot_results:
+            ldsc_tissue_future = start_ldsc_tissue_analysis()
             logger.info(
                 f"[PIPELINE] OpenTargets credible sets found for study "
                 f"{opentargets_study_id} — skipping filtering, COJO, and fine-mapping"
@@ -199,6 +199,9 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                     "error_detail": e.as_detail(),
                 })
                 raise
+
+            # Start LDSC only once the study has significant variants to fine-map
+            ldsc_tissue_future = start_ldsc_tissue_analysis()
 
             # Extract the actual DataFrame
             if isinstance(significant_df_result, tuple):

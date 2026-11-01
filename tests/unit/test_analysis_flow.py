@@ -76,16 +76,16 @@ def test_gwas_p_value_threshold_rejects_invalid_values(value):
 
 def _configure_flow(monkeypatch, immediate_task_factory):
     saved_states = []
-    ldsc_future = MagicMock()
+    ldsc_task = MagicMock()
     notify = MagicMock()
 
     monkeypatch.setattr(flow_module, "get_project_analysis_path_task", immediate_task_factory(lambda *_: "/out"))
     monkeypatch.setattr(flow_module, "harmonize_sumstats_with_nextflow", immediate_task_factory(lambda *_, **__: "/out/harmonized.tsv.gz"))
-    monkeypatch.setattr(flow_module, "run_combined_ldsc_tissue_analysis", MagicMock(**{"submit.return_value": ldsc_future}))
+    monkeypatch.setattr(flow_module, "run_combined_ldsc_tissue_analysis", ldsc_task)
     monkeypatch.setattr(flow_module, "save_analysis_state_task", immediate_task_factory(lambda _u, _p, state: saved_states.append(state)))
     monkeypatch.setattr(flow_module, "send_pipeline_notification", notify)
     monkeypatch.setattr(flow_module.Config, "from_env", MagicMock(return_value=MagicMock()))
-    return saved_states, ldsc_future, notify
+    return saved_states, ldsc_task, notify
 
 
 def _run_flow(p_value_threshold=5e-8):
@@ -95,10 +95,10 @@ def _run_flow(p_value_threshold=5e-8):
     )
 
 
-def test_no_significant_variants_fails_at_filtering_without_waiting_for_ldsc(
+def test_no_significant_variants_fails_at_filtering_without_starting_ldsc(
     monkeypatch, immediate_task_factory
 ):
-    saved_states, ldsc_future, notify = _configure_flow(monkeypatch, immediate_task_factory)
+    saved_states, ldsc_task, notify = _configure_flow(monkeypatch, immediate_task_factory)
     error = NoSignificantVariantsError("No variants reach p < 1e-06.", p_value_threshold=1e-6)
 
     def filter_variants(*_args, **_kwargs):
@@ -122,7 +122,7 @@ def test_no_significant_variants_fails_at_filtering_without_waiting_for_ldsc(
         "user@example.com", "Wrist", "project-1",
         success=False, detail="No variants reach p < 1e-06.",
     )
-    ldsc_future.result.assert_not_called()
+    ldsc_task.submit.assert_not_called()
 
 
 def test_unexpected_failure_keeps_the_stage_it_happened_in(monkeypatch, immediate_task_factory):
