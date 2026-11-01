@@ -395,13 +395,12 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         # Keep a specific failed state already saved by the failing stage
         if last_state.get("status") != "Failed":
             try:
-                failed_state = {
+                save_state({
                     "status": "Failed",
                     "stage": last_state.get("stage", "Unknown"),
                     "progress": last_state.get("progress", 0),
                     "message": f"Analysis pipeline failed: {str(e)}",
-                }
-                save_analysis_state_task.submit(user_id, project_id, failed_state).result()
+                })
             except Exception as state_e:
                 logger.error(f"[PIPELINE] Failed to save error state: {str(state_e)}")
         send_pipeline_notification(

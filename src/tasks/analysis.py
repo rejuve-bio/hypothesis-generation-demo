@@ -531,7 +531,6 @@ class NoSignificantVariantsError(ValueError):
     def as_detail(self) -> dict:
         return {
             "error_type": "no_significant_variants",
-            "reason": "no_significant_variants",
             "message": str(self),
             "p_value_threshold": self.p_value_threshold,
             "min_p_value": self.min_p_value,
@@ -554,8 +553,8 @@ def _no_significant_variants_error(p_values, p_threshold) -> NoSignificantVarian
         message += f" Most significant: {min_p_variant} (p = {min_p_value:.2g})."
     if below_1e5:
         message += (
-            f" {below_1e6} variants pass p < 1e-06 and {below_1e5} pass p < 1e-05; "
-            "rerun with a higher p_value_threshold to include them."
+            f" Variants passing p < 1e-06: {below_1e6}; p < 1e-05: {below_1e5};"
+            " rerun with a higher p_value_threshold to include them."
         )
     return NoSignificantVariantsError(
         message,

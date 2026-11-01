@@ -68,17 +68,17 @@ from src.utils import (
 router = APIRouter(tags=["projects"])
 
 
-def _gwas_p_value_threshold(value) -> float:
-    """GWAS significance cutoff for filtering variants; 400 unless 0 < value <= 1e-5."""
+def _parse_p_value_threshold(value) -> float:
+    error = HTTPException(
+        status_code=400,
+        detail="p_value_threshold must be greater than 0 and at most 1e-5",
+    )
     try:
         threshold = float(value)
     except (TypeError, ValueError):
-        threshold = None
-    if threshold is None or not 0 < threshold <= 1e-5:
-        raise HTTPException(
-            status_code=400,
-            detail="p_value_threshold must be greater than 0 and at most 1e-5",
-        )
+        raise error
+    if not 0 < threshold <= 1e-5:
+        raise error
     return threshold
 
 
@@ -349,7 +349,7 @@ async def post_analysis_pipeline(
         maf_threshold = float(
             preserve_explicit_empty("maf_threshold", maf_threshold)
         )
-        p_value_threshold = _gwas_p_value_threshold(
+        p_value_threshold = _parse_p_value_threshold(
             preserve_explicit_empty("p_value_threshold", p_value_threshold)
         )
         seed = int(preserve_explicit_empty("seed", seed))
