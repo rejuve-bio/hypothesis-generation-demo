@@ -8,6 +8,7 @@ from bson import ObjectId
 from fastapi import HTTPException
 
 from src.api.routes import projects as projects_routes
+from src import utils
 from src.db.project_handler import ProjectHandler
 from src.utils import analysis_state_for_public_api
 
@@ -151,7 +152,7 @@ def test_queued_run_is_cancelled_on_delete_and_has_public_message(monkeypatch):
     handler._delete_project_data("viewer", PROJECT_ID)
 
     assert post.call_args.args[0].endswith("/flow_runs/run-1/set_state")
-    assert analysis_state_for_public_api(state)["message"] == "Queued, waiting for a worker."
+    assert analysis_state_for_public_api(state)["message"] == "Queued, waiting to start."
 
 
 def test_add_analysis_event_stores_and_emits_with_stored_flow_run(monkeypatch):
@@ -166,6 +167,7 @@ def test_add_analysis_event_stores_and_emits_with_stored_flow_run(monkeypatch):
 
     event = handler.analysis_events_collection.insert_one.call_args.args[0]
     assert event["flow_run_id"] == "run-1"
+    assert event["stage"] == "COJO"
     assert event["level"] == "info"
     assert event["details"] == {"independent_signals": 3}
     emit.assert_called_once_with(event)
@@ -232,3 +234,16 @@ def test_analysis_events_route_hides_projects_the_user_does_not_own(project_id):
 
     assert exc.value.status_code == 404
     handler.analysis_events_collection.find.assert_not_called()
+
+
+def test_record_analysis_event_marks_task_retries(monkeypatch):
+    projects = MagicMock()
+    monkeypatch.setattr(utils, "get_deps", lambda: {"projects": projects})
+    monkeypatch.setattr(utils, "task_run", MagicMock(run_count=2))
+
+    utils.record_analysis_event("viewer", PROJECT_ID, "Fine_mapping", "Batch 1/2 done", details={"regions": 3})
+
+    projects.add_analysis_event.assert_called_once_with(
+        "viewer", PROJECT_ID, "Fine_mapping", "Batch 1/2 done (retry 1)",
+        details={"regions": 3, "attempt": 2},
+    )

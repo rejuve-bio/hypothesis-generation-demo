@@ -68,6 +68,13 @@ from src.utils import (
 
 router = APIRouter(tags=["projects"])
 
+SAMPLE_SIZE_SOURCE_LABELS = {
+    "user_provided": "provided by you",
+    "library_verified": "from library metadata",
+    "library_default": "library default",
+    "upload_default": "default, used if the file has no N column",
+}
+
 
 def _parse_p_value_threshold(value) -> float:
     error = HTTPException(
@@ -726,6 +733,16 @@ async def post_analysis_pipeline(
         )
 
         projects.save_analysis_state(current_user_id, project_id, {"status": "Queued"})
+        sample_size_label = SAMPLE_SIZE_SOURCE_LABELS.get(
+            sample_size_resolution.source, sample_size_resolution.source
+        )
+        projects.add_analysis_event(
+            current_user_id, project_id, "Setup",
+            f"p < {p_value_threshold:g} · MAF ≥ {maf_threshold:g} · window {window} kb · "
+            f"coverage {coverage:g} · {population} · {ref_genome} · "
+            f"N = {sample_size_n:,} ({sample_size_label})",
+            details={**analysis_parameters, "population": population, "ref_genome": ref_genome},
+        )
         loop = asyncio.get_running_loop()
         flow_run = await loop.run_in_executor(
             None,

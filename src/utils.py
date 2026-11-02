@@ -8,6 +8,7 @@ import numpy as np
 import hashlib
 import uuid
 from dask.distributed import get_worker
+from prefect.runtime import task_run
 
 
 POPULATION_LABELS: dict[str, str] = {
@@ -68,7 +69,7 @@ def analysis_state_for_public_api(state: dict | None) -> dict:
     msg = out.get("message")
     if msg is None or not str(msg).strip():
         if raw_key == "queued":
-            out["message"] = "Queued, waiting for a worker."
+            out["message"] = "Queued, waiting to start."
         elif raw_key in ("uploading",):
             out["message"] = "Uploading or preparing GWAS file."
         elif raw_key in ("not_started", "notstarted"):
@@ -213,6 +214,24 @@ def emit_analysis_update(user_id, project_id, state_data):
         logger.error(f"Failed to publish analysis update to Redis: {exc}")
 
 
+ANALYSIS_STAGE_LABELS = {
+    "Setup": "Setup",
+    "File_upload": "File upload",
+    "Harmonization": "Harmonization",
+    "Filtering": "Filtering",
+    "Cojo": "COJO",
+    "Fine_mapping": "Fine-mapping",
+    "OpenTargets_credible_sets": "OpenTargets credible sets",
+    "LDSC_Analysis": "LDSC tissue analysis",
+    "LDSC_Tissue_Analysis": "LDSC tissue analysis",
+}
+
+
+def analysis_stage_label(stage):
+    """Human-readable label for an analysis stage key."""
+    return ANALYSIS_STAGE_LABELS.get(stage, stage)
+
+
 def emit_analysis_event(event):
     """Push one analysis timeline event to Socket.IO clients in room analysis_{project_id}."""
     redis_url = os.getenv("REDIS_URL")
@@ -223,10 +242,19 @@ def emit_analysis_event(event):
     publish_socketio_relay(redis_url, "analysis_event", room, serialize_datetime_fields(event))
 
 
-def record_analysis_event(user_id, project_id, stage, message, **fields):
-    """Add an analysis timeline event from a worker task; never raises."""
+def record_analysis_event(user_id, project_id, stage, message, details=None, **fields):
+    """Add an analysis timeline event from a worker task; never raises.
+
+    Events written on a task retry are marked with the attempt number.
+    """
     try:
-        get_deps()["projects"].add_analysis_event(user_id, project_id, stage, message, **fields)
+        attempt = task_run.run_count
+        if attempt > 1:
+            message = f"{message} (retry {attempt - 1})"
+            details = {**(details or {}), "attempt": attempt}
+        get_deps()["projects"].add_analysis_event(
+            user_id, project_id, stage, message, details=details, **fields
+        )
     except Exception as exc:
         logger.warning(f"Could not record analysis event for project {project_id}: {exc}")
 

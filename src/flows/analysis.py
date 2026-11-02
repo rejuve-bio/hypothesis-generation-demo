@@ -7,7 +7,7 @@ from loguru import logger
 from prefect import flow
 from prefect.runtime import flow_run as _prefect_flow_run
 from prefect_dask import DaskTaskRunner
-from src.utils import get_deps
+from src.utils import analysis_stage_label, get_deps
 from src.services.mail import send_pipeline_notification
 
 from src.config import Config
@@ -90,7 +90,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             "status": "Running",
             "stage": "Harmonization",
             "progress": 10,
-            "message": "Harmonizing summary statistics (skipped automatically for confirmed OpenTargets studies)",
+            "message": "Harmonizing summary statistics",
             "started_at": datetime.now(timezone.utc).isoformat(),
             "flow_run_id": _prefect_flow_run.id,
         }
@@ -165,7 +165,10 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "status": "Running",
                 "stage": "OpenTargets_credible_sets",
                 "progress": 70,
-                "message": "Using OpenTargets pre-computed credible sets, skipping COJO and fine-mapping",
+                "message": (
+                    f"Using OpenTargets fine-mapped credible sets for {opentargets_study_id}; "
+                    "COJO and fine-mapping skipped"
+                ),
                 "started_at": initial_state["started_at"],
             }
             save_state(ot_state)
@@ -308,11 +311,23 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 combined_results = pd.concat(all_results, ignore_index=True)
                 credible_sets = count_credible_sets(all_results)
                 high_pip = int((combined_results["PIP"] > 0.5).sum())
-                record_analysis_event_task.submit(
-                    user_id, project_id, "Fine_mapping",
+                empty_regions = len(cojo_results) - sum(
+                    count_credible_sets([result]) > 0 for result in all_results
+                )
+                message = (
                     f"Fine-mapping found {credible_sets} credible sets, "
-                    f"{high_pip} variants with PIP > 0.5",
-                    details={"credible_sets": credible_sets, "high_pip_variants": high_pip},
+                    f"{high_pip} variants with PIP > 0.5"
+                )
+                if empty_regions:
+                    message += f"; {empty_regions} of {len(cojo_results)} regions produced no credible set"
+                record_analysis_event_task.submit(
+                    user_id, project_id, "Fine_mapping", message,
+                    details={
+                        "credible_sets": credible_sets,
+                        "high_pip_variants": high_pip,
+                        "regions": len(cojo_results),
+                        "regions_without_credible_set": empty_regions,
+                    },
                 ).result()
 
         # Combine and save results
@@ -341,7 +356,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "status": "Running",
                 "stage": "LDSC_Tissue_Analysis",
                 "progress": 85,
-                "message": "Fine-mapping completed, waiting for LDSC and tissue analysis"
+                "message": "Waiting for LDSC tissue analysis to finish"
             }
             save_state(ldsc_tissue_state)
 
@@ -360,7 +375,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                     "status": "Failed",
                     "stage": "LDSC_Analysis",
                     "progress": 90,
-                    "message": f"LDSC tissue analysis failed: {str(ldsc_e)}. Tissue-specific enrichment will not be available.",
+                    "message": "LDSC tissue analysis failed, so tissue-specific enrichment is not available",
                 }
                 save_state(failed_ldsc_state)
                 raise RuntimeError(f"LDSC tissue analysis failed - required for enrichment: {str(ldsc_e)}")
@@ -389,6 +404,15 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "high_pip_variants": high_pip_variants,
                 "total_credible_sets": total_credible_sets
             }
+        elif has_ot_results:
+            logger.error("[PIPELINE] No OpenTargets credible sets could be loaded")
+            save_state({
+                "status": "Failed",
+                "stage": "OpenTargets_credible_sets",
+                "progress": 70,
+                "message": "No OpenTargets credible sets could be loaded for this study",
+            })
+            raise RuntimeError("No OpenTargets credible sets loaded")
         else:
             logger.error("[PIPELINE]  No fine-mapping results generated")
             # Save failed state for fine-mapping
@@ -404,18 +428,25 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
     except Exception as e:
         logger.error(f"[PIPELINE]  Analysis pipeline failed: {str(e)}")
         # Keep a specific failed state already saved by the failing stage
-        if last_state.get("status") != "Failed":
+        if last_state.get("status") == "Failed":
+            failure_message = last_state["message"]
+        else:
+            stage = last_state.get("stage")
+            failure_message = (
+                f"Analysis failed in the {analysis_stage_label(stage)} step" if stage
+                else "Analysis failed"
+            )
             try:
                 save_state({
                     "status": "Failed",
-                    "stage": last_state.get("stage", "Unknown"),
+                    "stage": stage or "Unknown",
                     "progress": last_state.get("progress", 0),
-                    "message": f"Analysis pipeline failed: {str(e)}",
+                    "message": failure_message,
                 })
             except Exception as state_e:
                 logger.error(f"[PIPELINE] Failed to save error state: {str(state_e)}")
         send_pipeline_notification(
             user_email, project_name, project_id,
-            success=False, detail=str(e),
+            success=False, detail=failure_message,
         )
         raise

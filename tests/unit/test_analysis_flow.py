@@ -195,9 +195,9 @@ def test_unexpected_failure_keeps_the_stage_it_happened_in(monkeypatch, immediat
         "status": "Failed",
         "stage": "Cojo",
         "progress": 50,
-        "message": "Analysis pipeline failed: COJO analysis failed for all chromosomes",
+        "message": "Analysis failed in the COJO step",
     }
-    notify.assert_called_once()
+    assert notify.call_args.kwargs["detail"] == "Analysis failed in the COJO step"
     ldsc_task.submit.assert_called_once_with("/out/harmonized.tsv.gz", "/out", "project-1", "user-1")
 
 

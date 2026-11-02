@@ -5,11 +5,13 @@ import requests as _req
 from typing import Callable
 from uuid import uuid4
 
+import pymongo
 from loguru import logger
-from src.utils import analysis_state_for_public_api, emit_analysis_event
+from src.utils import analysis_stage_label, analysis_state_for_public_api, emit_analysis_event
 from .base_handler import BaseHandler
 
 ACTIVE_ANALYSIS_STATUSES = frozenset({"Queued", "Running"})
+ANALYSIS_EVENT_TIMEOUT_SECONDS = 3
 
 
 class ProjectHandler(BaseHandler):
@@ -328,27 +330,28 @@ class ProjectHandler(BaseHandler):
         A missing stage or flow_run_id is taken from the stored analysis state.
         """
         try:
-            if stage is None or flow_run_id is None:
-                project = self.projects_collection.find_one(
-                    {"_id": ObjectId(project_id)}, {"analysis_state": 1}
-                )
-                state = (project or {}).get("analysis_state") or {}
-                stage = stage or state.get("stage")
-                flow_run_id = flow_run_id or state.get("flow_run_id")
-            event = {
-                "project_id": project_id,
-                "user_id": user_id,
-                "flow_run_id": flow_run_id,
-                "timestamp": datetime.now(timezone.utc),
-                "stage": stage,
-                "level": level,
-                "message": message,
-            }
-            if details:
-                event["details"] = details
-            if duration_seconds is not None:
-                event["duration_seconds"] = duration_seconds
-            self.analysis_events_collection.insert_one(dict(event))
+            with pymongo.timeout(ANALYSIS_EVENT_TIMEOUT_SECONDS):
+                if stage is None or flow_run_id is None:
+                    project = self.projects_collection.find_one(
+                        {"_id": ObjectId(project_id)}, {"analysis_state": 1}
+                    )
+                    state = (project or {}).get("analysis_state") or {}
+                    stage = stage or state.get("stage")
+                    flow_run_id = flow_run_id or state.get("flow_run_id")
+                event = {
+                    "project_id": project_id,
+                    "user_id": user_id,
+                    "flow_run_id": flow_run_id,
+                    "timestamp": datetime.now(timezone.utc),
+                    "stage": analysis_stage_label(stage),
+                    "level": level,
+                    "message": message,
+                }
+                if details:
+                    event["details"] = details
+                if duration_seconds is not None:
+                    event["duration_seconds"] = duration_seconds
+                self.analysis_events_collection.insert_one(dict(event))
             emit_analysis_event(event)
         except Exception as e:
             logger.warning(f"Could not record analysis event for project {project_id}: {e}")
@@ -402,13 +405,13 @@ class ProjectHandler(BaseHandler):
                     terminal_stopped = {"CANCELLED"}
                     if prefect_state_type in terminal_failed:
                         return {**state, "status": "Failed",
-                                "message": f"Pipeline {prefect_state_type.lower()} (confirmed via Prefect)"}
+                                "message": "The analysis stopped unexpectedly"}
                     if prefect_state_type in terminal_ok:
                         return {**state, "status": "Completed",
-                                "message": "Pipeline completed (confirmed via Prefect)"}
+                                "message": "Analysis completed"}
                     if prefect_state_type in terminal_stopped:
                         return {**state, "status": "Failed",
-                                "message": "Pipeline was cancelled"}
+                                "message": "The analysis was cancelled"}
                     return state
             except Exception as prefect_exc:
                 logger.warning(f"[ProjectHandler] Could not reach Prefect API to reconcile run {flow_run_id}: {prefect_exc}")
@@ -426,10 +429,7 @@ class ProjectHandler(BaseHandler):
                     return {
                         **state,
                         "status": "Failed",
-                        "message": (
-                            f"Pipeline status unconfirmed: no update for {hours}h "
-                            f"(process may have been terminated)"
-                        ),
+                        "message": f"The analysis stopped unexpectedly (no progress for {hours}h)",
                     }
             except Exception:
                 pass

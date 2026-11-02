@@ -290,10 +290,15 @@ def process_ldsc_results(results_dir, output_prefix, user_id, project_id, top_n=
     logger.info(
         f"Processed {len(df)} cell types, {len(df_filtered)} p<0.01, returning top {len(top_tissues)}"
     )
+    fdr_passing = int((df["FDR"] < 0.05).sum())
     record_analysis_event(
         user_id, project_id, "LDSC_Analysis",
-        f"{len(df)} cell types tested, {len(df_filtered)} with p < 0.01",
-        details={"cell_types_tested": len(df), "cell_types_significant": len(df_filtered)},
+        f"{len(df)} cell types tested: {len(df_filtered)} with p < 0.01 ({fdr_passing} pass FDR < 0.05)",
+        details={
+            "cell_types_tested": len(df),
+            "cell_types_p_below_0_01": len(df_filtered),
+            "cell_types_fdr_below_0_05": fdr_passing,
+        },
     )
     return top_tissues, top_tissues_df.to_dict("records")
 
@@ -1087,12 +1092,19 @@ def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_
         skipped_n = len(ldsc_results_data) - len(mapped_ldsc_results_data)
         if skipped_n:
             logger.info(f"[PIPELINE] Excluding {skipped_n} unmapped tissue(s) from saved LDSC results")
-        mapped_names = [r.get('Name') for r in mapped_ldsc_results_data]
+            hidden = [
+                r.get('Name') for r in ldsc_results_data if r not in mapped_ldsc_results_data
+            ]
+            record_analysis_event(
+                user_id, project_id, "LDSC_Analysis",
+                f"{skipped_n} tissue(s) not available in CellxGene and hidden from the tissue picker",
+                details={"hidden_tissues": hidden},
+            )
+        top_tissues_shown = [r.get('Name') for r in mapped_ldsc_results_data]
         record_analysis_event(
             user_id, project_id, "LDSC_Analysis",
-            f"Top tissues: {', '.join(mapped_names) or 'none'} "
-            f"({len(mapped_names)} mapped to CellxGene, {skipped_n} skipped)",
-            details={"top_tissues": mapped_names, "mapped": len(mapped_names), "skipped": skipped_n},
+            f"Top tissues: {', '.join(top_tissues_shown) or 'none'}",
+            details={"top_tissues": top_tissues_shown},
         )
 
         # Step 5: Save comprehensive results to database
