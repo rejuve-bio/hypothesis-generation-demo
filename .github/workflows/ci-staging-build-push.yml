@@ -216,8 +216,8 @@ jobs:
 
         echo "[SUCCESS] VALIDATION PASSED - ALL services are running and healthy!"
 
-    # Services with build:, no profile and not one-shot get pushed as hypothesis-generation-<service>.
-    # (ot-db-bootstrap runs from the same image as dask-worker, so it is not pushed separately.)
+    # Services with build: and no profile get pushed as hypothesis-generation-<service>
+    # (including credible-sets-postgres and the one-shot ot-db-bootstrap, built from db/).
     - name: Determine pushable services
       if: steps.validate.outcome == 'success'
       id: services
@@ -225,11 +225,7 @@ jobs:
         LIST=$($COMPOSE config --format json --no-interpolate | python3 -c "
         import sys, json
         c = json.load(sys.stdin)
-        names = sorted(
-            n for n, s in c['services'].items()
-            if 'build' in s and not s.get('profiles')
-            and (s.get('labels') or {}).get('com.hypgen.one-shot') != 'true'
-        )
+        names = sorted(n for n, s in c['services'].items() if 'build' in s and not s.get('profiles'))
         print(' '.join(names))
         ")
         echo "list=$LIST" >> $GITHUB_OUTPUT
