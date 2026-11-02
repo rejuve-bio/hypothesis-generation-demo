@@ -215,6 +215,8 @@ def emit_analysis_update(user_id, project_id, state_data):
 
 
 ANALYSIS_STAGE_LABELS = {
+    "Pipeline": "Pipeline",
+    "Unknown": "Pipeline",
     "Setup": "Setup",
     "File_upload": "File upload",
     "Harmonization": "Harmonization",

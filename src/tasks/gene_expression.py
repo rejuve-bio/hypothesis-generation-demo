@@ -34,6 +34,10 @@ from src.catlas_census_mapping import (
 
 CENSUS_VERSION = "2024-07-01"
 
+
+class LdscExitError(RuntimeError):
+    """ldsc.py exited with a non-zero status."""
+
 # In-process memoization on top of the disk cache below, so repeated calls
 # within the same worker process (e.g. several genes queried against the
 # same tissue in one flow run) don't even hit the filesystem twice.
@@ -136,7 +140,7 @@ def setup_ldsc_environment(base_dir):
     return "/opt/ldsc"
 
 @task(log_prints=True)
-def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix, user_id, project_id):
+def run_ldsc_analysis(user_id, project_id, ldsc_dir, gwas_file, output_prefix):
     """ cell-type LDSC: harmonized SSF -> sumstats (HM3 + strand filter), then --h2-cts."""
     config = Config.from_env()
     repo_root = os.path.abspath(config.repo_root)
@@ -239,7 +243,7 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix, user_id, project_id):
         )
         # Keep exception message bounded for Prefect UI
         snippet = tail_txt[-3500:] if len(tail_txt) > 3500 else tail_txt
-        raise RuntimeError(
+        raise LdscExitError(
             f"LDSC --h2-cts exited with code {rc}. Check logs for full output. "
             f"Last lines from ldsc.py:\n{snippet}"
         )
@@ -256,7 +260,7 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix, user_id, project_id):
 
 
 @task(log_prints=True)
-def process_ldsc_results(results_dir, output_prefix, user_id, project_id, top_n=10):
+def process_ldsc_results(user_id, project_id, results_dir, output_prefix, top_n=10):
     """Process LDSC results"""
     result_file = Path(results_dir) / f"{output_prefix}.cell_type_results.txt"
     
@@ -1057,12 +1061,12 @@ def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_
         # Step 2: Run LDSC analysis
         logger.info("[PIPELINE] Running LDSC heritability analysis...")
         output_prefix = f"{output_dir}/ldsc_project_analysis"
-        run_ldsc_analysis(ldsc_dir, munged_file, output_prefix, user_id, project_id)
+        run_ldsc_analysis(user_id, project_id, ldsc_dir, munged_file, output_prefix)
         
         # Step 3: Process LDSC results
         logger.info("[PIPELINE] Processing LDSC results...")
         top_tissues, ldsc_results_data = process_ldsc_results(
-            output_dir, "ldsc_project_analysis", user_id, project_id, 10
+            user_id, project_id, output_dir, "ldsc_project_analysis", 10
         )
 
         storage = deps.get("storage")
@@ -1085,21 +1089,18 @@ def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_
         # format='selection') sources its list solely from ldsc_results_collection,
         # so unmapped tissues must not end up there even though LDSC computed
         # valid numbers for them.
-        mapped_ldsc_results_data = [
-            r for r in ldsc_results_data
-            if not ontology_mapping_results.get(r.get('Name', ''), {}).get('census_skip_coexpression')
-        ]
-        skipped_n = len(ldsc_results_data) - len(mapped_ldsc_results_data)
-        if skipped_n:
-            logger.info(f"[PIPELINE] Excluding {skipped_n} unmapped tissue(s) from saved LDSC results")
-            hidden = [
-                name for name, mapping in ontology_mapping_results.items()
-                if mapping.get('census_skip_coexpression')
-            ]
+        mapped_ldsc_results_data, hidden_tissues = [], []
+        for r in ldsc_results_data:
+            if ontology_mapping_results.get(r.get('Name', ''), {}).get('census_skip_coexpression'):
+                hidden_tissues.append(r.get('Name'))
+            else:
+                mapped_ldsc_results_data.append(r)
+        if hidden_tissues:
+            logger.info(f"[PIPELINE] Excluding {len(hidden_tissues)} unmapped tissue(s) from saved LDSC results")
             record_analysis_event(
                 user_id, project_id, "LDSC_Analysis",
-                f"{skipped_n} tissue(s) not available in CellxGene and hidden from the tissue picker",
-                details={"hidden_tissues": hidden},
+                f"{len(hidden_tissues)} tissue(s) not available in CellxGene and hidden from the tissue picker",
+                details={"hidden_tissues": hidden_tissues},
             )
         top_tissues_shown = [r.get('Name') for r in mapped_ldsc_results_data]
         record_analysis_event(

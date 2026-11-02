@@ -743,38 +743,45 @@ async def post_analysis_pipeline(
             f"N = {sample_size_n:,} ({sample_size_label})",
             details={**analysis_parameters, "population": population, "ref_genome": ref_genome},
         )
-        loop = asyncio.get_running_loop()
-        flow_run = await loop.run_in_executor(
-            None,
-            lambda: invoke_analysis_pipeline_deployment(
-                user_id=current_user_id,
-                project_id=project_id,
-                gwas_file_path=file_path,
-                ref_genome=ref_genome,
-                population=population,
-                batch_size=batch_size,
-                max_workers=max_workers,
-                maf_threshold=maf_threshold,
-                p_value_threshold=p_value_threshold,
-                seed=seed,
-                window=window,
-                L=L,
-                coverage=coverage,
-                min_abs_corr=min_abs_corr,
-                sample_size=sample_size_n,
-                file_metadata_id=file_metadata_id if _file_needs_processing else None,
-                file_needs_processing=_file_needs_processing,
-                file_storage_key=object_key if _file_needs_processing else None,
-                file_id_new=file_id_new if _file_needs_processing else None,
-                file_source_minio_path=_source_minio_path,
-                file_source_download_url=_source_download_url,
-                file_minio_cache_key=_minio_cache_key,
-                file_gwas_library_id=_gwas_library_id,
-                user_email=current_user_email,
-                project_name=project_name,
-                opentargets_study_id=opentargets_study_id,
-            ),
-        )
+        try:
+            loop = asyncio.get_running_loop()
+            flow_run = await loop.run_in_executor(
+                None,
+                lambda: invoke_analysis_pipeline_deployment(
+                    user_id=current_user_id,
+                    project_id=project_id,
+                    gwas_file_path=file_path,
+                    ref_genome=ref_genome,
+                    population=population,
+                    batch_size=batch_size,
+                    max_workers=max_workers,
+                    maf_threshold=maf_threshold,
+                    p_value_threshold=p_value_threshold,
+                    seed=seed,
+                    window=window,
+                    L=L,
+                    coverage=coverage,
+                    min_abs_corr=min_abs_corr,
+                    sample_size=sample_size_n,
+                    file_metadata_id=file_metadata_id if _file_needs_processing else None,
+                    file_needs_processing=_file_needs_processing,
+                    file_storage_key=object_key if _file_needs_processing else None,
+                    file_id_new=file_id_new if _file_needs_processing else None,
+                    file_source_minio_path=_source_minio_path,
+                    file_source_download_url=_source_download_url,
+                    file_minio_cache_key=_minio_cache_key,
+                    file_gwas_library_id=_gwas_library_id,
+                    user_email=current_user_email,
+                    project_name=project_name,
+                    opentargets_study_id=opentargets_study_id,
+                ),
+            )
+        except Exception:
+            projects.save_analysis_state(
+                current_user_id, project_id,
+                {"status": "Failed", "message": "The analysis could not be started"},
+            )
+            raise
         projects.save_analysis_state(
             current_user_id, project_id, {"flow_run_id": str(flow_run.id)}
         )

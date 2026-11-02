@@ -65,11 +65,8 @@ def test_filter_does_not_suggest_rerun_when_nothing_passes_the_maximum_threshold
     assert str(exc.value) == "No variants reach p < 1e-05. Most significant: 1:0:A:G (p = 0.01)."
 
 
-@pytest.mark.parametrize("results, message, level", [
-    ([pd.DataFrame({"cs": [1, 1, 2, 0]})], "Batch 1/3 done: 1 of 2 regions, 2 credible sets", "info"),
-    ([], "Batch 1/3 failed: none of its 2 regions could be fine-mapped", "warning"),
-])
-def test_finemap_batch_records_its_outcome(monkeypatch, results, message, level):
+@pytest.mark.parametrize("results, recorded", [([pd.DataFrame({"cs": [1]})], False), ([], True)])
+def test_finemap_batch_warns_only_when_it_fails(monkeypatch, results, recorded):
     record = MagicMock()
     monkeypatch.setattr(analysis_tasks, "record_analysis_event", record)
     monkeypatch.setattr(analysis_tasks, "_finemap_region_batch", lambda _batch_data: results)
@@ -77,9 +74,36 @@ def test_finemap_batch_records_its_outcome(monkeypatch, results, message, level)
 
     analysis_tasks.finemap_region_batch_worker.fn((["r1", "r2"], "batch_0", "/sumstats", params))
 
-    args, kwargs = record.call_args
-    assert args == ("user", "project", "Fine_mapping", message)
-    assert kwargs.get("level", "info") == level
+    assert record.called == recorded
+    if recorded:
+        assert record.call_args.args[3] == "Batch 1/3 failed: none of its 2 regions could be fine-mapped"
+
+
+def test_cojo_runs_only_on_chromosomes_present_in_the_input(monkeypatch, tmp_path):
+    record = MagicMock()
+    monkeypatch.setattr(analysis_tasks, "record_analysis_event", record)
+    monkeypatch.setattr(analysis_tasks, "get_shared_temp_dir", lambda prefix: str(tmp_path))
+    monkeypatch.setattr(analysis_tasks.os.path, "exists", lambda _path: True)
+    gcta_chromosomes = []
+
+    def gcta(cmd, **_kwargs):
+        chrom = cmd[cmd.index("--chr") + 1]
+        gcta_chromosomes.append(chrom)
+        prefix = cmd[cmd.index("--out") + 1]
+        pd.DataFrame({"SNP": ["7:100:A:G"], "p": [1e-9]}).to_csv(f"{prefix}.jma.cojo", sep="\t", index=False)
+        return MagicMock(returncode=0)
+
+    monkeypatch.setattr(analysis_tasks.subprocess, "run", gcta)
+    significant = pd.DataFrame(
+        {"effect_allele": ["G"], "other_allele": ["A"], "effect_allele_frequency": [0.2],
+         "beta": [0.1], "standard_error": [0.01], "p_value": [1e-9], "N": [1000]},
+        index=pd.Index(["7:100:A:G"], name="variant_id"),
+    )
+
+    analysis_tasks.run_cojo_per_chromosome.fn("user", "project", significant, "/plink", str(tmp_path))
+
+    assert gcta_chromosomes == ["7"]
+    assert [call.kwargs.get("level", "info") for call in record.call_args_list] == ["info"]
 
 
 def test_no_significant_variants_error_survives_pickling():
@@ -216,6 +240,19 @@ def test_specific_failed_state_is_not_overwritten(monkeypatch, immediate_task_fa
     assert saved_states[-1]["stage"] == "Fine_mapping"
     assert saved_states[-1]["message"] == "Fine-mapping failed - no results generated"
     notify.assert_called_once()
+
+
+def test_opentargets_returning_nothing_fails_without_starting_ldsc(monkeypatch, immediate_task_factory):
+    saved_states, ldsc_task, _ = _configure_flow(monkeypatch, immediate_task_factory)
+    monkeypatch.setattr(flow_module, "CredibleSetsHandler", MagicMock(**{"return_value.study_has_credible_sets.return_value": True}))
+    monkeypatch.setattr(flow_module, "get_results_from_opentargets_task", immediate_task_factory(lambda *_, **__: None))
+
+    with pytest.raises(RuntimeError):
+        flow_module.analysis_pipeline_flow.fn("user-1", "project-1", opentargets_study_id="FINNGEN_R12_X")
+
+    assert saved_states[-1]["status"] == "Failed"
+    assert saved_states[-1]["stage"] == "OpenTargets_credible_sets"
+    ldsc_task.submit.assert_not_called()
 
 
 def test_opentargets_study_starts_ldsc_and_skips_filtering(monkeypatch, immediate_task_factory):

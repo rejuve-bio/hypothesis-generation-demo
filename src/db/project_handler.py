@@ -11,6 +11,7 @@ from src.utils import analysis_stage_label, analysis_state_for_public_api, emit_
 from .base_handler import BaseHandler
 
 ACTIVE_ANALYSIS_STATUSES = frozenset({"Queued", "Running"})
+FINISHED_ANALYSIS_STATUSES = frozenset({"Completed", "Failed"})
 ANALYSIS_EVENT_TIMEOUT_SECONDS = 3
 
 
@@ -317,32 +318,33 @@ class ProjectHandler(BaseHandler):
             self.add_analysis_event(
                 user_id,
                 project_id,
-                stage=state_data.get("stage"),
+                stage=state_data.get("stage", "Pipeline"),
                 message=analysis_state_for_public_api(state_data)["message"],
                 level="error" if state_data["status"] == "Failed" else "info",
                 details=state_data.get("error_detail"),
+                skip_if_finished=False,
             )
         return saved
 
     def add_analysis_event(self, user_id, project_id, stage, message, level="info",
-                           details=None, duration_seconds=None, flow_run_id=None):
+                           details=None, duration_seconds=None, skip_if_finished=True):
         """Store a timeline event and push it to the project's analysis room; never raises.
 
-        A missing stage or flow_run_id is taken from the stored analysis state.
+        Events arriving after the run has finished are skipped unless skip_if_finished is False.
         """
         try:
             with pymongo.timeout(ANALYSIS_EVENT_TIMEOUT_SECONDS):
-                if stage is None or flow_run_id is None:
-                    project = self.projects_collection.find_one(
-                        {"_id": ObjectId(project_id)}, {"analysis_state": 1}
-                    )
-                    state = (project or {}).get("analysis_state") or {}
-                    stage = stage or state.get("stage")
-                    flow_run_id = flow_run_id or state.get("flow_run_id")
+                project = self.projects_collection.find_one(
+                    {"_id": ObjectId(project_id)},
+                    {"analysis_state.status": 1, "analysis_state.flow_run_id": 1},
+                )
+                state = (project or {}).get("analysis_state") or {}
+                if skip_if_finished and state.get("status") in FINISHED_ANALYSIS_STATUSES:
+                    return
                 event = {
                     "project_id": project_id,
                     "user_id": user_id,
-                    "flow_run_id": flow_run_id,
+                    "flow_run_id": state.get("flow_run_id"),
                     "timestamp": datetime.now(timezone.utc),
                     "stage": analysis_stage_label(stage),
                     "level": level,
@@ -352,8 +354,8 @@ class ProjectHandler(BaseHandler):
                     event["details"] = details
                 if duration_seconds is not None:
                     event["duration_seconds"] = duration_seconds
-                self.analysis_events_collection.insert_one(dict(event))
-            emit_analysis_event(event)
+                result = self.analysis_events_collection.insert_one(dict(event))
+            emit_analysis_event({"id": str(result.inserted_id), **event})
         except Exception as e:
             logger.warning(f"Could not record analysis event for project {project_id}: {e}")
 
@@ -361,10 +363,11 @@ class ProjectHandler(BaseHandler):
         """Return the project's analysis events, oldest first, with UTC timestamps."""
         events = list(
             self.analysis_events_collection.find(
-                {"user_id": user_id, "project_id": project_id}, {"_id": 0}
+                {"user_id": user_id, "project_id": project_id}
             ).sort("timestamp", 1)
         )
         for event in events:
+            event["id"] = str(event.pop("_id"))
             event["timestamp"] = event["timestamp"].replace(tzinfo=timezone.utc)
         return events
 

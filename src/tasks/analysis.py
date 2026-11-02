@@ -465,7 +465,8 @@ NR==1 {
         logger.info(f"[HARMONIZE] Processing completed in {elapsed_time:.2f} seconds")
         record_analysis_event(
             user_id, project_id, "Harmonization",
-            f"Harmonization finished in {timedelta(seconds=round(elapsed_time))}",
+            "Using the OpenTargets-harmonized file" if ot_confirmed
+            else f"Harmonization finished in {timedelta(seconds=round(elapsed_time))}",
             duration_seconds=round(elapsed_time, 1),
         )
 
@@ -744,10 +745,13 @@ def run_cojo_per_chromosome(user_id, project_id, significant_df, plink_dir, outp
         failed_chromosomes = []
         max_workers = 4 
         
+        # GCTA exits with an error for chromosomes without input SNPs, so skip those
+        input_chromosomes = set(cojo_df["SNP"].astype(str).str.split(":").str[0])
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_chrom = {
                 executor.submit(run_cojo_for_chromosome, chrom): chrom 
                 for chrom in range(1, 23)
+                if str(chrom) in input_chromosomes
             }
             
             # Process completed tasks
@@ -1370,23 +1374,11 @@ def count_credible_sets(region_results):
 def finemap_region_batch_worker(batch_data):
     region_batch, _, _, params = batch_data
     batch_results = _finemap_region_batch(batch_data)
-    batch_label = f"Batch {params['batch_number']}/{params['batch_count']}"
-    if batch_results:
-        credible_sets = count_credible_sets(batch_results)
+    if not batch_results:
         record_analysis_event(
-            params["user_id"], params["project_id"], "Fine_mapping",
-            f"{batch_label} done: {len(batch_results)} of {len(region_batch)} regions, "
-            f"{credible_sets} credible sets",
-            details={
-                "regions": len(region_batch),
-                "regions_fine_mapped": len(batch_results),
-                "credible_sets": credible_sets,
-            },
-        )
-    else:
-        record_analysis_event(
-            params["user_id"], params["project_id"], "Fine_mapping",
-            f"{batch_label} failed: none of its {len(region_batch)} regions could be fine-mapped",
+            params.get("user_id"), params.get("project_id"), "Fine_mapping",
+            f"Batch {params.get('batch_number')}/{params.get('batch_count')} failed: "
+            f"none of its {len(region_batch)} regions could be fine-mapped",
             level="warning", details={"regions": len(region_batch)},
         )
     return batch_results

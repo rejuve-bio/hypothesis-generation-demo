@@ -170,22 +170,33 @@ def test_add_analysis_event_stores_and_emits_with_stored_flow_run(monkeypatch):
     assert event["stage"] == "COJO"
     assert event["level"] == "info"
     assert event["details"] == {"independent_signals": 3}
-    emit.assert_called_once_with(event)
+    inserted_id = handler.analysis_events_collection.insert_one.return_value.inserted_id
+    emit.assert_called_once_with({"id": str(inserted_id), **event})
+
+
+def test_add_analysis_event_skips_events_after_the_run_finished():
+    handler = _handler()
+    handler.projects_collection.find_one.return_value = {"analysis_state": {"status": "Failed"}}
+
+    handler.add_analysis_event("viewer", PROJECT_ID, "LDSC_Analysis", "Top tissues: Liver")
+
+    handler.analysis_events_collection.insert_one.assert_not_called()
 
 
 def test_add_analysis_event_never_raises():
     handler = _handler()
     handler.analysis_events_collection.insert_one.side_effect = RuntimeError("db down")
 
-    handler.add_analysis_event("viewer", PROJECT_ID, "Cojo", "message", flow_run_id="run-1")
+    handler.add_analysis_event("viewer", PROJECT_ID, "Cojo", "message")
 
 
-@pytest.mark.parametrize("state, level", [
-    ({"status": "Running", "stage": "Cojo", "message": "Running COJO"}, "info"),
+@pytest.mark.parametrize("state, stage, level", [
+    ({"status": "Running", "stage": "Cojo", "message": "Running COJO"}, "Cojo", "info"),
     ({"status": "Failed", "stage": "Cojo", "message": "COJO failed",
-      "error_detail": {"error": "GCTA exited"}}, "error"),
+      "error_detail": {"error": "LDSC exited with an error"}}, "Cojo", "error"),
+    ({"status": "Completed", "message": "Analysis completed"}, "Pipeline", "info"),
 ])
-def test_save_analysis_state_records_an_event(state, level):
+def test_save_analysis_state_records_an_event(state, stage, level):
     handler = _handler()
     handler.add_analysis_event = MagicMock()
     handler.projects_collection.update_one.return_value.modified_count = 1
@@ -193,8 +204,8 @@ def test_save_analysis_state_records_an_event(state, level):
     handler.save_analysis_state("viewer", PROJECT_ID, state)
 
     handler.add_analysis_event.assert_called_once_with(
-        "viewer", PROJECT_ID, stage="Cojo", message=state["message"], level=level,
-        details=state.get("error_detail"),
+        "viewer", PROJECT_ID, stage=stage, message=state["message"], level=level,
+        details=state.get("error_detail"), skip_if_finished=False,
     )
 
 
@@ -212,16 +223,16 @@ def test_analysis_events_route_returns_owned_events_in_order():
     handler = _handler()
     handler.projects_collection.find_one.return_value = {"_id": ObjectId(PROJECT_ID)}
     handler.analysis_events_collection.find.return_value.sort.return_value = [
-        {"message": "first", "timestamp": datetime(2026, 1, 1)},
+        {"_id": ObjectId(PROJECT_ID), "message": "first", "timestamp": datetime(2026, 1, 1)},
     ]
 
     response = asyncio.run(projects_routes.get_analysis_events(PROJECT_ID, "viewer", handler))
 
     assert json.loads(response.body) == [
-        {"message": "first", "timestamp": "2026-01-01T00:00:00+00:00"}
+        {"id": PROJECT_ID, "message": "first", "timestamp": "2026-01-01T00:00:00+00:00"}
     ]
     handler.analysis_events_collection.find.assert_called_once_with(
-        {"user_id": "viewer", "project_id": PROJECT_ID}, {"_id": 0}
+        {"user_id": "viewer", "project_id": PROJECT_ID}
     )
     handler.analysis_events_collection.find.return_value.sort.assert_called_once_with("timestamp", 1)
 

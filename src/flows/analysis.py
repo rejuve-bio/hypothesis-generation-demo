@@ -28,13 +28,17 @@ from src.tasks import (
     get_results_from_opentargets_task,
 )
 from src.tasks.analysis import NoSignificantVariantsError, count_credible_sets
+from src.tasks.gene_expression import LdscExitError
 from src.db.credible_sets_handler import CredibleSetsHandler
 
 
-def _error_summary(error, max_chars=300):
-    """Last two lines of an error message, capped for display."""
-    lines = [line for line in str(error).splitlines() if line.strip()]
-    return "\n".join(lines[-2:])[-max_chars:]
+def _ldsc_failure_cause(error):
+    """Short user-facing cause of an LDSC failure; the raw error stays in the logs."""
+    if isinstance(error, FileNotFoundError):
+        return "LDSC reference files are missing on the server"
+    if isinstance(error, LdscExitError):
+        return "LDSC exited with an error"
+    return "Unexpected error during LDSC"
 
 
 @flow(log_prints=True,
@@ -160,7 +164,6 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         combined_results = None
 
         if has_ot_results:
-            ldsc_tissue_future = start_ldsc_tissue_analysis()
             logger.info(
                 f"[PIPELINE] OpenTargets credible sets found for study "
                 f"{opentargets_study_id} — skipping filtering, COJO, and fine-mapping"
@@ -182,7 +185,9 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 user_id, project_id, opentargets_study_id, coverage=coverage,
                 harmonized_file=harmonized_file
             ).result()
-            successful_batches = 1 if combined_results is not None and len(combined_results) > 0 else 0
+            if combined_results is not None and len(combined_results) > 0:
+                successful_batches = 1
+                ldsc_tissue_future = start_ldsc_tissue_analysis()
         else:
             # Update analysis state after harmonization
             harmonization_state = {
@@ -314,26 +319,29 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             if all_results:
                 logger.info(f"[PIPELINE] Combining results from {successful_batches} successful batches")
                 combined_results = pd.concat(all_results, ignore_index=True)
-                credible_sets = count_credible_sets(all_results)
-                high_pip = int((combined_results["PIP"] > 0.5).sum())
-                empty_regions = len(cojo_results) - sum(
-                    count_credible_sets([result]) > 0 for result in all_results
-                )
-                message = (
-                    f"Fine-mapping found {credible_sets} credible sets, "
-                    f"{high_pip} variants with PIP > 0.5"
-                )
-                if empty_regions:
-                    message += f"; {empty_regions} of {len(cojo_results)} regions produced no credible set"
-                record_analysis_event_task.submit(
-                    user_id, project_id, "Fine_mapping", message,
-                    details={
-                        "credible_sets": credible_sets,
-                        "high_pip_variants": high_pip,
-                        "regions": len(cojo_results),
-                        "regions_without_credible_set": empty_regions,
-                    },
-                ).result()
+                try:
+                    credible_sets = count_credible_sets(all_results)
+                    high_pip = int((combined_results["PIP"] > 0.5).sum())
+                    empty_regions = len(cojo_results) - sum(
+                        count_credible_sets([result]) > 0 for result in all_results
+                    )
+                    message = (
+                        f"Fine-mapping found {credible_sets} credible sets, "
+                        f"{high_pip} variants with PIP > 0.5"
+                    )
+                    if empty_regions:
+                        message += f"; {empty_regions} of {len(cojo_results)} regions produced no credible set"
+                    record_analysis_event_task.submit(
+                        user_id, project_id, "Fine_mapping", message,
+                        details={
+                            "credible_sets": credible_sets,
+                            "high_pip_variants": high_pip,
+                            "regions": len(cojo_results),
+                            "regions_without_credible_set": empty_regions,
+                        },
+                    ).result()
+                except Exception as summary_e:
+                    logger.warning(f"[PIPELINE] Could not record fine-mapping summary: {summary_e}")
 
         # Combine and save results
         if combined_results is not None and len(combined_results) > 0:
@@ -381,7 +389,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                     "stage": "LDSC_Analysis",
                     "progress": 90,
                     "message": "LDSC tissue analysis failed, so tissue-specific enrichment is not available",
-                    "error_detail": {"error": _error_summary(ldsc_e)},
+                    "error_detail": {"error": _ldsc_failure_cause(ldsc_e)},
                 }
                 save_state(failed_ldsc_state)
                 raise RuntimeError(f"LDSC tissue analysis failed - required for enrichment: {str(ldsc_e)}")
