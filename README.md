@@ -14,20 +14,23 @@ This project is designed to generate hypotheses for the causal relationship betw
 ### Installation
 
 1. Clone the repository:
-    ```sh
-    git clone https://github.com/rejuve-bio/hypothesis-generation-demo.git
-    cd hypothesis-generation
-    ```
+
+   ```sh
+   git clone https://github.com/rejuve-bio/hypothesis-generation-demo.git
+   cd hypothesis-generation
+   ```
 
 2. Compile the Prolog files (this step assumes you have access to the Prolog files):
-    ```sh
-    python compile_kb.py --config-path config/kb.yaml --compile-script pl/compile.pl --path-prefix /mnt/d2_nfs/wondwossen/prolog_out_v2 --hook-script pl/hook.pl
-    ```
 
-    To compile the files under `prolog_out_v3`, change the `--path-prefix` argument as follows:
-    ```sh
-    python compile_kb.py --config-path config/kb.yaml --compile-script pl/compile.pl --path-prefix /mnt/d2_nfs/wondwossen/prolog_out_v3 --hook-script pl/hook.pl
-    ```
+   ```sh
+   python compile_kb.py --config-path config/kb.yaml --compile-script pl/compile.pl --path-prefix /mnt/d2_nfs/wondwossen/prolog_out_v2 --hook-script pl/hook.pl
+   ```
+
+   To compile the files under `prolog_out_v3`, change the `--path-prefix` argument as follows:
+
+   ```sh
+   python compile_kb.py --config-path config/kb.yaml --compile-script pl/compile.pl --path-prefix /mnt/d2_nfs/wondwossen/prolog_out_v3 --hook-script pl/hook.pl
+   ```
 
 3. Set up environment variables:
     Create a `.env` file in the root directory and add the following variables:
@@ -39,8 +42,9 @@ This project is designed to generate hypotheses for the causal relationship betw
     ```
 
 4. Run the Docker containers:
-    ```sh
-    sudo docker-compose up --build
-    ```
+
+   ```sh
+   sudo docker-compose up --build
+   ```
 
 5. Once the containers are running, the Flask app, Prolog service, and MongoDB service will be accessible on ports 5000, 4242, and 27017, respectively.

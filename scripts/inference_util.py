@@ -8,11 +8,11 @@ import subprocess
 import shutil
 import requests
 #import cravat TODO: Uncomment this line
-import sqlite3
+# import sqlite3
 from pathlib import Path
 import time
 import matplotlib.pyplot as plt
-from sklearn.metrics import auc
+from sklearn.metrics import auc, roc_curve, precision_recall_curve, average_precision_score
 import matplotlib.lines as mlines
 
 
@@ -279,6 +279,33 @@ def get_janus_python_info():
     print(f"Janus is using Python version: {sys.version}")
     print(f"Python executable path: {sys.executable}")
     return True # Return something to indicate success to Prolog
+
+
+def sklearn_roc_auc(data):
+    """Compute AUC-ROC using sklearn (trapezoidal method).
+
+    Args:
+        data: list of [label, score] pairs where label is 1 (pos) or 0 (neg)
+    Returns:
+        float: AUC-ROC score
+    """
+    arr = np.array(data)
+    y_true, y_score = arr[:, 0], arr[:, 1]
+    fpr, tpr, _ = roc_curve(y_true, y_score, pos_label=1)
+    return float(auc(fpr, tpr))
+
+
+def sklearn_pr_auc(data):
+    """Compute AUC-PR using sklearn's average_precision_score.
+
+    Args:
+        data: list of [label, score] pairs where label is 1 (pos) or 0 (neg)
+    Returns:
+        float: AUC-PR score (average precision)
+    """
+    arr = np.array(data)
+    y_true, y_score = arr[:, 0], arr[:, 1]
+    return float(average_precision_score(y_true, y_score))
 
 
 def plot_curves(all_folds_roc_data, all_folds_pr_data,

@@ -5,7 +5,6 @@
 :- use_module(library(apply)).
 :- use_module(library(gv)).
 :- use_module(library(yall)).
-:- use_module(library(term_ext)).
 :- use_module(library(process)).
 :- use_module(library(readutil)).
 
@@ -62,6 +61,15 @@ export_subproof(Out, Proof, SubProof) :-
   dot_arc(Out, Proof, Concl),
   export_proof(Out, SubProof).
 
+:- dynamic mi_max_depth/1.
+mi_max_depth(2).  % default depth limit
+
+set_mi_depth(D) :- retractall(mi_max_depth(_)), assertz(mi_max_depth(D)).
+
+reset_mi_expand_count :- flag(mi_expand_count, _, 0).
+mi_expand_count(N) :- flag(mi_expand_count, N, N).
+count_mi_expand :- flag(mi_expand_count, N, N + 1).
+
 mi(true, t(true, true, [])) :- !.
 
 mi(hideme([Goal|Goals]), t(hideme, hideme, [])) :- !,
@@ -69,6 +77,12 @@ mi(hideme([Goal|Goals]), t(hideme, hideme, [])) :- !,
 
 mi(hideme(A), t(hideme, hideme, [])) :- !,
   call(A).
+
+mi(once(Goal), Proof) :- !,
+  once(mi(Goal, Proof)).
+
+mi(call(Goal), Proof) :- !,
+  mi(Goal, Proof).
 
 mi((A,B), t(and, C, [PA, PB])) :- !, %conjuction
     without_hidden(A, WA),
@@ -83,6 +97,9 @@ mi((A;B), Proof) :- !,
      ProofAs = [ProofA] -> Proof = ProofA ;
      ProofBs = [ProofB] -> Proof = ProofB).
 
+mi(limit(N, Goal), Proof) :- !,
+  limit(N, mi(Goal, Proof)).
+
 traced_predicate(Goal) :-
   nonvar(Goal),
   Goal \= (_,_),
@@ -90,29 +107,115 @@ traced_predicate(Goal) :-
   functor(Goal, Name, Arity),
   Name \== sampled,
   predicate_property(hypgen:Goal, implementation_module(hypgen)).
+
+proof_leaf_predicate(Goal) :-
+  nonvar(Goal),
+  functor(Goal, Name, Arity),
+  proof_leaf_predicate(Name, Arity).
+
+proof_leaf_predicate(in_credible_set, 3).
+proof_leaf_predicate(coding_effect, 3).
+proof_leaf_predicate(pqtl_association, 2).
+proof_leaf_predicate(eqtl_association, 2).
+proof_leaf_predicate(sqtl_association, 2).
+proof_leaf_predicate(pqtl_coloc, 2).
+proof_leaf_predicate(eqtl_coloc, 2).
+proof_leaf_predicate(sqtl_coloc, 2).
+proof_leaf_predicate(distance_bin, 3).
+proof_leaf_predicate(in_tad_with, 2).
+proof_leaf_predicate(in_regulatory_region, 2).
+proof_leaf_predicate(activity_by_contact, 3).
+proof_leaf_predicate(tfbs_effect, 4).
+proof_leaf_predicate(regulates, 2).
+proof_leaf_predicate(associated_with, 2).
   
 mi(G, t(hideme, hideme, [])) :-
   G = sample_head(_,_,_,_,_), !,
   call(hypgen:G).
 
-mi(G, t(built_in, G, [])) :- % Check if the goal is a built-in predicate.
+mi(G, t(leaf, G, [])) :-
+    proof_leaf_predicate(G), !,
+    call(hypgen:G).
+
+mi(G, t(hideme, hideme, [])) :-
     G \= true,
     G \= findall(_, _, _),
     G \= hideme(_),
     \+ traced_predicate(G), !,
-    call(hypgen:G). % Directly call the built-in predicate.
+    call(hypgen:G).
 
+mi_d(limit(N, Goal), D, Proof) :- !,
+  limit(N, mi_d(Goal, D, Proof)).
 
 mi(G, t(R, G, [P])) :-
     G \= true,
     G \=  (_,_),
     G \= (_;_),
     G \= hideme(_),
-    clause(G, Body, Ref), 
+    mi_max_depth(Max),
+    mi_d(G, Max, t(R, G, [P])).
+
+% Depth-limited internals
+mi_d(true, _, t(true, true, [])) :- !.
+
+mi_d(hideme([Goal|Goals]), _, t(hideme, hideme, [])) :- !,
+  hideme([Goal|Goals]).
+
+mi_d(hideme(A), _, t(hideme, hideme, [])) :- !,
+  call(A).
+
+mi_d(once(Goal), D, Proof) :- !,
+  once(mi_d(Goal, D, Proof)).
+
+mi_d(call(Goal), D, Proof) :- !,
+  mi_d(Goal, D, Proof).
+
+mi_d((A,B), D, t(and, C, [PA, PB])) :- !,
+    without_hidden(A, WA),
+    without_hidden(B, WB),
+    copy_term(and(WA, WB), C),
+    mi_d(A, D, PA), mi_d(B, D, PB).
+
+mi_d((A;B), D, Proof) :- !,
+    findall(ProofA, mi_d(A, D, ProofA), ProofAs),
+    findall(ProofB, mi_d(B, D, ProofB), ProofBs),
+    (ProofAs = [ProofA], ProofBs = [ProofB] -> Proof = t(or, _, [ProofA, ProofB]) ;
+     ProofAs = [ProofA] -> Proof = ProofA ;
+     ProofBs = [ProofB] -> Proof = ProofB).
+
+mi_d(G, _, t(hideme, hideme, [])) :-
+  G = sample_head(_,_,_,_,_), !,
+  call(hypgen:G).
+
+mi_d(G, _, t(leaf, G, [])) :-
+    proof_leaf_predicate(G), !,
+    call(hypgen:G).
+
+% Depth exhausted: treat as leaf (call but don't expand)
+mi_d(G, 0, t(leaf, G, [])) :- !,
+    call(hypgen:G).
+
+mi_d(G, _, t(hideme, hideme, [])) :-
+    G \= true,
+    G \= findall(_, _, _),
+    G \= hideme(_),
+    \+ traced_predicate(G), !,
+    call(hypgen:G).
+
+mi_d(G, D, t(R, G, [P])) :-
+    G \= true,
+    G \=  (_,_),
+    G \= (_;_),
+    G \= hideme(_),
+    D > 0,
+    count_mi_expand,
+    D1 is D - 1,
+    clause(G, Body, Ref),
     clause(HeadC, BodyC, Ref),
     without_hidden(BodyC, BodyF),
     copy_term(HeadC :- BodyF, R),
-    mi(Body, P).
+    mi_d(Body, D1, P).
+    % format(user_error, 'SUCCESS D=~w G=~q~n', [D, G]).
 
 hideme([]) :- !.
 hideme([Goal|Goals]) :- !,
@@ -136,6 +239,12 @@ without_hidden(hideme(_), true) :- !.
 
 % Handle hideme with list
 without_hidden(hideme([_|_]), true) :- !.
+
+without_hidden(once(Goal), FilteredGoal) :- !,
+  without_hidden(Goal, FilteredGoal).
+
+without_hidden(call(Goal), FilteredGoal) :- !,
+  without_hidden(Goal, FilteredGoal).
 
 without_hidden(G, true) :- 
   functor(G, sample_head, 5),!.

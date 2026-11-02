@@ -69,6 +69,29 @@ def test_happy_path_assembles_graph_and_saves(
     assert saved[0][2] == "rs16940186"
 
 
+def test_coexpression_edges_use_existing_causal_gene_node_id(
+    monkeypatch, immediate_task_factory, sample_enrichment
+):
+    deps, _ = _configure_flow(monkeypatch, immediate_task_factory, sample_enrichment)
+    deps["enrichr"].to_ensembl_id.return_value = "ensg00000140968"
+
+    response, status = flow_module.hypothesis_flow.fn(
+        "user-1", "hyp-1", "enrich-1", "GO:0006954"
+    )
+
+    assert status == 201
+    graph = response["graph"]
+    node_ids = {node["id"] for node in graph["nodes"]}
+    for edge in graph["edges"]:
+        assert edge["source"] in node_ids
+        assert edge["target"] in node_ids
+    assert all(
+        edge["source"] == "ENSG00000140968"
+        for edge in graph["edges"]
+        if edge["label"] == "coexpressed_with"
+    )
+
+
 @pytest.mark.parametrize("variant_result", [[], RuntimeError("variant lookup failed")])
 def test_variant_lookup_falls_back_to_rsid(
     monkeypatch, immediate_task_factory, sample_enrichment, variant_result

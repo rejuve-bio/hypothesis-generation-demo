@@ -81,6 +81,14 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
 
     causal_gene_symbol = enrichr.to_symbol(causal_gene)
     causal_gene_ensembl = enrichr.to_ensembl_id(causal_gene_symbol) or causal_gene.lower()
+    causal_gene_ensembl = next(
+        node["id"]
+        for node in nodes
+        if node["type"] == "gene"
+        and node["id"].upper() in {
+            causal_gene_ensembl.upper(), causal_gene_symbol.upper()
+        }
+    )
     logger.info(
         f"Using causal gene from enrichment: {causal_gene_symbol} "
         f"(Ensembl: {causal_gene_ensembl})"
@@ -157,8 +165,9 @@ def hypothesis_flow(current_user_id, hypothesis_id, enrich_id, go_id):
             node["name"] = enrichr.to_symbol(node.get("name") or node_id)
 
     if prolog_gene_ids:
-        gene_entities = [f"gene({gene_id})" for gene_id in prolog_gene_ids]
-        query = f"maplist(gene_name, {gene_entities}, X)".replace("'", "")
+        # quote ids so prolog doesn't interpret them as vars or atoms
+        gene_entities = [f"gene('{gene_id}')" for gene_id in prolog_gene_ids]
+        query = f"maplist(gene_name, [{', '.join(gene_entities)}], X)"
         gene_lookup_failed = False
         try:
             prolog_gene_names = execute_gene_query.submit(query, hypothesis_id).result()

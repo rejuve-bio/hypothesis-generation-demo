@@ -43,11 +43,20 @@ RUN mkdir -p /opt/plink2 && \
     find /opt/plink2 -name "plink2" -type f -exec ln -sf {} /usr/local/bin/plink2 \; && \
     rm /tmp/plink2.zip
 
+# RUN mkdir -p /opt/gcta && \
+#     wget -q https://yanglab.westlake.edu.cn/software/gcta/bin/gcta-1.94.4-linux-kernel-3-x86_64.zip -O /tmp/gcta.zip && \
+#     unzip -q /tmp/gcta.zip -d /opt/gcta && \
+#     find /opt/gcta -name "gcta64" -type f -exec chmod +x {} \; && \
+#     find /opt/gcta -name "gcta64" -type f -exec ln -sf {} /usr/local/bin/gcta64 \; && \
+#     rm /tmp/gcta.zip
+
 RUN mkdir -p /opt/gcta && \
-    wget -q https://yanglab.westlake.edu.cn/software/gcta/bin/gcta-1.94.4-linux-kernel-3-x86_64.zip -O /tmp/gcta.zip && \
+    curl -fSL -A "Mozilla/5.0" \
+      https://yanglab.westlake.edu.cn/software/gcta/bin/gcta-1.94.4-linux-kernel-3-x86_64.zip \
+      -o /tmp/gcta.zip && \
+    file /tmp/gcta.zip | grep -q "Zip archive" && \
     unzip -q /tmp/gcta.zip -d /opt/gcta && \
-    find /opt/gcta -name "gcta64" -type f -exec chmod +x {} \; && \
-    find /opt/gcta -name "gcta64" -type f -exec ln -sf {} /usr/local/bin/gcta64 \; && \
+    find /opt/gcta -name gcta64 -type f -exec chmod +x {} \; -exec ln -sf {} /usr/local/bin/gcta64 \; && \
     rm /tmp/gcta.zip
 
 # Install htslib (bgzip, tabix), bcftools, samtools, and Java (required by Nextflow)
@@ -189,7 +198,7 @@ RUN chmod +x /app/entrypoint.sh
 # Clone gwas-sumstats-harmoniser repository
 RUN rm -rf gwas-sumstats-harmoniser && git clone https://github.com/EBISPOT/gwas-sumstats-harmoniser.git
 # Create separate Python environment for harmonizer
-RUN python3 -m venv /opt/harmonizer-venv
+RUN uv venv --python 3.9 /opt/harmonizer-venv
 
 # Install harmonizer dependencies using uv for better performance
 ENV UV_HARMONIZER_VENV=/opt/harmonizer-venv
