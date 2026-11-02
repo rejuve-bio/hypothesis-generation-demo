@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from bson import ObjectId
 
 from src.db.project_handler import ProjectHandler
+from src.utils import analysis_state_for_public_api
 
 
 def _handler():
@@ -19,7 +21,7 @@ def _handler():
     return handler
 
 
-def test_fork_project_marks_copy_as_non_demo_and_records_template(monkeypatch):
+def test_fork_project_marks_copy_as_non_demo_and_records_template():
     handler = _handler()
     template_id = "64b000000000000000000001"
     source = {
@@ -29,10 +31,10 @@ def test_fork_project_marks_copy_as_non_demo_and_records_template(monkeypatch):
         "is_demo": True,
         "is_template": True,
         "demo_slug": "canonical",
+        "analysis_state": {"status": "Completed", "progress": 100},
     }
     handler.projects_collection.find_one.return_value = source
     handler._copy_collection_docs = MagicMock(return_value=[])
-    monkeypatch.setattr(handler, "get_analysis_state_path", lambda *_: "/nonexistent/state")
 
     new_id = handler.fork_project_from_template(
         "owner", template_id, "viewer", template_slug="canonical"
@@ -46,6 +48,7 @@ def test_fork_project_marks_copy_as_non_demo_and_records_template(monkeypatch):
     assert inserted["source_template_id"] == template_id
     assert inserted["source_template_slug"] == "canonical"
     assert "demo_slug" not in inserted
+    assert inserted["analysis_state"] == {"status": "Completed", "progress": 100}
 
 
 def test_bulk_delete_allows_fork_and_cleans_fork_mapping():
@@ -91,7 +94,6 @@ def test_delete_project_data_removes_tissue_selections(monkeypatch):
     handler.load_analysis_state = MagicMock(return_value=None)
     handler.hypothesis_collection.find.return_value = []
     handler.projects_collection.find_one.return_value = None
-    handler.get_analysis_state_path = MagicMock(return_value="/nonexistent/state")
     handler.get_project_analysis_path = MagicMock(return_value="/nonexistent/analysis")
     monkeypatch.setattr("src.db.project_handler.os.path.exists", lambda _path: False)
 
@@ -100,3 +102,81 @@ def test_delete_project_data_removes_tissue_selections(monkeypatch):
     handler.db["tissue_selections"].delete_many.assert_called_once_with(
         {"user_id": "viewer", "project_id": project_id}
     )
+
+
+PROJECT_ID = "64b000000000000000000001"
+
+
+def test_save_analysis_state_merges_fields_into_existing_state():
+    handler = _handler()
+    handler.projects_collection.update_one.return_value.modified_count = 1
+
+    assert handler.save_analysis_state(
+        "viewer", PROJECT_ID, {"status": "Running", "stage": "COJO"}
+    )
+
+    query, update = handler.projects_collection.update_one.call_args.args
+    assert query == {"_id": ObjectId(PROJECT_ID), "user_id": "viewer"}
+    assert set(update["$set"]) == {
+        "analysis_state.status",
+        "analysis_state.stage",
+        "analysis_state.updated_at",
+    }
+    assert handler.projects_collection.update_one.call_args.kwargs == {}
+
+
+def _stale_running_state():
+    return {
+        "status": "Running",
+        "flow_run_id": None,
+        "updated_at": datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1),
+    }
+
+
+def test_load_analysis_state_writes_reconciled_state_only_if_unchanged():
+    handler = _handler()
+    state = _stale_running_state()
+    handler.projects_collection.find_one.return_value = {"analysis_state": state}
+    handler.projects_collection.update_one.return_value.modified_count = 1
+
+    result = handler.load_analysis_state("viewer", PROJECT_ID)
+
+    assert result["status"] == "Failed"
+    query, update = handler.projects_collection.update_one.call_args.args
+    assert query["analysis_state.updated_at"] == state["updated_at"]
+    assert set(query["analysis_state.status"]["$in"]) == {"Queued", "Running"}
+    assert update["$set"]["analysis_state.status"] == "Failed"
+    assert "analysis_state.flow_run_id" not in update["$set"]
+
+
+def test_load_analysis_state_keeps_newer_worker_write():
+    handler = _handler()
+    state = _stale_running_state()
+    handler.projects_collection.find_one.return_value = {"analysis_state": state}
+    handler.projects_collection.update_one.return_value.modified_count = 0
+
+    assert handler.load_analysis_state("viewer", PROJECT_ID) is state
+
+
+def test_delete_project_data_cancels_queued_flow_run(monkeypatch):
+    handler = _handler()
+    handler.load_analysis_state = MagicMock(
+        return_value={"status": "Queued", "flow_run_id": "run-1"}
+    )
+    handler.hypothesis_collection.find.return_value = []
+    handler.projects_collection.find_one.return_value = None
+    handler.get_project_analysis_path = MagicMock(return_value="/nonexistent/analysis")
+    monkeypatch.setattr("src.db.project_handler.os.path.exists", lambda _path: False)
+    post = MagicMock(return_value=MagicMock(status_code=200))
+    monkeypatch.setattr("src.db.project_handler._req.post", post)
+
+    handler._delete_project_data("viewer", PROJECT_ID)
+
+    assert post.call_args.args[0].endswith("/flow_runs/run-1/set_state")
+
+
+def test_queued_state_has_its_own_public_message():
+    public = analysis_state_for_public_api({"status": "Queued", "flow_run_id": "run-1"})
+
+    assert public["status"] == "Running"
+    assert public["message"] == "Queued, waiting for a worker."

@@ -33,7 +33,7 @@ def invoke_analysis_pipeline_deployment(
     file_minio_cache_key=None, file_gwas_library_id=None,
     opentargets_study_id=None,
 ):
-    run_deployment(
+    return run_deployment(
         name="analysis-pipeline-flow/analysis-pipeline-deployment",
         parameters={
             "user_id": user_id,

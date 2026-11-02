@@ -249,7 +249,7 @@ def test_build_project_summary_degrades_gracefully_when_a_sub_call_raises():
     hypotheses = MagicMock()
     files = MagicMock()
     projects.get_projects.return_value = {}
-    projects.load_analysis_state.side_effect = RuntimeError("state file corrupt")
+    projects.load_analysis_state.side_effect = RuntimeError("database unavailable")
     analysis.get_credible_sets_for_project.return_value = []
     hypotheses.get_hypotheses.return_value = []
 
@@ -266,6 +266,6 @@ def test_build_project_summary_degrades_gracefully_when_a_sub_call_raises():
     )
 
     assert summary is not None
-    assert summary["status"] == "Completed"
-    assert summary["running_task"] == "Analysis completed successfully."
+    assert summary["status"] == "Failed"
+    assert summary["running_task"] == "Could not load analysis state."
     assert summary["total_credible_sets_count"] == 0

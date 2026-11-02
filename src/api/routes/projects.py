@@ -139,10 +139,8 @@ async def get_projects(
             enhanced["running_task"] = project_running_task(analysis_state)
         except Exception as state_e:
             logger.warning(f"Could not load analysis state for project {project['id']}: {state_e}")
-            enhanced["status"] = normalize_status_responses("Completed")
-            enhanced["running_task"] = project_running_task(
-                {"status": "Completed", "message": "Analysis completed successfully."}
-            )
+            enhanced["status"] = normalize_status_responses("Failed")
+            enhanced["running_task"] = "Could not load analysis state."
 
         enhanced["population"] = get_population_label(project.get("population"))
         enhanced["ref_genome"] = project.get("ref_genome")
@@ -693,7 +691,7 @@ async def post_analysis_pipeline(
         )
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
+        flow_run = await loop.run_in_executor(
             None,
             lambda: invoke_analysis_pipeline_deployment(
                 user_id=current_user_id,
@@ -722,6 +720,11 @@ async def post_analysis_pipeline(
                 project_name=project_name,
                 opentargets_study_id=opentargets_study_id,
             ),
+        )
+        projects.save_analysis_state(
+            current_user_id,
+            project_id,
+            {"status": "Queued", "flow_run_id": str(flow_run.id)},
         )
 
         return AnalysisPipelineStartResponse(

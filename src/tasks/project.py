@@ -106,7 +106,7 @@ def prepare_gwas_file_task(
 
 @task()
 def save_analysis_state_task(user_id, project_id, state_data):
-    """Save analysis state to file system"""
+    """Save analysis state to the project document"""
     try:
         deps = get_deps()
         projects_handler = deps["projects"]

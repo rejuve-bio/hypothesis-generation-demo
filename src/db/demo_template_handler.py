@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
-import shutil
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -141,10 +139,6 @@ class DemoTemplateHandler(BaseHandler):
         base = (os.getenv("DEMO_SEEDS_MINIO_PREFIX") or "demo-seeds-v2").strip("/")
         return f"{base}/{slug}"
 
-    @staticmethod
-    def get_analysis_state_path(user_id: str, project_id: str) -> str:
-        return f"data/states/{user_id}/{project_id}/analysis_state.json"
-
     def list_templates(self, active_only: bool = False) -> list[dict]:
         query: dict[str, Any] = {"is_active": True} if active_only else {}
         docs = list(self.demo_templates_collection.find(query).sort("sort_order", 1))
@@ -170,25 +164,15 @@ class DemoTemplateHandler(BaseHandler):
         doc["id"] = str(doc.pop("_id"))
         return doc
 
-    def load_analysis_state(self, user_id: str, project_id: str) -> Optional[dict]:
-        state_path = self.get_analysis_state_path(user_id, project_id)
-        if not os.path.exists(state_path):
-            return None
-        with open(state_path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
-
     def validate_project_for_seed(self, project_id: str) -> dict:
         project = self.get_project_by_id(project_id)
         if not project:
             raise DemoTemplateError(f"Project not found: {project_id}")
 
         user_id = project["user_id"]
-        analysis_state = self.load_analysis_state(user_id, project_id)
+        analysis_state = project.get("analysis_state")
         if not analysis_state:
-            raise DemoTemplateError(
-                f"Missing analysis state file for project {project_id} "
-                f"(expected {self.get_analysis_state_path(user_id, project_id)})"
-            )
+            raise DemoTemplateError(f"Missing analysis state for project {project_id}")
 
         status = (analysis_state.get("status") or "").strip()
         if status != "Completed":
@@ -330,11 +314,8 @@ class DemoTemplateHandler(BaseHandler):
         if not project_raw:
             raise DemoTemplateError(f"Demo project {project_id} no longer exists in MongoDB.")
 
-        analysis_state = self.load_analysis_state(source_user_id, project_id)
-        if not analysis_state:
-            raise DemoTemplateError(
-                f"Missing analysis state file for demo project {project_id}."
-            )
+        if not project_raw.get("analysis_state"):
+            raise DemoTemplateError(f"Missing analysis state for demo project {project_id}.")
 
         file_metadata_docs: list[dict] = []
         gwas_file_id = project_raw.get("gwas_file_id")
@@ -361,9 +342,6 @@ class DemoTemplateHandler(BaseHandler):
                 filename: self._rewrite_docs_for_demo_owner(docs, source_user_id)
                 for filename, docs in mongo_payload.items()
             }
-            analysis_state = self._rewrite_docs_for_demo_owner(
-                analysis_state, source_user_id
-            )
 
         project_raw = dict(project_raw)
         project_raw.pop("thread_id", None)
@@ -391,7 +369,8 @@ class DemoTemplateHandler(BaseHandler):
         return {
             "manifest": manifest,
             "mongo": mongo_payload,
-            "files": {"analysis_state.json": analysis_state},
+            # Kept for importers that still read the state from this file.
+            "files": {"analysis_state.json": project_raw["analysis_state"]},
         }
 
     @staticmethod
@@ -406,7 +385,6 @@ class DemoTemplateHandler(BaseHandler):
             return (
                 value.replace(f"/{source_user_id}/", f"/{demo_user_id}/")
                 .replace(f"data/projects/{source_user_id}/", f"data/projects/{demo_user_id}/")
-                .replace(f"data/states/{source_user_id}/", f"data/states/{demo_user_id}/")
                 .replace(f"data/temp/{source_user_id}/", f"data/temp/{demo_user_id}/")
                 .replace(f"data/metadata/{source_user_id}/", f"data/metadata/{demo_user_id}/")
             )
@@ -527,11 +505,6 @@ class DemoTemplateHandler(BaseHandler):
                 {"user_id": legacy_user_id, "project_id": project_id}
             )
 
-        legacy_state_path = self.get_analysis_state_path(legacy_user_id, project_id)
-        if os.path.exists(legacy_state_path):
-            shutil.rmtree(os.path.dirname(legacy_state_path), ignore_errors=True)
-            logger.info(f"Removed legacy analysis state at {legacy_state_path}")
-
     def import_seed_from_minio(
         self,
         slug: str,
@@ -595,6 +568,9 @@ class DemoTemplateHandler(BaseHandler):
         if not project_docs:
             raise DemoTemplateError("project.json is empty in demo seed bundle")
         project_doc = project_docs[0]
+        legacy_state_key = f"{prefix}/files/analysis_state.json"
+        if not project_doc.get("analysis_state") and storage.exists(legacy_state_key):
+            project_doc["analysis_state"] = self._download_bundle_part(storage, legacy_state_key)
         project_doc["is_demo"] = True
         project_doc["is_template"] = False
         project_doc["demo_slug"] = slug
@@ -632,14 +608,6 @@ class DemoTemplateHandler(BaseHandler):
             docs = self._download_bundle_part(storage, f"{prefix}/mongo/{filename}")
             if docs:
                 getattr(self, attr).insert_many(docs)
-
-        analysis_state = self._download_bundle_part(
-            storage, f"{prefix}/files/analysis_state.json"
-        )
-        state_path = self.get_analysis_state_path(user_id, project_id)
-        os.makedirs(os.path.dirname(state_path), exist_ok=True)
-        with open(state_path, "w", encoding="utf-8") as handle:
-            json.dump(analysis_state, handle, default=str)
 
         now = datetime.now(timezone.utc)
         registry_doc = {
