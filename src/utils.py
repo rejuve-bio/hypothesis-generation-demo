@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 import os
-import json
 from loguru import logger
 from src.services.status_tracker import status_tracker, TaskState
 from src.services.socketio_relay import publish_socketio_relay
@@ -68,7 +67,9 @@ def analysis_state_for_public_api(state: dict | None) -> dict:
 
     msg = out.get("message")
     if msg is None or not str(msg).strip():
-        if raw_key in ("uploading",):
+        if raw_key == "queued":
+            out["message"] = "Queued, waiting for a worker."
+        elif raw_key in ("uploading",):
             out["message"] = "Uploading or preparing GWAS file."
         elif raw_key in ("not_started", "notstarted"):
             out["message"] = "Waiting to start analysis."
@@ -211,14 +212,6 @@ def emit_analysis_update(user_id, project_id, state_data):
     except Exception as exc:
         logger.error(f"Failed to publish analysis update to Redis: {exc}")
 
-
-def save_analysis_state(user_id, state):
-    """Save the analysis state for the second flow"""
-    state_dir = os.path.join('data', 'states', user_id)
-    os.makedirs(state_dir, exist_ok=True)
-    
-    with open(os.path.join(state_dir, 'analysis_state.json'), 'w') as f:
-        json.dump(state, f, default=str)  # Use default=str to handle non-serializable objects
 
 def allowed_file(filename):
     """Check if the file extension is allowed"""
