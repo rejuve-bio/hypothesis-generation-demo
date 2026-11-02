@@ -354,12 +354,15 @@ class ProjectHandler(BaseHandler):
             logger.warning(f"Could not record analysis event for project {project_id}: {e}")
 
     def get_analysis_events(self, user_id, project_id):
-        """Return the project's analysis events, oldest first."""
-        return list(
+        """Return the project's analysis events, oldest first, with UTC timestamps."""
+        events = list(
             self.analysis_events_collection.find(
                 {"user_id": user_id, "project_id": project_id}, {"_id": 0}
             ).sort("timestamp", 1)
         )
+        for event in events:
+            event["timestamp"] = event["timestamp"].replace(tzinfo=timezone.utc)
+        return events
 
     def load_analysis_state(self, user_id, project_id):
         """Load the project's analysis state, reconciling stale active runs with Prefect."""

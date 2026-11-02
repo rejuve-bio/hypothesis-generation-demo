@@ -208,7 +208,7 @@ def test_analysis_events_route_returns_owned_events_in_order():
     handler = _handler()
     handler.projects_collection.find_one.return_value = {"_id": ObjectId(PROJECT_ID)}
     handler.analysis_events_collection.find.return_value.sort.return_value = [
-        {"message": "first", "timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc)},
+        {"message": "first", "timestamp": datetime(2026, 1, 1)},
     ]
 
     response = asyncio.run(projects_routes.get_analysis_events(PROJECT_ID, "viewer", handler))
