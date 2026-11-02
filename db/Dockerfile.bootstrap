@@ -1,0 +1,14 @@
+# One-shot job that sets up the shared OpenTargets Postgres database
+# (db/ot_db_setup.py). Independent of the application images.
+FROM python:3.10-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client-15 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir "psycopg2-binary>=2.9.9" "boto3>=1.34"
+
+WORKDIR /db
+COPY db/ot_db_setup.py ./
+COPY db/sql/ ./sql/
+
+ENTRYPOINT ["python", "ot_db_setup.py"]
+CMD ["ensure"]
