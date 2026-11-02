@@ -369,8 +369,6 @@ class DemoTemplateHandler(BaseHandler):
         return {
             "manifest": manifest,
             "mongo": mongo_payload,
-            # Kept for importers that still read the state from this file.
-            "files": {"analysis_state.json": project_raw["analysis_state"]},
         }
 
     @staticmethod
@@ -427,7 +425,6 @@ class DemoTemplateHandler(BaseHandler):
 
         uploads: dict[str, Any] = {"manifest.json": bundle["manifest"]}
         uploads.update({f"mongo/{k}": v for k, v in bundle["mongo"].items()})
-        uploads.update({f"files/{k}": v for k, v in bundle["files"].items()})
 
         for filename, content in uploads.items():
             key = f"{prefix}/{filename}"
