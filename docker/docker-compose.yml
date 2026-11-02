@@ -181,8 +181,12 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Shared OpenTargets database for the Python pipeline and the Prolog backend
+  # (Postgres 15 + pg_parquet). Set up by ot-db-bootstrap; see db/README.md.
   credible-sets-postgres:
-    image: postgres:15-alpine
+    build:
+      context: ..
+      dockerfile: db/Dockerfile.postgres
     environment:
       POSTGRES_USER: ${CREDIBLE_SETS_DB_USER}
       POSTGRES_PASSWORD: ${CREDIBLE_SETS_DB_PASSWORD}
@@ -200,13 +204,13 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # One-shot: makes sure the OpenTargets Postgres DB holds the pinned
-  # OT_RELEASE (MinIO pg_dump snapshot, else EBI FTP). Exits 0 in seconds when
-  # already loaded; the pipeline workers wait for it. See scripts/bootstrap_ot_db.py.
+  # One-shot: makes sure the shared OpenTargets DB holds the pinned OT_RELEASE
+  # (MinIO pg_dump snapshot, else EBI FTP via pg_parquet). Exits 0 in seconds
+  # when already loaded; the pipeline workers wait for it. See db/README.md.
   ot-db-bootstrap:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: db/Dockerfile.bootstrap
     labels:
       com.hypgen.one-shot: "true"
     env_file:
@@ -217,16 +221,12 @@ services:
       - CREDIBLE_SETS_DB_NAME=${CREDIBLE_SETS_DB_NAME}
       - CREDIBLE_SETS_DB_USER=${CREDIBLE_SETS_DB_USER}
       - CREDIBLE_SETS_DB_PASSWORD=${CREDIBLE_SETS_DB_PASSWORD}
-      - PYTHONPATH=/app
     volumes:
-      - ..:/app
-      - ../data:/app/data
-    entrypoint: []
+      - ot-db-snapshot-cache:/cache
     depends_on:
       credible-sets-postgres:
         condition: service_healthy
-    command: >
-      uv run python scripts/bootstrap_ot_db.py
+    command: ["ensure"]
     networks:
       - app_network
     restart: "no"
@@ -344,6 +344,7 @@ volumes:
   prefect-data:
   prefect-postgres-data:
   credible-sets-postgres-data:
+  ot-db-snapshot-cache:
 
 networks:
   app_network:
