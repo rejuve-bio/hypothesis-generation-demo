@@ -1,8 +1,8 @@
 """Copy analysis_state.json files into each project's `analysis_state` field.
 
 Standalone (stdlib + pymongo) so it can run inside the API pod. Reads
-MONGODB_URI and DB_NAME from the environment. Idempotent: a project that
-already has `analysis_state` is left untouched, and no file is deleted.
+MONGODB_URI and DB_NAME from the environment. Idempotent: a state is only
+written when the project has none or an older one, and no file is deleted.
 
 Usage: python migrate_analysis_state_to_mongo.py [--data-dir data] [--dry-run]
 """
@@ -26,9 +26,11 @@ def _load_state(path: Path) -> dict | None:
         return None
     updated_at = state.pop("state_updated_at", None)
     try:
-        state["updated_at"] = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
     except (AttributeError, ValueError):
-        state["updated_at"] = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+        updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    # MongoDB keeps milliseconds; truncate so re-runs compare equal.
+    state["updated_at"] = updated_at.replace(microsecond=updated_at.microsecond // 1000 * 1000)
     return state
 
 
@@ -39,32 +41,28 @@ def migrate(projects, data_dir: Path, dry_run: bool = False) -> dict:
         if not ObjectId.is_valid(project_id):
             counts["orphaned"] += 1
             continue
-        project = projects.find_one(
-            {"_id": ObjectId(project_id), "user_id": user_id}, {"analysis_state": 1}
-        )
-        if project is None:
+        project_query = {"_id": ObjectId(project_id), "user_id": user_id}
+        if projects.find_one(project_query, {"_id": 1}) is None:
             counts["orphaned"] += 1
-            continue
-        if "analysis_state" in project:
-            counts["skipped"] += 1
             continue
         state = _load_state(path)
         if state is None:
             counts["unreadable"] += 1
             continue
-        if not dry_run:
-            result = projects.update_one(
-                {
-                    "_id": ObjectId(project_id),
-                    "user_id": user_id,
-                    "analysis_state": {"$exists": False},
-                },
-                {"$set": {"analysis_state": state}},
-            )
-            if result.modified_count == 0:
-                counts["skipped"] += 1
-                continue
-        counts["migrated"] += 1
+        # Copy when missing, or when the file moved on since an earlier run.
+        query = {
+            **project_query,
+            "$or": [
+                {"analysis_state": {"$exists": False}},
+                {"analysis_state.updated_at": {"$lt": state["updated_at"]}},
+            ],
+        }
+        if dry_run:
+            changed = projects.find_one(query, {"_id": 1}) is not None
+        else:
+            update = {"$set": {f"analysis_state.{key}": value for key, value in state.items()}}
+            changed = projects.update_one(query, update).modified_count > 0
+        counts["migrated" if changed else "skipped"] += 1
     return counts
 
 
