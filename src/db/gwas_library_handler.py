@@ -14,7 +14,7 @@ from .base_handler import BaseHandler
 from src.utils import gwas_file_has_n_column
 
 # FinnGen release used by scripts/finngen_manifest_parser.py to build both our
-# library filenames and OpenTargets' study_id (see scripts/load_credible_sets_to_postgres.py).
+# library filenames and OpenTargets' study_id (see db/README.md).
 FINNGEN_RELEASE = "R12"
 
 _GCST_ACCESSION_RE = re.compile(r"(GCST\d+)", re.IGNORECASE)

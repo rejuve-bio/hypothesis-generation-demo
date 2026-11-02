@@ -50,14 +50,12 @@ RUN mkdir -p /opt/gcta && \
     find /opt/gcta -name "gcta64" -type f -exec ln -sf {} /usr/local/bin/gcta64 \; && \
     rm /tmp/gcta.zip
 
-# Install htslib (bgzip, tabix), bcftools, samtools, Java (required by Nextflow),
-# and pg_dump/pg_restore 15 (matches credible-sets-postgres; used by ot-db-bootstrap)
+# Install htslib (bgzip, tabix), bcftools, samtools, and Java (required by Nextflow)
 RUN apt-get update && apt-get install -y \
     tabix \
     bcftools \
     samtools \
     openjdk-17-jre-headless \
-    postgresql-client-15 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ARG NEXTFLOW_VERSION=23.10.1

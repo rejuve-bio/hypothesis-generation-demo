@@ -171,7 +171,7 @@ _STUDY_SELECT_FIELDS = """
 class CredibleSetsHandler:
     """
     Query OpenTargets data from the shared PostgreSQL database (see
-    src/db/credible_sets_schema.py). The tables hold every study type because
+    db/sql/02_tables.sql). The tables hold every study type because
     the Prolog backend needs QTL data; this handler only ever returns GWAS.
     """
 
