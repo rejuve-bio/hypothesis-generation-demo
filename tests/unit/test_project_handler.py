@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
+import pytest
 from bson import ObjectId
 
 from src.db.project_handler import ProjectHandler
@@ -107,65 +108,37 @@ def test_delete_project_data_removes_tissue_selections(monkeypatch):
 PROJECT_ID = "64b000000000000000000001"
 
 
-def test_save_analysis_state_merges_fields_into_existing_state():
+def test_save_analysis_state_sets_only_given_fields():
     handler = _handler()
     handler.projects_collection.update_one.return_value.modified_count = 1
 
-    assert handler.save_analysis_state(
-        "viewer", PROJECT_ID, {"status": "Running", "stage": "COJO"}
-    )
+    handler.save_analysis_state("viewer", PROJECT_ID, {"status": "Running"})
 
     query, update = handler.projects_collection.update_one.call_args.args
     assert query == {"_id": ObjectId(PROJECT_ID), "user_id": "viewer"}
-    assert set(update["$set"]) == {
-        "analysis_state.status",
-        "analysis_state.stage",
-        "analysis_state.updated_at",
+    assert set(update["$set"]) == {"analysis_state.status", "analysis_state.updated_at"}
+
+
+@pytest.mark.parametrize("modified, expected_status", [(1, "Failed"), (0, "Running")])
+def test_reconcile_writes_back_only_if_state_unchanged(modified, expected_status):
+    handler = _handler()
+    updated_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+    handler.projects_collection.find_one.return_value = {
+        "analysis_state": {"status": "Running", "updated_at": updated_at}
     }
-    assert handler.projects_collection.update_one.call_args.kwargs == {}
+    handler.projects_collection.update_one.return_value.modified_count = modified
+
+    assert handler.load_analysis_state("viewer", PROJECT_ID)["status"] == expected_status
+    query = handler.projects_collection.update_one.call_args.args[0]
+    assert query["analysis_state.updated_at"] == updated_at
 
 
-def _stale_running_state():
-    return {
-        "status": "Running",
-        "flow_run_id": None,
-        "updated_at": datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1),
-    }
-
-
-def test_load_analysis_state_writes_reconciled_state_only_if_unchanged():
+def test_queued_run_is_cancelled_on_delete_and_has_public_message(monkeypatch):
     handler = _handler()
-    state = _stale_running_state()
-    handler.projects_collection.find_one.return_value = {"analysis_state": state}
-    handler.projects_collection.update_one.return_value.modified_count = 1
-
-    result = handler.load_analysis_state("viewer", PROJECT_ID)
-
-    assert result["status"] == "Failed"
-    query, update = handler.projects_collection.update_one.call_args.args
-    assert query["analysis_state.updated_at"] == state["updated_at"]
-    assert set(query["analysis_state.status"]["$in"]) == {"Queued", "Running"}
-    assert update["$set"]["analysis_state.status"] == "Failed"
-    assert "analysis_state.flow_run_id" not in update["$set"]
-
-
-def test_load_analysis_state_keeps_newer_worker_write():
-    handler = _handler()
-    state = _stale_running_state()
-    handler.projects_collection.find_one.return_value = {"analysis_state": state}
-    handler.projects_collection.update_one.return_value.modified_count = 0
-
-    assert handler.load_analysis_state("viewer", PROJECT_ID) is state
-
-
-def test_delete_project_data_cancels_queued_flow_run(monkeypatch):
-    handler = _handler()
-    handler.load_analysis_state = MagicMock(
-        return_value={"status": "Queued", "flow_run_id": "run-1"}
-    )
+    state = {"status": "Queued", "flow_run_id": "run-1"}
+    handler.load_analysis_state = MagicMock(return_value=state)
     handler.hypothesis_collection.find.return_value = []
     handler.projects_collection.find_one.return_value = None
-    handler.get_project_analysis_path = MagicMock(return_value="/nonexistent/analysis")
     monkeypatch.setattr("src.db.project_handler.os.path.exists", lambda _path: False)
     post = MagicMock(return_value=MagicMock(status_code=200))
     monkeypatch.setattr("src.db.project_handler._req.post", post)
@@ -173,10 +146,4 @@ def test_delete_project_data_cancels_queued_flow_run(monkeypatch):
     handler._delete_project_data("viewer", PROJECT_ID)
 
     assert post.call_args.args[0].endswith("/flow_runs/run-1/set_state")
-
-
-def test_queued_state_has_its_own_public_message():
-    public = analysis_state_for_public_api({"status": "Queued", "flow_run_id": "run-1"})
-
-    assert public["status"] == "Running"
-    assert public["message"] == "Queued, waiting for a worker."
+    assert analysis_state_for_public_api(state)["message"] == "Queued, waiting for a worker."

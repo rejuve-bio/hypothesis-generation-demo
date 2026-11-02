@@ -690,6 +690,7 @@ async def post_analysis_pipeline(
             f"library_entry={not is_uploaded and gwas_entry is not None})"
         )
 
+        projects.save_analysis_state(current_user_id, project_id, {"status": "Queued"})
         loop = asyncio.get_running_loop()
         flow_run = await loop.run_in_executor(
             None,
@@ -722,9 +723,7 @@ async def post_analysis_pipeline(
             ),
         )
         projects.save_analysis_state(
-            current_user_id,
-            project_id,
-            {"status": "Queued", "flow_run_id": str(flow_run.id)},
+            current_user_id, project_id, {"flow_run_id": str(flow_run.id)}
         )
 
         return AnalysisPipelineStartResponse(
