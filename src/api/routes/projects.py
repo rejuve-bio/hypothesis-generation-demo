@@ -9,6 +9,7 @@ from datetime import datetime
 
 from typing import Union
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -290,6 +291,21 @@ async def bulk_delete_projects(
             status_code=207,
         )
     raise HTTPException(status_code=500, detail="Failed to delete projects")
+
+
+@router.get(
+    "/projects/{project_id}/analysis-events",
+    summary="List a project's analysis timeline events",
+)
+async def get_analysis_events(
+    project_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+    projects: ProjectHandler = Depends(get_project_handler),
+):
+    if not ObjectId.is_valid(project_id) or not projects.get_projects(current_user_id, project_id):
+        raise HTTPException(status_code=404, detail="Project not found or access denied")
+    events = projects.get_analysis_events(current_user_id, project_id)
+    return JSONResponse(content=serialize_datetime_fields(events))
 
 
 @router.post(

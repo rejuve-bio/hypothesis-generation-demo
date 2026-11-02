@@ -213,6 +213,24 @@ def emit_analysis_update(user_id, project_id, state_data):
         logger.error(f"Failed to publish analysis update to Redis: {exc}")
 
 
+def emit_analysis_event(event):
+    """Push one analysis timeline event to Socket.IO clients in room analysis_{project_id}."""
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        logger.error("REDIS_URL not set – analysis event will not be relayed to clients.")
+        return
+    room = f"analysis_{event['project_id']}"
+    publish_socketio_relay(redis_url, "analysis_event", room, serialize_datetime_fields(event))
+
+
+def record_analysis_event(user_id, project_id, stage, message, **fields):
+    """Add an analysis timeline event from a worker task; never raises."""
+    try:
+        get_deps()["projects"].add_analysis_event(user_id, project_id, stage, message, **fields)
+    except Exception as exc:
+        logger.warning(f"Could not record analysis event for project {project_id}: {exc}")
+
+
 def allowed_file(filename):
     """Check if the file extension is allowed"""
     ALLOWED_EXTENSIONS = {'tsv', 'csv', 'txt', 'bgz', 'gz'}

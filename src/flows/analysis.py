@@ -23,10 +23,11 @@ from src.tasks import (
     finemap_region_batch_worker,
     cleanup_sumstats_file,
     save_analysis_state_task,
+    record_analysis_event_task,
     create_analysis_result_task,
     get_results_from_opentargets_task,
 )
-from src.tasks.analysis import NoSignificantVariantsError
+from src.tasks.analysis import NoSignificantVariantsError, count_credible_sets
 from src.db.credible_sets_handler import CredibleSetsHandler
 
 
@@ -188,7 +189,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             logger.info(f"[PIPELINE] Stage 2: Loading and filtering variants")
             try:
                 significant_df_result = filter_significant_variants.submit(
-                    harmonized_file, output_dir, p_threshold=p_value_threshold
+                    user_id, project_id, harmonized_file, output_dir, p_threshold=p_value_threshold
                 ).result()
             except NoSignificantVariantsError as e:
                 save_state({
@@ -223,7 +224,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
 
             config = Config.from_env()
             plink_dir = config.plink_dir_38
-            cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, maf_threshold=maf_threshold, population=population, ref_genome=ref_genome).result()
+            cojo_result = run_cojo_per_chromosome.submit(user_id, project_id, significant_df, plink_dir, output_dir, maf_threshold=maf_threshold, population=population, ref_genome=ref_genome).result()
 
             # Extract the actual DataFrame
             if isinstance(cojo_result, tuple):
@@ -263,6 +264,8 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 batch_data = (batch, f"batch_{i}", sumstats_temp_file, {
                     'user_id': user_id,
                     'project_id': project_id,
+                    'batch_number': i + 1,
+                    'batch_count': len(region_batches),
                     'finemap_params': {
                         'seed': seed,
                         'window': window,
@@ -303,6 +306,14 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             if all_results:
                 logger.info(f"[PIPELINE] Combining results from {successful_batches} successful batches")
                 combined_results = pd.concat(all_results, ignore_index=True)
+                credible_sets = count_credible_sets(all_results)
+                high_pip = int((combined_results["PIP"] > 0.5).sum())
+                record_analysis_event_task.submit(
+                    user_id, project_id, "Fine_mapping",
+                    f"Fine-mapping found {credible_sets} credible sets, "
+                    f"{high_pip} variants with PIP > 0.5",
+                    details={"credible_sets": credible_sets, "high_pip_variants": high_pip},
+                ).result()
 
         # Combine and save results
         if combined_results is not None and len(combined_results) > 0:

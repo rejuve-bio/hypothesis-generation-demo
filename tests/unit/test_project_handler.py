@@ -1,9 +1,13 @@
+import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
 from bson import ObjectId
+from fastapi import HTTPException
 
+from src.api.routes import projects as projects_routes
 from src.db.project_handler import ProjectHandler
 from src.utils import analysis_state_for_public_api
 
@@ -18,6 +22,7 @@ def _handler():
     handler.enrich_collection = MagicMock()
     handler.analysis_results_collection = MagicMock()
     handler.file_metadata_collection = MagicMock()
+    handler.analysis_events_collection = MagicMock()
     handler.db = MagicMock()
     return handler
 
@@ -89,7 +94,7 @@ def test_bulk_delete_protects_canonical_demo():
     handler.projects_collection.delete_one.assert_not_called()
 
 
-def test_delete_project_data_removes_tissue_selections(monkeypatch):
+def test_delete_project_data_removes_tissue_selections_and_events(monkeypatch):
     handler = _handler()
     project_id = "64b000000000000000000001"
     handler.load_analysis_state = MagicMock(return_value=None)
@@ -100,9 +105,9 @@ def test_delete_project_data_removes_tissue_selections(monkeypatch):
 
     handler._delete_project_data("viewer", project_id)
 
-    handler.db["tissue_selections"].delete_many.assert_called_once_with(
-        {"user_id": "viewer", "project_id": project_id}
-    )
+    project_filter = {"user_id": "viewer", "project_id": project_id}
+    handler.db["tissue_selections"].delete_many.assert_called_once_with(project_filter)
+    handler.analysis_events_collection.delete_many.assert_called_once_with(project_filter)
 
 
 PROJECT_ID = "64b000000000000000000001"
@@ -147,3 +152,83 @@ def test_queued_run_is_cancelled_on_delete_and_has_public_message(monkeypatch):
 
     assert post.call_args.args[0].endswith("/flow_runs/run-1/set_state")
     assert analysis_state_for_public_api(state)["message"] == "Queued, waiting for a worker."
+
+
+def test_add_analysis_event_stores_and_emits_with_stored_flow_run(monkeypatch):
+    handler = _handler()
+    handler.projects_collection.find_one.return_value = {"analysis_state": {"flow_run_id": "run-1"}}
+    emit = MagicMock()
+    monkeypatch.setattr("src.db.project_handler.emit_analysis_event", emit)
+
+    handler.add_analysis_event(
+        "viewer", PROJECT_ID, "Cojo", "3 independent signals", details={"independent_signals": 3}
+    )
+
+    event = handler.analysis_events_collection.insert_one.call_args.args[0]
+    assert event["flow_run_id"] == "run-1"
+    assert event["level"] == "info"
+    assert event["details"] == {"independent_signals": 3}
+    emit.assert_called_once_with(event)
+
+
+def test_add_analysis_event_never_raises():
+    handler = _handler()
+    handler.analysis_events_collection.insert_one.side_effect = RuntimeError("db down")
+
+    handler.add_analysis_event("viewer", PROJECT_ID, "Cojo", "message", flow_run_id="run-1")
+
+
+@pytest.mark.parametrize("state, level", [
+    ({"status": "Running", "stage": "Cojo", "message": "Running COJO"}, "info"),
+    ({"status": "Failed", "stage": "Cojo", "message": "COJO failed"}, "error"),
+])
+def test_save_analysis_state_records_an_event(state, level):
+    handler = _handler()
+    handler.add_analysis_event = MagicMock()
+    handler.projects_collection.update_one.return_value.modified_count = 1
+
+    handler.save_analysis_state("viewer", PROJECT_ID, state)
+
+    handler.add_analysis_event.assert_called_once_with(
+        "viewer", PROJECT_ID, stage="Cojo", message=state["message"], level=level
+    )
+
+
+def test_save_analysis_state_without_status_records_no_event():
+    handler = _handler()
+    handler.add_analysis_event = MagicMock()
+    handler.projects_collection.update_one.return_value.modified_count = 1
+
+    handler.save_analysis_state("viewer", PROJECT_ID, {"flow_run_id": "run-1"})
+
+    handler.add_analysis_event.assert_not_called()
+
+
+def test_analysis_events_route_returns_owned_events_in_order():
+    handler = _handler()
+    handler.projects_collection.find_one.return_value = {"_id": ObjectId(PROJECT_ID)}
+    handler.analysis_events_collection.find.return_value.sort.return_value = [
+        {"message": "first", "timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc)},
+    ]
+
+    response = asyncio.run(projects_routes.get_analysis_events(PROJECT_ID, "viewer", handler))
+
+    assert json.loads(response.body) == [
+        {"message": "first", "timestamp": "2026-01-01T00:00:00+00:00"}
+    ]
+    handler.analysis_events_collection.find.assert_called_once_with(
+        {"user_id": "viewer", "project_id": PROJECT_ID}, {"_id": 0}
+    )
+    handler.analysis_events_collection.find.return_value.sort.assert_called_once_with("timestamp", 1)
+
+
+@pytest.mark.parametrize("project_id", [PROJECT_ID, "not-an-id"])
+def test_analysis_events_route_hides_projects_the_user_does_not_own(project_id):
+    handler = _handler()
+    handler.projects_collection.find_one.return_value = None
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(projects_routes.get_analysis_events(project_id, "viewer", handler))
+
+    assert exc.value.status_code == 404
+    handler.analysis_events_collection.find.assert_not_called()

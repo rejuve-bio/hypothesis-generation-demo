@@ -11,6 +11,7 @@ from src.utils import (
     get_population_label,
     normalize_status_responses,
     project_running_task,
+    record_analysis_event,
 )
 
 
@@ -117,6 +118,12 @@ def save_analysis_state_task(user_id, project_id, state_data):
     except Exception as e:
         logger.info(f"Error saving analysis state: {str(e)}")
         raise
+
+
+@task()
+def record_analysis_event_task(user_id, project_id, stage, message, details=None):
+    """Add an analysis timeline event from the flow"""
+    record_analysis_event(user_id, project_id, stage, message, details=details)
 
 
 @task()

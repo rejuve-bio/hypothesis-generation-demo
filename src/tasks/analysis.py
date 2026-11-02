@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import logging
 from prefect import task
-from datetime import datetime
+from datetime import datetime, timedelta
 from loguru import logger
 import pandas as pd
 import numpy as np
@@ -16,7 +16,7 @@ import gc
 import optuna
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.config import Config
-from src.utils import transform_credible_sets_to_locuszoom, get_deps, get_shared_temp_dir
+from src.utils import transform_credible_sets_to_locuszoom, get_deps, get_shared_temp_dir, record_analysis_event
 
 
 logging.basicConfig(level=logging.INFO)
@@ -463,6 +463,11 @@ NR==1 {
 
         elapsed_time = (datetime.now() - start_time).total_seconds()
         logger.info(f"[HARMONIZE] Processing completed in {elapsed_time:.2f} seconds")
+        record_analysis_event(
+            user_id, project_id, "Harmonization",
+            f"Harmonization finished in {timedelta(seconds=round(elapsed_time))}",
+            duration_seconds=round(elapsed_time, 1),
+        )
 
         # Upload to MinIO
         if storage and user_id and project_id:
@@ -567,7 +572,7 @@ def _no_significant_variants_error(p_values, p_threshold) -> NoSignificantVarian
 
 
 @task()
-def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
+def filter_significant_variants(user_id, project_id, harmonized_df, output_dir, p_threshold=5e-8):
     """Filter significant variants from harmonized sumstats.
 
     *harmonized_df* may be either a pandas DataFrame (legacy callers) or a
@@ -606,6 +611,15 @@ def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
     significant_df = harmonized_df[harmonized_df[p_col] < p_threshold].copy()
     if significant_df.empty:
         raise _no_significant_variants_error(harmonized_df[p_col], p_threshold)
+    record_analysis_event(
+        user_id, project_id, "Filtering",
+        f"{len(significant_df):,} of {len(harmonized_df):,} variants pass p < {p_threshold:g}",
+        details={
+            "significant_variants": len(significant_df),
+            "total_variants": len(harmonized_df),
+            "p_value_threshold": p_threshold,
+        },
+    )
     sig_output_path = os.path.join(output_dir, "significant_variants.tsv")
     significant_df.to_csv(sig_output_path, sep='\t', index=True)
 
@@ -614,7 +628,7 @@ def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
 
 # ===  COJO ANALYSIS ===
 @task()
-def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold=0.01, population="EUR", ref_genome="GRCh38"):
+def run_cojo_per_chromosome(user_id, project_id, significant_df, plink_dir, output_dir, maf_threshold=0.01, population="EUR", ref_genome="GRCh38"):
     """
     Run GCTA COJO analysis per chromosome and combine results.
     """
@@ -696,6 +710,7 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
                 
                 if result.returncode != 0:
                     logger.warning(f"[COJO] GCTA failed for chromosome {chrom}")
+                    failed_chromosomes.append(chrom)
                     return None
                 
                 # Read COJO results for this chromosome  
@@ -716,14 +731,17 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
                     
             except subprocess.TimeoutExpired:
                 logger.error(f"[COJO] Timeout for chromosome {chrom}")
+                failed_chromosomes.append(chrom)
                 return None
             except Exception as e:
                 logger.error(f"[COJO] Error processing chromosome {chrom}: {str(e)}")
+                failed_chromosomes.append(chrom)
                 return None
         
         # Run all chromosomes in parallel
         combined_results = []
         successful_chromosomes = []
+        failed_chromosomes = []
         max_workers = 4 
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -742,7 +760,14 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
                         successful_chromosomes.append(chrom)
                 except Exception as e:
                     logger.error(f"[COJO] Exception in chromosome {chrom}: {str(e)}")
-             
+
+        for chrom in sorted(failed_chromosomes):
+            record_analysis_event(
+                user_id, project_id, "Cojo",
+                f"COJO failed on chr {chrom}; its signals are not included",
+                level="warning", details={"chromosome": chrom},
+            )
+
         if combined_results:
             combined_cojo_df = pd.concat(combined_results, ignore_index=True)
             
@@ -761,7 +786,13 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
             cojo_output_path = os.path.join(output_dir, "combined_cojo_results.txt")
             combined_cojo_df.to_csv(cojo_output_path, sep='\t', index=True)
             
-            logger.info(f"[COJO] Results saved to: {cojo_output_path}")           
+            logger.info(f"[COJO] Results saved to: {cojo_output_path}")
+            chromosomes = sorted(successful_chromosomes)
+            record_analysis_event(
+                user_id, project_id, "Cojo",
+                f"{len(combined_cojo_df)} independent signals on chr {', '.join(map(str, chromosomes))}",
+                details={"independent_signals": len(combined_cojo_df), "chromosomes": chromosomes},
+            )
             return combined_cojo_df, cojo_output_path
             
         else:
@@ -1318,12 +1349,50 @@ def get_results_from_opentargets_task(user_id, project_id, opentargets_study_id,
     if not result_rows:
         return None
 
+    record_analysis_event(
+        user_id, project_id, "OpenTargets_credible_sets",
+        f"{len(ot_rows)} credible sets from OpenTargets",
+        details={"credible_sets": len(ot_rows), "study_id": opentargets_study_id},
+    )
     return pd.DataFrame(result_rows)
+
+
+def count_credible_sets(region_results):
+    """Count credible sets across per-region fine-mapping results."""
+    return sum(
+        result.loc[result["cs"] > 0, "cs"].nunique()
+        for result in region_results
+        if "cs" in result.columns
+    )
 
 
 @task(retries=3)
 def finemap_region_batch_worker(batch_data):
+    region_batch, _, _, params = batch_data
+    batch_results = _finemap_region_batch(batch_data)
+    batch_label = f"Batch {params['batch_number']}/{params['batch_count']}"
+    if batch_results:
+        credible_sets = count_credible_sets(batch_results)
+        record_analysis_event(
+            params["user_id"], params["project_id"], "Fine_mapping",
+            f"{batch_label} done: {len(batch_results)} of {len(region_batch)} regions, "
+            f"{credible_sets} credible sets",
+            details={
+                "regions": len(region_batch),
+                "regions_fine_mapped": len(batch_results),
+                "credible_sets": credible_sets,
+            },
+        )
+    else:
+        record_analysis_event(
+            params["user_id"], params["project_id"], "Fine_mapping",
+            f"{batch_label} failed: none of its {len(region_batch)} regions could be fine-mapped",
+            level="warning", details={"regions": len(region_batch)},
+        )
+    return batch_results
 
+
+def _finemap_region_batch(batch_data):
     # Unpack the batch_data tuple
     if len(batch_data) == 3:
         region_batch, batch_id, sumstats_file_path = batch_data

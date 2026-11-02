@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from src.api.routes import projects as projects_routes
 from src.flows import analysis as flow_module
+from src.tasks import analysis as analysis_tasks
 from src.tasks.analysis import NoSignificantVariantsError, filter_significant_variants
 
 
@@ -18,17 +19,26 @@ def _sumstats(p_values):
     )
 
 
-def test_filter_keeps_variants_below_threshold(tmp_path):
-    significant_df, _ = filter_significant_variants.fn(_sumstats([1e-9, 1e-3]), str(tmp_path))
+def test_filter_keeps_variants_below_threshold_and_records_the_count(monkeypatch, tmp_path):
+    record = MagicMock()
+    monkeypatch.setattr(analysis_tasks, "record_analysis_event", record)
+
+    significant_df, _ = filter_significant_variants.fn(
+        "user", "project", _sumstats([1e-9, 1e-3]), str(tmp_path)
+    )
 
     assert list(significant_df.index) == ["1:0:A:G"]
+    record.assert_called_once_with(
+        "user", "project", "Filtering", "1 of 2 variants pass p < 5e-08",
+        details={"significant_variants": 1, "total_variants": 2, "p_value_threshold": 5e-8},
+    )
 
 
 def test_filter_reports_p_value_range_when_nothing_is_significant(tmp_path):
     sumstats = _sumstats([3.2e-7, 5e-7, 2e-6, 8e-6, 0.5, None])
 
     with pytest.raises(NoSignificantVariantsError) as exc:
-        filter_significant_variants.fn(sumstats, str(tmp_path))
+        filter_significant_variants.fn("user", "project", sumstats, str(tmp_path))
 
     assert str(exc.value) == (
         "No variants reach p < 5e-08. Most significant: 1:0:A:G (p = 3.2e-07). "
@@ -48,9 +58,28 @@ def test_filter_reports_p_value_range_when_nothing_is_significant(tmp_path):
 
 def test_filter_does_not_suggest_rerun_when_nothing_passes_the_maximum_threshold(tmp_path):
     with pytest.raises(NoSignificantVariantsError) as exc:
-        filter_significant_variants.fn(_sumstats([0.01, 0.5]), str(tmp_path), p_threshold=1e-5)
+        filter_significant_variants.fn(
+            "user", "project", _sumstats([0.01, 0.5]), str(tmp_path), p_threshold=1e-5
+        )
 
     assert str(exc.value) == "No variants reach p < 1e-05. Most significant: 1:0:A:G (p = 0.01)."
+
+
+@pytest.mark.parametrize("results, message, level", [
+    ([pd.DataFrame({"cs": [1, 1, 2, 0]})], "Batch 1/3 done: 1 of 2 regions, 2 credible sets", "info"),
+    ([], "Batch 1/3 failed: none of its 2 regions could be fine-mapped", "warning"),
+])
+def test_finemap_batch_records_its_outcome(monkeypatch, results, message, level):
+    record = MagicMock()
+    monkeypatch.setattr(analysis_tasks, "record_analysis_event", record)
+    monkeypatch.setattr(analysis_tasks, "_finemap_region_batch", lambda _batch_data: results)
+    params = {"user_id": "user", "project_id": "project", "batch_number": 1, "batch_count": 3}
+
+    analysis_tasks.finemap_region_batch_worker.fn((["r1", "r2"], "batch_0", "/sumstats", params))
+
+    args, kwargs = record.call_args
+    assert args == ("user", "project", "Fine_mapping", message)
+    assert kwargs.get("level", "info") == level
 
 
 def test_no_significant_variants_error_survives_pickling():
