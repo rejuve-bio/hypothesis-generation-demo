@@ -182,7 +182,8 @@ def test_add_analysis_event_never_raises():
 
 @pytest.mark.parametrize("state, level", [
     ({"status": "Running", "stage": "Cojo", "message": "Running COJO"}, "info"),
-    ({"status": "Failed", "stage": "Cojo", "message": "COJO failed"}, "error"),
+    ({"status": "Failed", "stage": "Cojo", "message": "COJO failed",
+      "error_detail": {"error": "GCTA exited"}}, "error"),
 ])
 def test_save_analysis_state_records_an_event(state, level):
     handler = _handler()
@@ -192,7 +193,8 @@ def test_save_analysis_state_records_an_event(state, level):
     handler.save_analysis_state("viewer", PROJECT_ID, state)
 
     handler.add_analysis_event.assert_called_once_with(
-        "viewer", PROJECT_ID, stage="Cojo", message=state["message"], level=level
+        "viewer", PROJECT_ID, stage="Cojo", message=state["message"], level=level,
+        details=state.get("error_detail"),
     )
 
 

@@ -28,7 +28,7 @@ def harmonized_to_ldsc_sumstats_zhang(
     w_hm3_snplist: str,
     *,
     default_n: int | None = None,
-) -> str:
+) -> int:
     """
     Read harmonized .tsv.gz, apply HM3 snplist allele filter + strand-ambiguous removal,
     write LDSC sumstats.gz with columns SNP, A1, A2, Z, N. Returns the SNP count.

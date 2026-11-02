@@ -320,6 +320,7 @@ class ProjectHandler(BaseHandler):
                 stage=state_data.get("stage"),
                 message=analysis_state_for_public_api(state_data)["message"],
                 level="error" if state_data["status"] == "Failed" else "info",
+                details=state_data.get("error_detail"),
             )
         return saved
 

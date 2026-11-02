@@ -1093,7 +1093,8 @@ def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_
         if skipped_n:
             logger.info(f"[PIPELINE] Excluding {skipped_n} unmapped tissue(s) from saved LDSC results")
             hidden = [
-                r.get('Name') for r in ldsc_results_data if r not in mapped_ldsc_results_data
+                name for name, mapping in ontology_mapping_results.items()
+                if mapping.get('census_skip_coexpression')
             ]
             record_analysis_event(
                 user_id, project_id, "LDSC_Analysis",

@@ -31,6 +31,11 @@ from src.tasks.analysis import NoSignificantVariantsError, count_credible_sets
 from src.db.credible_sets_handler import CredibleSetsHandler
 
 
+def _error_summary(error, max_chars=300):
+    """Last two lines of an error message, capped for display."""
+    lines = [line for line in str(error).splitlines() if line.strip()]
+    return "\n".join(lines[-2:])[-max_chars:]
+
 
 @flow(log_prints=True,
     persist_result=False,
@@ -376,6 +381,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                     "stage": "LDSC_Analysis",
                     "progress": 90,
                     "message": "LDSC tissue analysis failed, so tissue-specific enrichment is not available",
+                    "error_detail": {"error": _error_summary(ldsc_e)},
                 }
                 save_state(failed_ldsc_state)
                 raise RuntimeError(f"LDSC tissue analysis failed - required for enrichment: {str(ldsc_e)}")
