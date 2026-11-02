@@ -1,0 +1,36 @@
+# Postgres 15 with the pg_parquet extension (CrunchyData), used as the shared
+# OpenTargets database for the Python pipeline and the Prolog backend.
+# pg_parquet is built from source; cargo-pgrx must match the pgrx version
+# pinned in pg_parquet's Cargo.toml.
+
+ARG PG_MAJOR=15
+ARG PG_PARQUET_VERSION=v0.5.1
+ARG CARGO_PGRX_VERSION=0.16.0
+
+FROM postgres:${PG_MAJOR}-bookworm AS build
+ARG PG_MAJOR
+ARG PG_PARQUET_VERSION
+ARG CARGO_PGRX_VERSION
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates clang curl git libclang-dev libssl-dev \
+        pkg-config postgresql-server-dev-${PG_MAJOR} \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+    && cargo install --locked cargo-pgrx --version "${CARGO_PGRX_VERSION}" \
+    && cargo pgrx init --pg${PG_MAJOR} /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
+
+RUN git clone --depth 1 --branch "${PG_PARQUET_VERSION}" https://github.com/CrunchyData/pg_parquet.git /pg_parquet
+WORKDIR /pg_parquet
+RUN cargo pgrx package --features pg${PG_MAJOR} --pg-config /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
+
+FROM postgres:${PG_MAJOR}-bookworm
+ARG PG_MAJOR
+# pg_parquet reads parquet over https (EBI FTP, MinIO), which needs CA certificates.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /pg_parquet/target/release/pg_parquet-pg${PG_MAJOR}/ /
+COPY db/initdb/ /docker-entrypoint-initdb.d/
+CMD ["postgres", "-c", "shared_preload_libraries=pg_parquet"]
