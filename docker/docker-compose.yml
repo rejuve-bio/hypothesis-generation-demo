@@ -117,6 +117,8 @@ services:
         condition: service_healthy
       credible-sets-postgres:
         condition: service_healthy
+      ot-db-bootstrap:
+        condition: service_completed_successfully
     command: >
       uv run dask worker tcp://dask-scheduler:8786
       --nworkers 4
@@ -160,6 +162,8 @@ services:
       - GO_LLM_KEY=${LLM_API_KEY}
       - GO_LLM_MODEL=${LLM_MODEL}
       - REDIS_URL=redis://redis:6379
+      - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
+      - CREDIBLE_SETS_DB_PORT=5432
     env_file:
       - ../.env
     volumes:
@@ -216,8 +220,12 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Shared OpenTargets database for the Python pipeline and the Prolog backend
+  # (Postgres 15 + pg_parquet). Set up by ot-db-bootstrap; see db/README.md.
   credible-sets-postgres:
-    image: postgres:15-alpine
+    build:
+      context: ..
+      dockerfile: db/Dockerfile.postgres
     environment:
       POSTGRES_USER: ${CREDIBLE_SETS_DB_USER}
       POSTGRES_PASSWORD: ${CREDIBLE_SETS_DB_PASSWORD}
@@ -226,7 +234,6 @@ services:
       - "127.0.0.1:${CREDIBLE_SETS_DB_PORT}:5432"
     volumes:
       - credible-sets-postgres-data:/var/lib/postgresql/data
-      - ./init-credible-sets.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - app_network
     healthcheck:
@@ -236,50 +243,29 @@ services:
       retries: 5
     restart: unless-stopped
 
-  credible-sets-loader:
-    profiles: ["tools"]
+  # One-shot: makes sure the shared OpenTargets DB holds the pinned OT_RELEASE
+  # (MinIO pg_dump snapshot, else EBI FTP via pg_parquet). Exits 0 in seconds
+  # when already loaded; the pipeline workers wait for it. See db/README.md.
+  ot-db-bootstrap:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: db/Dockerfile.bootstrap
+    labels:
+      com.hypgen.one-shot: "true"
+    env_file:
+      - ../.env
     environment:
       - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
       - CREDIBLE_SETS_DB_PORT=5432
       - CREDIBLE_SETS_DB_NAME=${CREDIBLE_SETS_DB_NAME}
       - CREDIBLE_SETS_DB_USER=${CREDIBLE_SETS_DB_USER}
       - CREDIBLE_SETS_DB_PASSWORD=${CREDIBLE_SETS_DB_PASSWORD}
-      - PYTHONPATH=/app
     volumes:
-      - ..:/app
-    entrypoint: []
+      - ot-db-snapshot-cache:/cache
     depends_on:
       credible-sets-postgres:
         condition: service_healthy
-    command: >
-      uv run python scripts/load_credible_sets_to_postgres.py --release latest
-    networks:
-      - app_network
-    restart: "no"
-
-  opentargets-studies-loader:
-    profiles: ["tools"]
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    environment:
-      - CREDIBLE_SETS_DB_HOST=credible-sets-postgres
-      - CREDIBLE_SETS_DB_PORT=5432
-      - CREDIBLE_SETS_DB_NAME=${CREDIBLE_SETS_DB_NAME}
-      - CREDIBLE_SETS_DB_USER=${CREDIBLE_SETS_DB_USER}
-      - CREDIBLE_SETS_DB_PASSWORD=${CREDIBLE_SETS_DB_PASSWORD}
-      - PYTHONPATH=/app
-    volumes:
-      - ..:/app
-    entrypoint: []
-    depends_on:
-      credible-sets-postgres:
-        condition: service_healthy
-    command: >
-      uv run python scripts/load_opentargets_studies.py --release latest
+    command: ["ensure"]
     networks:
       - app_network
     restart: "no"
@@ -393,6 +379,8 @@ services:
         condition: service_healthy
       credible-sets-postgres:
         condition: service_healthy
+      ot-db-bootstrap:
+        condition: service_completed_successfully
     networks:
       - app_network
 
@@ -414,6 +402,7 @@ volumes:
   prefect-data:
   prefect-postgres-data:
   credible-sets-postgres-data:
+  ot-db-snapshot-cache:
 
 networks:
   app_network:

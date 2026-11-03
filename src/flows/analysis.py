@@ -137,6 +137,19 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             _ot_check = CredibleSetsHandler()
             try:
                 has_ot_results = _ot_check.study_has_credible_sets(opentargets_study_id)
+                if not has_ot_results:
+                    _ot_load_state = _ot_check.get_load_state()
+                    if _ot_load_state is None:
+                        logger.warning(
+                            f"[PIPELINE] OpenTargets DB is not loaded or unreachable — cannot use "
+                            f"precomputed credible sets for {opentargets_study_id}; falling back to "
+                            f"full fine-mapping (check the ot-db-bootstrap service)"
+                        )
+                    else:
+                        logger.info(
+                            f"[PIPELINE] Study {opentargets_study_id} has no credible sets in "
+                            f"OpenTargets release {_ot_load_state['ot_release']} — running full fine-mapping"
+                        )
             finally:
                 _ot_check.close()
 
