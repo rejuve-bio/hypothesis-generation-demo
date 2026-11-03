@@ -1208,6 +1208,10 @@ def get_results_from_opentargets_task(user_id, project_id, opentargets_study_id,
     *harmonized_file*, if given, is used to enrich OT variants with rsIDs
     (OT's own credible_sets table carries no rsID) since harmonization always
     runs and already resolves them.
+
+    Returns (results_df_or_None, ot_version): ot_version is the OpenTargets
+    release the rows were read from (see CredibleSetsHandler), stamped on every
+    saved credible set and recorded on the project by the flow.
     """
     from src.db.credible_sets_handler import (
         CredibleSetsHandler, convert_ot_row_to_credible_set,
@@ -1219,15 +1223,19 @@ def get_results_from_opentargets_task(user_id, project_id, opentargets_study_id,
 
     ot_handler = CredibleSetsHandler()
     try:
-        ot_rows = ot_handler.get_all_credible_sets_for_study(opentargets_study_id)
+        ot_rows, ot_version = ot_handler.get_all_credible_sets_for_study_with_version(opentargets_study_id)
     finally:
         ot_handler.close()
 
     if not ot_rows:
         logger.warning(f"[OT] No credible sets found for study {opentargets_study_id}")
-        return None
+        return None, ot_version
 
-    logger.info(f"[OT] Found {len(ot_rows)} credible set(s) for study {opentargets_study_id}")
+    ot_release = (ot_version or {}).get("ot_release")
+    logger.info(
+        f"[OT] Found {len(ot_rows)} credible set(s) for study {opentargets_study_id} "
+        f"(OpenTargets release {ot_release})"
+    )
 
     rsid_lookup = build_rsid_lookup_from_harmonized_file(harmonized_file)
     logger.info(f"[OT] rsID lookup built with {len(rsid_lookup)} entries from harmonized file")
@@ -1235,7 +1243,9 @@ def get_results_from_opentargets_task(user_id, project_id, opentargets_study_id,
     import json as _json
     result_rows = []
     for cs_idx, ot_row in enumerate(ot_rows, 1):
-        cs = convert_ot_row_to_credible_set(ot_row, coverage=coverage, rsid_lookup=rsid_lookup)
+        cs = convert_ot_row_to_credible_set(
+            ot_row, coverage=coverage, rsid_lookup=rsid_lookup, ot_version=ot_version
+        )
         cs["completed_at"] = datetime.now().isoformat()
         analysis_handler.save_credible_set(user_id, project_id, cs)
 
@@ -1257,9 +1267,9 @@ def get_results_from_opentargets_task(user_id, project_id, opentargets_study_id,
             })
 
     if not result_rows:
-        return None
+        return None, ot_version
 
-    return pd.DataFrame(result_rows)
+    return pd.DataFrame(result_rows), ot_version
 
 
 @task(retries=3)
