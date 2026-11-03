@@ -508,6 +508,64 @@ NR==1 {
         raise
 
 
+class NoSignificantVariantsError(ValueError):
+    """No variant passes the GWAS significance threshold."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        p_value_threshold: float | None = None,
+        min_p_value: float | None = None,
+        min_p_variant: str | None = None,
+        variants_below_1e6: int = 0,
+        variants_below_1e5: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.p_value_threshold = p_value_threshold
+        self.min_p_value = min_p_value
+        self.min_p_variant = min_p_variant
+        self.variants_below_1e6 = variants_below_1e6
+        self.variants_below_1e5 = variants_below_1e5
+
+    def as_detail(self) -> dict:
+        return {
+            "error_type": "no_significant_variants",
+            "message": str(self),
+            "p_value_threshold": self.p_value_threshold,
+            "min_p_value": self.min_p_value,
+            "min_p_variant": self.min_p_variant,
+            "variants_below_1e6": self.variants_below_1e6,
+            "variants_below_1e5": self.variants_below_1e5,
+        }
+
+
+def _no_significant_variants_error(p_values, p_threshold) -> NoSignificantVariantsError:
+    """Build the error summarising how close the study came to the threshold."""
+    p_values = p_values.dropna()
+    below_1e6 = int((p_values < 1e-6).sum())
+    below_1e5 = int((p_values < 1e-5).sum())
+    message = f"No variants reach p < {p_threshold:g}."
+    min_p_value = min_p_variant = None
+    if not p_values.empty:
+        min_p_variant = str(p_values.idxmin())
+        min_p_value = float(p_values.min())
+        message += f" Most significant: {min_p_variant} (p = {min_p_value:.2g})."
+    if below_1e5:
+        message += (
+            f" Variants passing p < 1e-06: {below_1e6}; p < 1e-05: {below_1e5};"
+            " rerun with a higher p_value_threshold to include them."
+        )
+    return NoSignificantVariantsError(
+        message,
+        p_value_threshold=p_threshold,
+        min_p_value=min_p_value,
+        min_p_variant=min_p_variant,
+        variants_below_1e6=below_1e6,
+        variants_below_1e5=below_1e5,
+    )
+
+
 @task()
 def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
     """Filter significant variants from harmonized sumstats.
@@ -546,6 +604,8 @@ def filter_significant_variants(harmonized_df, output_dir, p_threshold=5e-8):
     p_col = 'p_value' if 'p_value' in harmonized_df.columns else 'P'
 
     significant_df = harmonized_df[harmonized_df[p_col] < p_threshold].copy()
+    if significant_df.empty:
+        raise _no_significant_variants_error(harmonized_df[p_col], p_threshold)
     sig_output_path = os.path.join(output_dir, "significant_variants.tsv")
     significant_df.to_csv(sig_output_path, sep='\t', index=True)
 
@@ -584,7 +644,6 @@ def run_cojo_per_chromosome(significant_df, plink_dir, output_dir, maf_threshold
         
         # Use variant_id as SNP (already in colon format: chr:pos:ref:alt after harmonization)
         cojo_df["SNP"] = significant_df.index
-        logger.info(f"[COJO] Using variant_id as SNP identifier (sample: {cojo_df['SNP'].iloc[0]})")
         
         # Rename to GCTA expected column names
         cojo_df = cojo_df.rename(columns={

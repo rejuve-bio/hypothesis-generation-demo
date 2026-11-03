@@ -68,6 +68,20 @@ from src.utils import (
 router = APIRouter(tags=["projects"])
 
 
+def _parse_p_value_threshold(value) -> float:
+    error = HTTPException(
+        status_code=400,
+        detail="p_value_threshold must be greater than 0 and at most 1e-5",
+    )
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        raise error
+    if not 0 < threshold <= 1e-5:
+        raise error
+    return threshold
+
+
 @router.get(
     "/projects",
     response_model=Union[FlexibleDict, ProjectsListResponse],
@@ -294,6 +308,7 @@ async def post_analysis_pipeline(
     is_uploaded: str = Form("false"),
     gwas_file_input: UploadFile | str | None = File(None, alias="gwas_file"),
     maf_threshold: str = Form("0.01"),
+    p_value_threshold: str = Form("5e-8"),
     seed: str = Form("42"),
     window: str = Form("2000"),
     L: str = Form("-1"),
@@ -333,6 +348,9 @@ async def post_analysis_pipeline(
 
         maf_threshold = float(
             preserve_explicit_empty("maf_threshold", maf_threshold)
+        )
+        p_value_threshold = _parse_p_value_threshold(
+            preserve_explicit_empty("p_value_threshold", p_value_threshold)
         )
         seed = int(preserve_explicit_empty("seed", seed))
         window = int(preserve_explicit_empty("window", window))
@@ -642,6 +660,7 @@ async def post_analysis_pipeline(
 
         analysis_parameters = {
             "maf_threshold": maf_threshold,
+            "p_value_threshold": p_value_threshold,
             "seed": seed,
             "window": window,
             "L": L,
@@ -704,6 +723,7 @@ async def post_analysis_pipeline(
                 batch_size=batch_size,
                 max_workers=max_workers,
                 maf_threshold=maf_threshold,
+                p_value_threshold=p_value_threshold,
                 seed=seed,
                 window=window,
                 L=L,
