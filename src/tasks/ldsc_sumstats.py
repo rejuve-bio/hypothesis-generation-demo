@@ -28,10 +28,10 @@ def harmonized_to_ldsc_sumstats_zhang(
     w_hm3_snplist: str,
     *,
     default_n: int | None = None,
-) -> str:
+) -> int:
     """
     Read harmonized .tsv.gz, apply HM3 snplist allele filter + strand-ambiguous removal,
-    write LDSC sumstats.gz with columns SNP, A1, A2, Z, N.
+    write LDSC sumstats.gz with columns SNP, A1, A2, Z, N. Returns the SNP count.
     """
     harmonized_gz = os.path.abspath(harmonized_gz)
     out_gz = os.path.abspath(out_gz)
@@ -97,4 +97,4 @@ def harmonized_to_ldsc_sumstats_zhang(
     out = df[keep].dropna(subset=["SNP", "A1", "A2", "Z"])
     out.to_csv(out_gz, sep="\t", index=False, compression="gzip")
     logger.info(f"[LDSC] Wrote {len(out):,} SNPs to {out_gz} (mean |Z|={out['Z'].abs().mean():.3f})")
-    return out_gz
+    return len(out)

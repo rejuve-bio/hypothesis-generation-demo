@@ -27,5 +27,5 @@ const socket = io({connect_target}, {{
 - Fallback: `Authorization: Bearer <JWT>` header.
 - Fallback: `?token=<JWT>` query string.
 
-**Events:** Client emits `subscribe_hypothesis` and `subscribe_analysis`; server emits `task_update` and `analysis_update`.
+**Events:** Client emits `subscribe_hypothesis` and `subscribe_analysis`; server emits `task_update` and `analysis_update`, plus `analysis_events` (timeline history on subscribe) and `analysis_event` (each new timeline event).
 """

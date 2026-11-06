@@ -23,7 +23,8 @@ def invoke_enrichment_deployment(
 
 def invoke_analysis_pipeline_deployment(
     user_id, project_id, gwas_file_path=None, ref_genome="GRCh38", population="EUR",
-    batch_size=5, max_workers=3, maf_threshold=0.01, seed=42, window=2000, L=-1,
+    batch_size=5, max_workers=3, maf_threshold=0.01, p_value_threshold=5e-8,
+    seed=42, window=2000, L=-1,
     coverage=0.95, min_abs_corr=0.5, sample_size=None,
     user_email: str | None = None,
     project_name: str | None = None,
@@ -33,7 +34,7 @@ def invoke_analysis_pipeline_deployment(
     file_minio_cache_key=None, file_gwas_library_id=None,
     opentargets_study_id=None,
 ):
-    run_deployment(
+    return run_deployment(
         name="analysis-pipeline-flow/analysis-pipeline-deployment",
         parameters={
             "user_id": user_id,
@@ -44,6 +45,7 @@ def invoke_analysis_pipeline_deployment(
             "batch_size": batch_size,
             "max_workers": max_workers,
             "maf_threshold": maf_threshold,
+            "p_value_threshold": p_value_threshold,
             "seed": seed,
             "window": window,
             "L": L,

@@ -9,6 +9,7 @@ from datetime import datetime
 
 from typing import Union
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -66,6 +67,27 @@ from src.utils import (
 )
 
 router = APIRouter(tags=["projects"])
+
+SAMPLE_SIZE_SOURCE_LABELS = {
+    "user_provided": "provided by you",
+    "library_verified": "from library metadata",
+    "library_default": "library default",
+    "upload_default": "default, used if the file has no N column",
+}
+
+
+def _parse_p_value_threshold(value) -> float:
+    error = HTTPException(
+        status_code=400,
+        detail="p_value_threshold must be greater than 0 and at most 1e-5",
+    )
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        raise error
+    if not 0 < threshold <= 1e-5:
+        raise error
+    return threshold
 
 
 @router.get(
@@ -139,10 +161,8 @@ async def get_projects(
             enhanced["running_task"] = project_running_task(analysis_state)
         except Exception as state_e:
             logger.warning(f"Could not load analysis state for project {project['id']}: {state_e}")
-            enhanced["status"] = normalize_status_responses("Completed")
-            enhanced["running_task"] = project_running_task(
-                {"status": "Completed", "message": "Analysis completed successfully."}
-            )
+            enhanced["status"] = normalize_status_responses("Failed")
+            enhanced["running_task"] = "Could not load analysis state."
 
         enhanced["population"] = get_population_label(project.get("population"))
         enhanced["ref_genome"] = project.get("ref_genome")
@@ -280,6 +300,21 @@ async def bulk_delete_projects(
     raise HTTPException(status_code=500, detail="Failed to delete projects")
 
 
+@router.get(
+    "/projects/{project_id}/analysis-events",
+    summary="List a project's analysis timeline events",
+)
+async def get_analysis_events(
+    project_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+    projects: ProjectHandler = Depends(get_project_handler),
+):
+    if not ObjectId.is_valid(project_id) or not projects.get_projects(current_user_id, project_id):
+        raise HTTPException(status_code=404, detail="Project not found or access denied")
+    events = projects.get_analysis_events(current_user_id, project_id)
+    return JSONResponse(content=serialize_datetime_fields(events))
+
+
 @router.post(
     "/analysis-pipeline",
     status_code=202,
@@ -294,6 +329,7 @@ async def post_analysis_pipeline(
     is_uploaded: str = Form("false"),
     gwas_file_input: UploadFile | str | None = File(None, alias="gwas_file"),
     maf_threshold: str = Form("0.01"),
+    p_value_threshold: str = Form("5e-8"),
     seed: str = Form("42"),
     window: str = Form("2000"),
     L: str = Form("-1"),
@@ -333,6 +369,9 @@ async def post_analysis_pipeline(
 
         maf_threshold = float(
             preserve_explicit_empty("maf_threshold", maf_threshold)
+        )
+        p_value_threshold = _parse_p_value_threshold(
+            preserve_explicit_empty("p_value_threshold", p_value_threshold)
         )
         seed = int(preserve_explicit_empty("seed", seed))
         window = int(preserve_explicit_empty("window", window))
@@ -642,6 +681,7 @@ async def post_analysis_pipeline(
 
         analysis_parameters = {
             "maf_threshold": maf_threshold,
+            "p_value_threshold": p_value_threshold,
             "seed": seed,
             "window": window,
             "L": L,
@@ -692,36 +732,58 @@ async def post_analysis_pipeline(
             f"library_entry={not is_uploaded and gwas_entry is not None})"
         )
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: invoke_analysis_pipeline_deployment(
-                user_id=current_user_id,
-                project_id=project_id,
-                gwas_file_path=file_path,
-                ref_genome=ref_genome,
-                population=population,
-                batch_size=batch_size,
-                max_workers=max_workers,
-                maf_threshold=maf_threshold,
-                seed=seed,
-                window=window,
-                L=L,
-                coverage=coverage,
-                min_abs_corr=min_abs_corr,
-                sample_size=sample_size_n,
-                file_metadata_id=file_metadata_id if _file_needs_processing else None,
-                file_needs_processing=_file_needs_processing,
-                file_storage_key=object_key if _file_needs_processing else None,
-                file_id_new=file_id_new if _file_needs_processing else None,
-                file_source_minio_path=_source_minio_path,
-                file_source_download_url=_source_download_url,
-                file_minio_cache_key=_minio_cache_key,
-                file_gwas_library_id=_gwas_library_id,
-                user_email=current_user_email,
-                project_name=project_name,
-                opentargets_study_id=opentargets_study_id,
-            ),
+        projects.save_analysis_state(current_user_id, project_id, {"status": "Queued"})
+        sample_size_label = SAMPLE_SIZE_SOURCE_LABELS.get(
+            sample_size_resolution.source, sample_size_resolution.source
+        )
+        projects.add_analysis_event(
+            current_user_id, project_id, "Setup",
+            f"p < {p_value_threshold:g} · MAF ≥ {maf_threshold:g} · window {window} kb · "
+            f"coverage {coverage:g} · {population} · {ref_genome} · "
+            f"N = {sample_size_n:,} ({sample_size_label})",
+            details={**analysis_parameters, "population": population, "ref_genome": ref_genome},
+        )
+        try:
+            loop = asyncio.get_running_loop()
+            flow_run = await loop.run_in_executor(
+                None,
+                lambda: invoke_analysis_pipeline_deployment(
+                    user_id=current_user_id,
+                    project_id=project_id,
+                    gwas_file_path=file_path,
+                    ref_genome=ref_genome,
+                    population=population,
+                    batch_size=batch_size,
+                    max_workers=max_workers,
+                    maf_threshold=maf_threshold,
+                    p_value_threshold=p_value_threshold,
+                    seed=seed,
+                    window=window,
+                    L=L,
+                    coverage=coverage,
+                    min_abs_corr=min_abs_corr,
+                    sample_size=sample_size_n,
+                    file_metadata_id=file_metadata_id if _file_needs_processing else None,
+                    file_needs_processing=_file_needs_processing,
+                    file_storage_key=object_key if _file_needs_processing else None,
+                    file_id_new=file_id_new if _file_needs_processing else None,
+                    file_source_minio_path=_source_minio_path,
+                    file_source_download_url=_source_download_url,
+                    file_minio_cache_key=_minio_cache_key,
+                    file_gwas_library_id=_gwas_library_id,
+                    user_email=current_user_email,
+                    project_name=project_name,
+                    opentargets_study_id=opentargets_study_id,
+                ),
+            )
+        except Exception:
+            projects.save_analysis_state(
+                current_user_id, project_id,
+                {"status": "Failed", "message": "The analysis could not be started"},
+            )
+            raise
+        projects.save_analysis_state(
+            current_user_id, project_id, {"flow_run_id": str(flow_run.id)}
         )
 
         return AnalysisPipelineStartResponse(

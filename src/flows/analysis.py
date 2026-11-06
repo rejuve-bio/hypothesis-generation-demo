@@ -7,7 +7,7 @@ from loguru import logger
 from prefect import flow
 from prefect.runtime import flow_run as _prefect_flow_run
 from prefect_dask import DaskTaskRunner
-from src.utils import get_deps
+from src.utils import analysis_stage_label, get_deps
 from src.services.mail import send_pipeline_notification
 
 from src.config import Config
@@ -23,11 +23,22 @@ from src.tasks import (
     finemap_region_batch_worker,
     cleanup_sumstats_file,
     save_analysis_state_task,
+    record_analysis_event_task,
     create_analysis_result_task,
     get_results_from_opentargets_task,
 )
+from src.tasks.analysis import NoSignificantVariantsError, count_credible_sets
+from src.tasks.gene_expression import LdscExitError
 from src.db.credible_sets_handler import CredibleSetsHandler
 
+
+def _ldsc_failure_cause(error):
+    """Short user-facing cause of an LDSC failure; the raw error stays in the logs."""
+    if isinstance(error, FileNotFoundError):
+        return "LDSC reference files are missing on the server"
+    if isinstance(error, LdscExitError):
+        return "LDSC exited with an error"
+    return "Unexpected error during LDSC"
 
 
 @flow(log_prints=True,
@@ -36,7 +47,8 @@ from src.db.credible_sets_handler import CredibleSetsHandler
 )
 def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome="GRCh38",
                            population="EUR", batch_size=5, max_workers=3,
-                           maf_threshold=0.01, seed=42, window=2000, L=-1,
+                           maf_threshold=0.01, p_value_threshold=5e-8,
+                           seed=42, window=2000, L=-1,
                            coverage=0.95, min_abs_corr=0.5, sample_size=None,
                            user_email: str | None = None, project_name: str | None = None,
                            file_metadata_id=None, file_needs_processing=False,
@@ -54,7 +66,14 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
     logger.info(f"[PIPELINE] File: {gwas_file_path}")
     logger.info(f"[PIPELINE] Batch size: {batch_size} regions per worker process")
     logger.info(f"[PIPELINE] Max workers: {max_workers}")
-    logger.info(f"[PIPELINE] Parameters: maf={maf_threshold}, seed={seed}, window={window}kb, L={L}, coverage={coverage}, min_abs_corr={min_abs_corr}, N={sample_size}")
+    logger.info(f"[PIPELINE] Parameters: maf={maf_threshold}, p={p_value_threshold}, seed={seed}, window={window}kb, L={L}, coverage={coverage}, min_abs_corr={min_abs_corr}, N={sample_size}")
+
+    last_state = {}
+
+    def save_state(state):
+        nonlocal last_state
+        save_analysis_state_task.submit(user_id, project_id, state).result()
+        last_state = state
 
     try:
         # Get project-specific output directory (using Prefect task)
@@ -80,11 +99,11 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             "status": "Running",
             "stage": "Harmonization",
             "progress": 10,
-            "message": "Harmonizing summary statistics (skipped automatically for confirmed OpenTargets studies)",
+            "message": "Harmonizing summary statistics",
             "started_at": datetime.now(timezone.utc).isoformat(),
             "flow_run_id": _prefect_flow_run.id,
         }
-        save_analysis_state_task.submit(user_id, project_id, initial_state).result()
+        save_state(initial_state)
 
         logger.info(f"[PIPELINE] Stage 1: Harmonization (Nextflow, or pass-through if opentargets_study_id is confirmed in OpenTargets' own tables)")
         harmonized_file_result = harmonize_sumstats_with_nextflow.submit(
@@ -122,12 +141,11 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             except Exception as _cleanup_e:
                 logger.warning(f"[PIPELINE] Could not clean up {gwas_file_path}: {_cleanup_e}")
 
-        # Start LDSC + tissue analysis immediately after harmonization (runs in parallel)
-        logger.info(f"[PIPELINE] Starting LDSC + tissue analysis in parallel after harmonization")
-        ldsc_tissue_future = run_combined_ldsc_tissue_analysis.submit(
-            harmonized_file, output_dir, project_id, user_id
-        )
-        logger.info(f"[PIPELINE] LDSC + tissue analysis started in background")
+        def start_ldsc_tissue_analysis():
+            logger.info("[PIPELINE] Starting LDSC + tissue analysis in background")
+            return run_combined_ldsc_tissue_analysis.submit(
+                harmonized_file, output_dir, project_id, user_id
+            )
 
         # Check whether OpenTargets already has full study-level credible sets.
         # If so, skip filtering + COJO + SuSiE fine-mapping entirely and use OT
@@ -155,16 +173,21 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "status": "Running",
                 "stage": "OpenTargets_credible_sets",
                 "progress": 70,
-                "message": "Using OpenTargets pre-computed credible sets, skipping COJO and fine-mapping",
+                "message": (
+                    f"Using OpenTargets fine-mapped credible sets for {opentargets_study_id}; "
+                    "COJO and fine-mapping skipped"
+                ),
                 "started_at": initial_state["started_at"],
             }
-            save_analysis_state_task.submit(user_id, project_id, ot_state).result()
+            save_state(ot_state)
 
             combined_results = get_results_from_opentargets_task.submit(
                 user_id, project_id, opentargets_study_id, coverage=coverage,
                 harmonized_file=harmonized_file
             ).result()
-            successful_batches = 1 if combined_results is not None and len(combined_results) > 0 else 0
+            if combined_results is not None and len(combined_results) > 0:
+                successful_batches = 1
+                ldsc_tissue_future = start_ldsc_tissue_analysis()
         else:
             # Update analysis state after harmonization
             harmonization_state = {
@@ -174,10 +197,25 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "message": "Harmonization completed, filtering significant variants",
                 "started_at": initial_state["started_at"]
             }
-            save_analysis_state_task.submit(user_id, project_id, harmonization_state).result()
+            save_state(harmonization_state)
 
             logger.info(f"[PIPELINE] Stage 2: Loading and filtering variants")
-            significant_df_result = filter_significant_variants.submit(harmonized_file, output_dir).result()
+            try:
+                significant_df_result = filter_significant_variants.submit(
+                    user_id, project_id, harmonized_file, output_dir, p_threshold=p_value_threshold
+                ).result()
+            except NoSignificantVariantsError as e:
+                save_state({
+                    "status": "Failed",
+                    "stage": "Filtering",
+                    "progress": 30,
+                    "message": str(e),
+                    "error_detail": e.as_detail(),
+                })
+                raise
+
+            # Start LDSC only once the study has significant variants to fine-map
+            ldsc_tissue_future = start_ldsc_tissue_analysis()
 
             # Extract the actual DataFrame
             if isinstance(significant_df_result, tuple):
@@ -193,13 +231,13 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "progress": 50,
                 "message": "Filtering completed, running COJO analysis"
             }
-            save_analysis_state_task.submit(user_id, project_id, filtering_state).result()
+            save_state(filtering_state)
 
             logger.info(f"[PIPELINE] Stage 3: COJO analysis")
 
             config = Config.from_env()
             plink_dir = config.plink_dir_38
-            cojo_result = run_cojo_per_chromosome.submit(significant_df, plink_dir, output_dir, maf_threshold=maf_threshold, population=population, ref_genome=ref_genome).result()
+            cojo_result = run_cojo_per_chromosome.submit(user_id, project_id, significant_df, plink_dir, output_dir, maf_threshold=maf_threshold, population=population, ref_genome=ref_genome).result()
 
             # Extract the actual DataFrame
             if isinstance(cojo_result, tuple):
@@ -216,22 +254,6 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 except Exception as cleanup_e:
                     logger.warning(f"[PIPELINE] Could not cleanup {sig_output_path}: {cleanup_e}")
 
-            if cojo_results is None or len(cojo_results) == 0:
-                logger.error("[PIPELINE] No COJO results to process")
-                # Save failed state
-                failed_state = {
-                    "status": "Failed",
-                    "stage": "Cojo",
-                    "progress": 50,
-                    "message": "COJO analysis failed - no independent signals found",
-                }
-                save_analysis_state_task.submit(user_id, project_id, failed_state).result()
-                send_pipeline_notification(
-                    user_email, project_name, project_id,
-                    success=False, detail=failed_state["message"],
-                )
-                return None
-
             # Update analysis state after COJO
             cojo_state = {
                 "status": "Running",
@@ -239,7 +261,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "progress": 70,
                 "message": "COJO analysis completed, starting fine-mapping"
             }
-            save_analysis_state_task.submit(user_id, project_id, cojo_state).result()
+            save_state(cojo_state)
 
             logger.info(f"[PIPELINE] Stage 4: Multiprocessing fine-mapping")
             logger.info(f"[PIPELINE] Processing {len(cojo_results)} regions with {batch_size} regions per batch")
@@ -255,6 +277,8 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 batch_data = (batch, f"batch_{i}", sumstats_temp_file, {
                     'user_id': user_id,
                     'project_id': project_id,
+                    'batch_number': i + 1,
+                    'batch_count': len(region_batches),
                     'finemap_params': {
                         'seed': seed,
                         'window': window,
@@ -295,6 +319,29 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             if all_results:
                 logger.info(f"[PIPELINE] Combining results from {successful_batches} successful batches")
                 combined_results = pd.concat(all_results, ignore_index=True)
+                try:
+                    credible_sets = count_credible_sets(all_results)
+                    high_pip = int((combined_results["PIP"] > 0.5).sum())
+                    empty_regions = len(cojo_results) - sum(
+                        count_credible_sets([result]) > 0 for result in all_results
+                    )
+                    message = (
+                        f"Fine-mapping found {credible_sets} credible sets, "
+                        f"{high_pip} variants with PIP > 0.5"
+                    )
+                    if empty_regions:
+                        message += f"; {empty_regions} of {len(cojo_results)} regions produced no credible set"
+                    record_analysis_event_task.submit(
+                        user_id, project_id, "Fine_mapping", message,
+                        details={
+                            "credible_sets": credible_sets,
+                            "high_pip_variants": high_pip,
+                            "regions": len(cojo_results),
+                            "regions_without_credible_set": empty_regions,
+                        },
+                    ).result()
+                except Exception as summary_e:
+                    logger.warning(f"[PIPELINE] Could not record fine-mapping summary: {summary_e}")
 
         # Combine and save results
         if combined_results is not None and len(combined_results) > 0:
@@ -322,9 +369,9 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "status": "Running",
                 "stage": "LDSC_Tissue_Analysis",
                 "progress": 85,
-                "message": "Fine-mapping completed, waiting for LDSC and tissue analysis"
+                "message": "Waiting for LDSC tissue analysis to finish"
             }
-            save_analysis_state_task.submit(user_id, project_id, ldsc_tissue_state).result()
+            save_state(ldsc_tissue_state)
 
             try:
                 # Wait for the parallel LDSC + tissue analysis task to complete
@@ -341,9 +388,10 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                     "status": "Failed",
                     "stage": "LDSC_Analysis",
                     "progress": 90,
-                    "message": f"LDSC tissue analysis failed: {str(ldsc_e)}. Tissue-specific enrichment will not be available.",
+                    "message": "LDSC tissue analysis failed, so tissue-specific enrichment is not available",
+                    "error_detail": {"error": _ldsc_failure_cause(ldsc_e)},
                 }
-                save_analysis_state_task.submit(user_id, project_id, failed_ldsc_state).result()
+                save_state(failed_ldsc_state)
                 raise RuntimeError(f"LDSC tissue analysis failed - required for enrichment: {str(ldsc_e)}")
 
             # Save completed analysis state
@@ -353,7 +401,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "message": "Analysis completed successfully",
                 "ldsc_status": ldsc_status
             }
-            save_analysis_state_task.submit(user_id, project_id, completed_state).result()
+            save_state(completed_state)
 
             send_pipeline_notification(user_email, project_name, project_id, success=True)
 
@@ -370,6 +418,15 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "high_pip_variants": high_pip_variants,
                 "total_credible_sets": total_credible_sets
             }
+        elif has_ot_results:
+            logger.error("[PIPELINE] No OpenTargets credible sets could be loaded")
+            save_state({
+                "status": "Failed",
+                "stage": "OpenTargets_credible_sets",
+                "progress": 70,
+                "message": "No OpenTargets credible sets could be loaded for this study",
+            })
+            raise RuntimeError("No OpenTargets credible sets loaded")
         else:
             logger.error("[PIPELINE]  No fine-mapping results generated")
             # Save failed state for fine-mapping
@@ -379,24 +436,31 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 "progress": 70,
                 "message": "Fine-mapping failed - no results generated",
             }
-            save_analysis_state_task.submit(user_id, project_id, failed_finemap_state).result()
+            save_state(failed_finemap_state)
             raise RuntimeError("All fine-mapping batches failed")
 
     except Exception as e:
         logger.error(f"[PIPELINE]  Analysis pipeline failed: {str(e)}")
-        # Save failed analysis state
-        try:
-            failed_state = {
-                "status": "Failed",
-                "stage": "Unknown",
-                "progress": 0,
-                "message": f"Analysis pipeline failed: {str(e)}",
-            }
-            save_analysis_state_task.submit(user_id, project_id, failed_state).result()
-        except Exception as state_e:
-            logger.error(f"[PIPELINE] Failed to save error state: {str(state_e)}")
+        # Keep a specific failed state already saved by the failing stage
+        if last_state.get("status") == "Failed":
+            failure_message = last_state["message"]
+        else:
+            stage = last_state.get("stage")
+            failure_message = (
+                f"Analysis failed in the {analysis_stage_label(stage)} step" if stage
+                else "Analysis failed"
+            )
+            try:
+                save_state({
+                    "status": "Failed",
+                    "stage": stage or "Unknown",
+                    "progress": last_state.get("progress", 0),
+                    "message": failure_message,
+                })
+            except Exception as state_e:
+                logger.error(f"[PIPELINE] Failed to save error state: {str(state_e)}")
         send_pipeline_notification(
             user_email, project_name, project_id,
-            success=False, detail=str(e),
+            success=False, detail=failure_message,
         )
         raise

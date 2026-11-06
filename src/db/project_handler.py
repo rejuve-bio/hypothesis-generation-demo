@@ -1,13 +1,18 @@
 from bson.objectid import ObjectId
 from datetime import datetime, timezone, timedelta
 import os
-import json
 import requests as _req
 from typing import Callable
 from uuid import uuid4
 
+import pymongo
 from loguru import logger
+from src.utils import analysis_stage_label, analysis_state_for_public_api, emit_analysis_event
 from .base_handler import BaseHandler
+
+ACTIVE_ANALYSIS_STATUSES = frozenset({"Queued", "Running"})
+FINISHED_ANALYSIS_STATUSES = frozenset({"Completed", "Failed"})
+ANALYSIS_EVENT_TIMEOUT_SECONDS = 3
 
 
 class ProjectHandler(BaseHandler):
@@ -24,14 +29,16 @@ class ProjectHandler(BaseHandler):
         self.enrich_collection = self.db['enrich']
         self.analysis_results_collection = self.db['analysis_results']
         self.file_metadata_collection = self.db['file_metadata']
+        self.analysis_events_collection = self.db['analysis_events']
         self._create_indexes()
 
     def _create_indexes(self):
-        """Create indexes for chat-thread lookups"""
+        """Create indexes for chat-thread and analysis event lookups"""
         try:
             self.projects_collection.create_index([('user_id', 1), ('thread_id', 1)])
+            self.analysis_events_collection.create_index([('project_id', 1), ('timestamp', 1)])
         except Exception as e:
-            logger.warning(f"Could not create thread indexes (may already exist): {e}")
+            logger.warning(f"Could not create indexes (may already exist): {e}")
     
     def create_project(self, user_id, name, gwas_file_id, phenotype,population, ref_genome, analysis_parameters=None, user_email=None, thread_id=None):
         """Create a new project"""
@@ -164,7 +171,7 @@ class ProjectHandler(BaseHandler):
         try:
             # 0. Cancel any running Prefect flow before wiping data 
             state = self.load_analysis_state(user_id, project_id)
-            if state and state.get("flow_run_id") and state.get("status") == "Running":
+            if state and state.get("flow_run_id") and state.get("status") in ACTIVE_ANALYSIS_STATUSES:
                 prefect_url = os.getenv("PREFECT_API_URL", "http://prefect-service:4200/api")
                 try:
                     resp = _req.post(
@@ -234,6 +241,12 @@ class ProjectHandler(BaseHandler):
                 'project_id': project_id
             })
             logger.info(f"Deleted {analysis_result.deleted_count} analysis results for project {project_id}")
+
+            events_result = self.analysis_events_collection.delete_many({
+                'user_id': user_id,
+                'project_id': project_id
+            })
+            logger.info(f"Deleted {events_result.deleted_count} analysis events for project {project_id}")
             
             # 7. Get file metadata for deletion
             project = self.projects_collection.find_one({
@@ -268,16 +281,7 @@ class ProjectHandler(BaseHandler):
                     })
                     logger.info(f"Deleted file metadata for project {project_id}")
             
-            # 8. Delete analysis state files
-            analysis_state_path = self.get_analysis_state_path(user_id, project_id)
-            if os.path.exists(analysis_state_path):
-                try:
-                    os.remove(analysis_state_path)
-                    logger.info(f"Deleted analysis state file: {analysis_state_path}")
-                except Exception as state_e:
-                    logger.warning(f"Could not delete analysis state file {analysis_state_path}: {state_e}")
-            
-            # 9. Delete analysis results directory
+            # 8. Delete analysis results directory
             analysis_dir = self.get_project_analysis_path(user_id, project_id)
             if os.path.exists(analysis_dir):
                 try:
@@ -295,34 +299,98 @@ class ProjectHandler(BaseHandler):
         """Get the analysis path for a project"""
         return os.path.abspath(f"data/projects/{user_id}/{project_id}/analysis")
 
-    def get_analysis_state_path(self, user_id, project_id):
-        """Get the analysis state file path"""
-        return f"data/states/{user_id}/{project_id}/analysis_state.json"
+    def save_analysis_state(self, user_id, project_id, state_data, expected_updated_at=None):
+        """Merge state_data into the project's analysis_state.
 
-    def save_analysis_state(self, user_id, project_id, state_data):
-        """Save analysis state to file"""
-        state_path = self.get_analysis_state_path(user_id, project_id)
-        os.makedirs(os.path.dirname(state_path), exist_ok=True)
-        data = {**state_data, "state_updated_at": datetime.now(timezone.utc).isoformat()}
-        with open(state_path, 'w') as f:
-            json.dump(data, f, default=str)
+        With expected_updated_at, only write if the stored state is still
+        active and unchanged since it was read.
+        """
+        query = {"_id": ObjectId(project_id), "user_id": user_id}
+        if expected_updated_at is not None:
+            query["analysis_state.status"] = {"$in": list(ACTIVE_ANALYSIS_STATUSES)}
+            query["analysis_state.updated_at"] = expected_updated_at
+        fields = {**state_data, "updated_at": datetime.now(timezone.utc)}
+        result = self.projects_collection.update_one(
+            query, {"$set": {f"analysis_state.{key}": value for key, value in fields.items()}}
+        )
+        saved = result.modified_count > 0
+        if saved and "status" in state_data:
+            self.add_analysis_event(
+                user_id,
+                project_id,
+                stage=state_data.get("stage", "Pipeline"),
+                message=analysis_state_for_public_api(state_data)["message"],
+                level="error" if state_data["status"] == "Failed" else "info",
+                details=state_data.get("error_detail"),
+                skip_if_finished=False,
+            )
+        return saved
+
+    def add_analysis_event(self, user_id, project_id, stage, message, level="info",
+                           details=None, duration_seconds=None, skip_if_finished=True):
+        """Store a timeline event and push it to the project's analysis room; never raises.
+
+        Events arriving after the run has finished are skipped unless skip_if_finished is False.
+        """
+        try:
+            with pymongo.timeout(ANALYSIS_EVENT_TIMEOUT_SECONDS):
+                project = self.projects_collection.find_one(
+                    {"_id": ObjectId(project_id)},
+                    {"analysis_state.status": 1, "analysis_state.flow_run_id": 1},
+                )
+                state = (project or {}).get("analysis_state") or {}
+                if skip_if_finished and state.get("status") in FINISHED_ANALYSIS_STATUSES:
+                    return
+                event = {
+                    "project_id": project_id,
+                    "user_id": user_id,
+                    "flow_run_id": state.get("flow_run_id"),
+                    "timestamp": datetime.now(timezone.utc),
+                    "stage": analysis_stage_label(stage),
+                    "level": level,
+                    "message": message,
+                }
+                if details:
+                    event["details"] = details
+                if duration_seconds is not None:
+                    event["duration_seconds"] = duration_seconds
+                result = self.analysis_events_collection.insert_one(dict(event))
+            emit_analysis_event({"id": str(result.inserted_id), **event})
+        except Exception as e:
+            logger.warning(f"Could not record analysis event for project {project_id}: {e}")
+
+    def get_analysis_events(self, user_id, project_id):
+        """Return the project's analysis events, oldest first, with UTC timestamps."""
+        events = list(
+            self.analysis_events_collection.find(
+                {"user_id": user_id, "project_id": project_id}
+            ).sort("timestamp", 1)
+        )
+        for event in events:
+            event["id"] = str(event.pop("_id"))
+            event["timestamp"] = event["timestamp"].replace(tzinfo=timezone.utc)
+        return events
 
     def load_analysis_state(self, user_id, project_id):
-        """Load analysis state from file"""
-        state_path = self.get_analysis_state_path(user_id, project_id)
-        if not os.path.exists(state_path):
-            return None
-        with open(state_path, 'r') as f:
-            state = json.load(f)
-        if state.get("status") == "Running":
-            reconciled = self._reconcile_running_state(state)
-            if reconciled["status"] != "Running":
-                logger.info(
-                    f"[ProjectHandler] Reconciled stale Running state for project "
-                    f"{project_id} → {reconciled['status']}"
-                )
-                self.save_analysis_state(user_id, project_id, reconciled)
-                return reconciled
+        """Load the project's analysis state, reconciling stale active runs with Prefect."""
+        project = self.projects_collection.find_one(
+            {"_id": ObjectId(project_id), "user_id": user_id}, {"analysis_state": 1}
+        )
+        state = project.get("analysis_state") if project else None
+        if not state or state.get("status") not in ACTIVE_ANALYSIS_STATUSES:
+            return state
+        reconciled = self._reconcile_running_state(state)
+        if reconciled["status"] == state["status"]:
+            return state
+        logger.info(
+            f"[ProjectHandler] Reconciled stale {state['status']} state for project "
+            f"{project_id} → {reconciled['status']}"
+        )
+        changes = {"status": reconciled["status"], "message": reconciled["message"]}
+        if self.save_analysis_state(
+            user_id, project_id, changes, expected_updated_at=state.get("updated_at")
+        ):
+            return reconciled
         return state
 
     def _reconcile_running_state(self, state: dict) -> dict:
@@ -341,33 +409,31 @@ class ProjectHandler(BaseHandler):
                     terminal_stopped = {"CANCELLED"}
                     if prefect_state_type in terminal_failed:
                         return {**state, "status": "Failed",
-                                "message": f"Pipeline {prefect_state_type.lower()} (confirmed via Prefect)"}
+                                "message": "The analysis stopped unexpectedly"}
                     if prefect_state_type in terminal_ok:
                         return {**state, "status": "Completed",
-                                "message": "Pipeline completed (confirmed via Prefect)"}
+                                "message": "Analysis completed"}
                     if prefect_state_type in terminal_stopped:
                         return {**state, "status": "Failed",
-                                "message": "Pipeline was cancelled"}
+                                "message": "The analysis was cancelled"}
                     return state
             except Exception as prefect_exc:
                 logger.warning(f"[ProjectHandler] Could not reach Prefect API to reconcile run {flow_run_id}: {prefect_exc}")
 
         # time-based staleness check
         staleness_minutes = int(os.getenv("ANALYSIS_STALENESS_MINUTES", "360"))
-        updated_at_str = state.get("state_updated_at")
-        if updated_at_str:
+        updated_at = state.get("updated_at")
+        if updated_at:
             try:
-                updated_at = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
                 age = datetime.now(timezone.utc) - updated_at
                 if age > timedelta(minutes=staleness_minutes):
                     hours = int(age.total_seconds() / 3600)
                     return {
                         **state,
                         "status": "Failed",
-                        "message": (
-                            f"Pipeline status unconfirmed: no update for {hours}h "
-                            f"(process may have been terminated)"
-                        ),
+                        "message": f"The analysis stopped unexpectedly (no progress for {hours}h)",
                     }
             except Exception:
                 pass
@@ -514,12 +580,6 @@ class ProjectHandler(BaseHandler):
                 run_scoped_query,
                 transform=_remap_run_scoped,
             )
-
-        source_state_path = self.get_analysis_state_path(template_user_id, template_project_id)
-        if os.path.exists(source_state_path):
-            with open(source_state_path, "r", encoding="utf-8") as handle:
-                state_data = json.load(handle)
-            self.save_analysis_state(target_user_id, new_project_id, state_data)
 
         logger.info(
             f"Forked demo template {template_project_id} to user {target_user_id} "

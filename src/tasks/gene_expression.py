@@ -23,7 +23,7 @@ from scipy.stats import pearsonr
 from statsmodels.stats.multitest import fdrcorrection
 
 from src.config import Config
-from src.utils import get_deps
+from src.utils import get_deps, record_analysis_event
 from src.tasks.ldsc_sumstats import harmonized_to_ldsc_sumstats_zhang
 from src.catlas_census_mapping import (
     CatlasMappingError,
@@ -33,6 +33,10 @@ from src.catlas_census_mapping import (
 )
 
 CENSUS_VERSION = "2024-07-01"
+
+
+class LdscExitError(RuntimeError):
+    """ldsc.py exited with a non-zero status."""
 
 # In-process memoization on top of the disk cache below, so repeated calls
 # within the same worker process (e.g. several genes queried against the
@@ -136,7 +140,7 @@ def setup_ldsc_environment(base_dir):
     return "/opt/ldsc"
 
 @task(log_prints=True)
-def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
+def run_ldsc_analysis(user_id, project_id, ldsc_dir, gwas_file, output_prefix):
     """ cell-type LDSC: harmonized SSF -> sumstats (HM3 + strand filter), then --h2-cts."""
     config = Config.from_env()
     repo_root = os.path.abspath(config.repo_root)
@@ -156,7 +160,12 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
     w_hm3 = config.resolve_ldsc_path(config.ldsc_w_hm3_snplist)
     if not os.path.isfile(w_hm3):
         raise FileNotFoundError(f"LDSC w_hm3.snplist not found: {w_hm3}")
-    harmonized_to_ldsc_sumstats_zhang(gwas_file, sumstats_path, w_hm3)
+    hm3_snps = harmonized_to_ldsc_sumstats_zhang(gwas_file, sumstats_path, w_hm3)
+    record_analysis_event(
+        user_id, project_id, "LDSC_Analysis",
+        f"{hm3_snps:,} HapMap3 SNPs prepared for LDSC",
+        details={"hapmap3_snps": hm3_snps},
+    )
 
     cts_path = config.resolve_ldsc_path(config.ldsc_cts_file)
     if not os.path.isfile(cts_path):
@@ -234,7 +243,7 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
         )
         # Keep exception message bounded for Prefect UI
         snippet = tail_txt[-3500:] if len(tail_txt) > 3500 else tail_txt
-        raise RuntimeError(
+        raise LdscExitError(
             f"LDSC --h2-cts exited with code {rc}. Check logs for full output. "
             f"Last lines from ldsc.py:\n{snippet}"
         )
@@ -251,7 +260,7 @@ def run_ldsc_analysis(ldsc_dir, gwas_file, output_prefix):
 
 
 @task(log_prints=True)
-def process_ldsc_results(results_dir, output_prefix, top_n=10):
+def process_ldsc_results(user_id, project_id, results_dir, output_prefix, top_n=10):
     """Process LDSC results"""
     result_file = Path(results_dir) / f"{output_prefix}.cell_type_results.txt"
     
@@ -284,6 +293,16 @@ def process_ldsc_results(results_dir, output_prefix, top_n=10):
 
     logger.info(
         f"Processed {len(df)} cell types, {len(df_filtered)} p<0.01, returning top {len(top_tissues)}"
+    )
+    fdr_passing = int((df["FDR"] < 0.05).sum())
+    record_analysis_event(
+        user_id, project_id, "LDSC_Analysis",
+        f"{len(df)} cell types tested: {len(df_filtered)} with p < 0.01 ({fdr_passing} pass FDR < 0.05)",
+        details={
+            "cell_types_tested": len(df),
+            "cell_types_p_below_0_01": len(df_filtered),
+            "cell_types_fdr_below_0_05": fdr_passing,
+        },
     )
     return top_tissues, top_tissues_df.to_dict("records")
 
@@ -1018,6 +1037,7 @@ def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_
 
     try:
         logger.info("[PIPELINE] Starting combined LDSC + tissue analysis")
+        record_analysis_event(user_id, project_id, "LDSC_Analysis", "LDSC tissue analysis started")
         
         # Create work directory for LDSC
         ldsc_work_dir = f"{output_dir}/ldsc_analysis"
@@ -1041,15 +1061,12 @@ def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_
         # Step 2: Run LDSC analysis
         logger.info("[PIPELINE] Running LDSC heritability analysis...")
         output_prefix = f"{output_dir}/ldsc_project_analysis"
-        ldsc_success = run_ldsc_analysis(ldsc_dir, munged_file, output_prefix)
-        
-        if not ldsc_success:
-            raise RuntimeError("LDSC analysis failed")
+        run_ldsc_analysis(user_id, project_id, ldsc_dir, munged_file, output_prefix)
         
         # Step 3: Process LDSC results
         logger.info("[PIPELINE] Processing LDSC results...")
         top_tissues, ldsc_results_data = process_ldsc_results(
-            output_dir, "ldsc_project_analysis", 10
+            user_id, project_id, output_dir, "ldsc_project_analysis", 10
         )
 
         storage = deps.get("storage")
@@ -1072,13 +1089,25 @@ def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_
         # format='selection') sources its list solely from ldsc_results_collection,
         # so unmapped tissues must not end up there even though LDSC computed
         # valid numbers for them.
-        mapped_ldsc_results_data = [
-            r for r in ldsc_results_data
-            if not ontology_mapping_results.get(r.get('Name', ''), {}).get('census_skip_coexpression')
-        ]
-        skipped_n = len(ldsc_results_data) - len(mapped_ldsc_results_data)
-        if skipped_n:
-            logger.info(f"[PIPELINE] Excluding {skipped_n} unmapped tissue(s) from saved LDSC results")
+        mapped_ldsc_results_data, hidden_tissues = [], []
+        for r in ldsc_results_data:
+            if ontology_mapping_results.get(r.get('Name', ''), {}).get('census_skip_coexpression'):
+                hidden_tissues.append(r.get('Name'))
+            else:
+                mapped_ldsc_results_data.append(r)
+        if hidden_tissues:
+            logger.info(f"[PIPELINE] Excluding {len(hidden_tissues)} unmapped tissue(s) from saved LDSC results")
+            record_analysis_event(
+                user_id, project_id, "LDSC_Analysis",
+                f"{len(hidden_tissues)} tissue(s) not available in CellxGene and hidden from the tissue picker",
+                details={"hidden_tissues": hidden_tissues},
+            )
+        top_tissues_shown = [r.get('Name') for r in mapped_ldsc_results_data]
+        record_analysis_event(
+            user_id, project_id, "LDSC_Analysis",
+            f"Top tissues: {', '.join(top_tissues_shown) or 'none'}",
+            details={"top_tissues": top_tissues_shown},
+        )
 
         # Step 5: Save comprehensive results to database
         gene_expression.save_ldsc_results(analysis_run_id, mapped_ldsc_results_data)
