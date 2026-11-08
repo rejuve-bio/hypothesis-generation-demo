@@ -1,13 +1,14 @@
 from bson.objectid import ObjectId
 from datetime import datetime, timezone, timedelta
 import os
-import json
 import requests as _req
 from typing import Callable
 from uuid import uuid4
 
 from loguru import logger
 from .base_handler import BaseHandler
+
+ACTIVE_ANALYSIS_STATUSES = frozenset({"Queued", "Running"})
 
 
 class ProjectHandler(BaseHandler):
@@ -164,7 +165,7 @@ class ProjectHandler(BaseHandler):
         try:
             # 0. Cancel any running Prefect flow before wiping data 
             state = self.load_analysis_state(user_id, project_id)
-            if state and state.get("flow_run_id") and state.get("status") == "Running":
+            if state and state.get("flow_run_id") and state.get("status") in ACTIVE_ANALYSIS_STATUSES:
                 prefect_url = os.getenv("PREFECT_API_URL", "http://prefect-service:4200/api")
                 try:
                     resp = _req.post(
@@ -268,16 +269,7 @@ class ProjectHandler(BaseHandler):
                     })
                     logger.info(f"Deleted file metadata for project {project_id}")
             
-            # 8. Delete analysis state files
-            analysis_state_path = self.get_analysis_state_path(user_id, project_id)
-            if os.path.exists(analysis_state_path):
-                try:
-                    os.remove(analysis_state_path)
-                    logger.info(f"Deleted analysis state file: {analysis_state_path}")
-                except Exception as state_e:
-                    logger.warning(f"Could not delete analysis state file {analysis_state_path}: {state_e}")
-            
-            # 9. Delete analysis results directory
+            # 8. Delete analysis results directory
             analysis_dir = self.get_project_analysis_path(user_id, project_id)
             if os.path.exists(analysis_dir):
                 try:
@@ -295,34 +287,42 @@ class ProjectHandler(BaseHandler):
         """Get the analysis path for a project"""
         return os.path.abspath(f"data/projects/{user_id}/{project_id}/analysis")
 
-    def get_analysis_state_path(self, user_id, project_id):
-        """Get the analysis state file path"""
-        return f"data/states/{user_id}/{project_id}/analysis_state.json"
+    def save_analysis_state(self, user_id, project_id, state_data, expected_updated_at=None):
+        """Merge state_data into the project's analysis_state.
 
-    def save_analysis_state(self, user_id, project_id, state_data):
-        """Save analysis state to file"""
-        state_path = self.get_analysis_state_path(user_id, project_id)
-        os.makedirs(os.path.dirname(state_path), exist_ok=True)
-        data = {**state_data, "state_updated_at": datetime.now(timezone.utc).isoformat()}
-        with open(state_path, 'w') as f:
-            json.dump(data, f, default=str)
+        With expected_updated_at, only write if the stored state is still
+        active and unchanged since it was read.
+        """
+        query = {"_id": ObjectId(project_id), "user_id": user_id}
+        if expected_updated_at is not None:
+            query["analysis_state.status"] = {"$in": list(ACTIVE_ANALYSIS_STATUSES)}
+            query["analysis_state.updated_at"] = expected_updated_at
+        fields = {**state_data, "updated_at": datetime.now(timezone.utc)}
+        result = self.projects_collection.update_one(
+            query, {"$set": {f"analysis_state.{key}": value for key, value in fields.items()}}
+        )
+        return result.modified_count > 0
 
     def load_analysis_state(self, user_id, project_id):
-        """Load analysis state from file"""
-        state_path = self.get_analysis_state_path(user_id, project_id)
-        if not os.path.exists(state_path):
-            return None
-        with open(state_path, 'r') as f:
-            state = json.load(f)
-        if state.get("status") == "Running":
-            reconciled = self._reconcile_running_state(state)
-            if reconciled["status"] != "Running":
-                logger.info(
-                    f"[ProjectHandler] Reconciled stale Running state for project "
-                    f"{project_id} → {reconciled['status']}"
-                )
-                self.save_analysis_state(user_id, project_id, reconciled)
-                return reconciled
+        """Load the project's analysis state, reconciling stale active runs with Prefect."""
+        project = self.projects_collection.find_one(
+            {"_id": ObjectId(project_id), "user_id": user_id}, {"analysis_state": 1}
+        )
+        state = project.get("analysis_state") if project else None
+        if not state or state.get("status") not in ACTIVE_ANALYSIS_STATUSES:
+            return state
+        reconciled = self._reconcile_running_state(state)
+        if reconciled["status"] == state["status"]:
+            return state
+        logger.info(
+            f"[ProjectHandler] Reconciled stale {state['status']} state for project "
+            f"{project_id} → {reconciled['status']}"
+        )
+        changes = {"status": reconciled["status"], "message": reconciled["message"]}
+        if self.save_analysis_state(
+            user_id, project_id, changes, expected_updated_at=state.get("updated_at")
+        ):
+            return reconciled
         return state
 
     def _reconcile_running_state(self, state: dict) -> dict:
@@ -354,10 +354,11 @@ class ProjectHandler(BaseHandler):
 
         # time-based staleness check
         staleness_minutes = int(os.getenv("ANALYSIS_STALENESS_MINUTES", "360"))
-        updated_at_str = state.get("state_updated_at")
-        if updated_at_str:
+        updated_at = state.get("updated_at")
+        if updated_at:
             try:
-                updated_at = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
                 age = datetime.now(timezone.utc) - updated_at
                 if age > timedelta(minutes=staleness_minutes):
                     hours = int(age.total_seconds() / 3600)
@@ -514,12 +515,6 @@ class ProjectHandler(BaseHandler):
                 run_scoped_query,
                 transform=_remap_run_scoped,
             )
-
-        source_state_path = self.get_analysis_state_path(template_user_id, template_project_id)
-        if os.path.exists(source_state_path):
-            with open(source_state_path, "r", encoding="utf-8") as handle:
-                state_data = json.load(handle)
-            self.save_analysis_state(target_user_id, new_project_id, state_data)
 
         logger.info(
             f"Forked demo template {template_project_id} to user {target_user_id} "
