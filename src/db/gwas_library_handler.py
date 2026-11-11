@@ -129,6 +129,22 @@ class GWASLibraryHandler(BaseHandler):
         )
 
     @staticmethod
+    def library_download_url(entry: Dict) -> Optional[str]:
+        """External download URL for a library entry not yet cached in MinIO."""
+        if entry.get("aws_url"):
+            return entry["aws_url"]
+        if entry.get("wget_command"):
+            match = re.search(r"(https?://[^\s]+)", entry["wget_command"])
+            if match:
+                return match.group(1)
+        return entry.get("dropbox_url")
+
+    @staticmethod
+    def library_cache_key(entry: Dict) -> str:
+        """MinIO key a downloaded library file is cached under."""
+        return f"gwas_cache/{entry.get('filename') or entry.get('file_id')}"
+
+    @staticmethod
     def resolve_opentargets_study_id(
         entry: Optional[Dict] = None, uploaded_filename: Optional[str] = None
     ) -> Optional[str]:

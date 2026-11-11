@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import uuid
 from datetime import datetime
 
@@ -495,7 +494,7 @@ async def post_analysis_pipeline(
 
                 filename = gwas_entry.get("filename", file_id_param)
                 original_filename = filename
-                minio_path_lib = f"gwas_cache/{filename}"
+                minio_path_lib = GWASLibraryHandler.library_cache_key(gwas_entry)
                 file_size = gwas_entry.get("file_size", 0)
 
                 if storage and gwas_entry.get("downloaded") and gwas_entry.get("minio_path"):
@@ -526,15 +525,7 @@ async def post_analysis_pipeline(
 
                 if not _source_minio_path and not file_path:
                     # Not cached anywhere — Prefect will download from external URL.
-                    download_url = (
-                        gwas_entry.get("aws_url")
-                        or (
-                            re.search(r"(https?://[^\s]+)", gwas_entry["wget_command"]).group(1)
-                            if gwas_entry.get("wget_command")
-                            else None
-                        )
-                        or gwas_entry.get("dropbox_url")
-                    )
+                    download_url = GWASLibraryHandler.library_download_url(gwas_entry)
                     if not download_url:
                         raise HTTPException(
                             status_code=404,
