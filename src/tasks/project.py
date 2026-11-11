@@ -14,6 +14,41 @@ from src.utils import (
 )
 
 
+def download_gwas_source(dest_dir, storage, gwas_library=None, *, source_minio_path=None,
+                         source_download_url=None, minio_cache_key=None, gwas_library_id=None):
+    """
+    Fetch a GWAS file into *dest_dir* from MinIO, or from an external URL
+    (then cache it in MinIO under *minio_cache_key* and mark the library entry
+    as downloaded). Returns the local path.
+    """
+    import requests as _req
+
+    os.makedirs(dest_dir, exist_ok=True)
+
+    if source_minio_path and storage:
+        final_path = os.path.join(dest_dir, os.path.basename(source_minio_path))
+        if not storage.download_file(source_minio_path, final_path):
+            raise RuntimeError(f"MinIO download failed: {source_minio_path}")
+        return final_path
+
+    if not source_download_url:
+        raise ValueError("download_gwas_source needs source_minio_path or source_download_url")
+
+    raw_name = source_download_url.split("/")[-1].split("?")[0] or "gwas_file"
+    final_path = os.path.join(dest_dir, raw_name)
+    with _req.get(source_download_url, stream=True, timeout=600) as r:
+        r.raise_for_status()
+        with open(final_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+    file_size = os.path.getsize(final_path)
+    if storage and minio_cache_key:
+        if storage.upload_file(final_path, minio_cache_key):
+            if gwas_library and gwas_library_id:
+                gwas_library.mark_as_downloaded(gwas_library_id, minio_cache_key, file_size)
+    return final_path
+
+
 @task()
 def prepare_gwas_file_task(
     user_id: str,
@@ -32,7 +67,6 @@ def prepare_gwas_file_task(
     Ensure the GWAS file is available locally.  
     """
     import shutil
-    import requests as _req
 
     deps = get_deps()
     files_handler = deps["files"]
@@ -52,27 +86,14 @@ def prepare_gwas_file_task(
     final_path = gwas_file_path
     dest_dir = output_dir or os.path.join("data", "temp", str(user_id))
 
-    if source_minio_path and storage:
-        os.makedirs(dest_dir, exist_ok=True)
-        filename = os.path.basename(source_minio_path)
-        final_path = os.path.join(dest_dir, filename)
-        if not storage.download_file(source_minio_path, final_path):
-            raise RuntimeError(f"MinIO download failed: {source_minio_path}")
-
-    elif source_download_url:
-        os.makedirs(dest_dir, exist_ok=True)
-        raw_name = source_download_url.split("/")[-1].split("?")[0] or "gwas_file"
-        final_path = os.path.join(dest_dir, raw_name)
-        with _req.get(source_download_url, stream=True, timeout=600) as r:
-            r.raise_for_status()
-            with open(final_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        file_size = os.path.getsize(final_path)
-        if storage and minio_cache_key:
-            if storage.upload_file(final_path, minio_cache_key):
-                if gwas_library and gwas_library_id:
-                    gwas_library.mark_as_downloaded(gwas_library_id, minio_cache_key, file_size)
+    if (source_minio_path and storage) or source_download_url:
+        final_path = download_gwas_source(
+            dest_dir, storage, gwas_library,
+            source_minio_path=source_minio_path,
+            source_download_url=source_download_url,
+            minio_cache_key=minio_cache_key,
+            gwas_library_id=gwas_library_id,
+        )
 
     elif gwas_file_path and storage and storage_key:
         if not storage.upload_file(gwas_file_path, storage_key):
