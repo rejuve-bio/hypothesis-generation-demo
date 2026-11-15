@@ -49,6 +49,7 @@ from src.api.schemas import (
     ProjectDeleteMessage,
     ProjectsListResponse,
 )
+from src.services import files_api
 from src.services.demo import (
     apply_demo_flags_to_owned_project,
     build_demo_template_summaries,
@@ -304,6 +305,7 @@ async def post_analysis_pipeline(
     phenotype: str | None = Form(None),
     ref_genome: str | None = Form(None),
     thread_id: str | None = Form(None),
+    file_id: str | None = Form(None),
     current_user_id: str = Depends(get_current_user_id),
     projects: ProjectHandler = Depends(get_project_handler),
     files: FileHandler = Depends(get_file_handler),
@@ -330,6 +332,10 @@ async def post_analysis_pipeline(
 
         gwas_file_input = preserve_explicit_empty("gwas_file", gwas_file_input)
         gwas_file = gwas_file_input if is_uploaded else None
+        if file_id and gwas_file_input:
+            raise HTTPException(
+                status_code=400, detail="Send either file_id or gwas_file, not both"
+            )
 
         maf_threshold = float(
             preserve_explicit_empty("maf_threshold", maf_threshold)
@@ -448,8 +454,27 @@ async def post_analysis_pipeline(
         _source_download_url: str | None = None
         _minio_cache_key: str | None = None
         _gwas_library_id: str | None = None
+        _file_grant_id: str | None = None
 
-        if not is_uploaded:
+        if file_id:
+            try:
+                file_meta, _file_grant_id = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    files_api.register_file,
+                    file_id,
+                    request.headers.get("authorization", ""),
+                    current_user_id,
+                    files,
+                )
+            except files_api.FilesApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+            file_metadata_id = file_meta["_id"]
+            filename = original_filename = file_meta["filename"]
+            file_size = file_meta.get("file_size", 0)
+            file_path = ""
+            _file_needs_processing = True
+
+        elif not is_uploaded:
             file_id_param = gwas_file_input
             if not file_id_param:
                 raise HTTPException(
@@ -632,7 +657,7 @@ async def post_analysis_pipeline(
 
         opentargets_study_id = GWASLibraryHandler.resolve_opentargets_study_id(
             gwas_entry if not is_uploaded else None,
-            uploaded_filename=original_filename if is_uploaded else None,
+            uploaded_filename=original_filename if is_uploaded or file_id else None,
         )
         if opentargets_study_id:
             logger.info(
@@ -665,6 +690,7 @@ async def post_analysis_pipeline(
             analysis_parameters=analysis_parameters,
             user_email=current_user_email,
             thread_id=thread_id,
+            file_grant_id=_file_grant_id,
         )
 
         metadata_dir = os.path.join("data", "metadata", str(current_user_id))

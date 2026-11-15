@@ -20,8 +20,10 @@ services:
 
   api-service:
     ports: !reset []
+    networks: !override [app_network]  # no file service in CI
 
   dask-worker:
+    networks: !override [app_network]
     command: >
       uv run dask worker tcp://dask-scheduler:8786
       --nworkers 2

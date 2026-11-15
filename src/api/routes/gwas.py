@@ -9,7 +9,8 @@ import traceback
 import requests as _http
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from bson import ObjectId
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from loguru import logger
 
@@ -22,6 +23,7 @@ from src.api.schemas import (
     SampleSizeInfoResponse,
 )
 from src.db import FileHandler, GWASLibraryHandler
+from src.services import files_api
 
 router = APIRouter(tags=["gwas_library"])
 
@@ -129,6 +131,7 @@ async def get_gwas_files(
     summary="Preview GWAS sample size",
 )
 async def get_sample_size_info(
+    request: Request,
     file_id: str,
     gwas_source: Literal["library", "upload"] | None = Query(
         None,
@@ -157,11 +160,38 @@ async def get_sample_size_info(
                     status_code=404, detail="GWAS file not found in library"
                 )
 
-        file_meta = files.get_file_metadata(current_user_id, file_id)
-        if file_meta:
+        # Our file_metadata id, or a file service id (f_...).
+        file_meta = (
+            files.get_file_metadata(current_user_id, file_id)
+            if ObjectId.is_valid(file_id)
+            else None
+        )
+        external_id = file_meta.get("external_file_id") if file_meta else file_id
+        if file_meta and not external_id:
             resolution = GWASLibraryHandler.resolve_upload_sample_size_info(
                 file_meta.get("file_path")
             )
+            return SampleSizeInfoResponse(
+                **resolution.to_api_dict(),
+                gwas_source="upload",
+            )
+
+        if files_api.FILE_ID.match(external_id):
+            try:
+                head = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    files_api.read_head,
+                    external_id,
+                    request.headers.get("authorization", ""),
+                )
+            except files_api.FilesApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+            # The header check picks gzip by extension.
+            suffix = ".gz" if head.startswith(b"\x1f\x8b") else ".txt"
+            with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+                tmp.write(head)
+                tmp.flush()
+                resolution = GWASLibraryHandler.resolve_upload_sample_size_info(tmp.name)
             return SampleSizeInfoResponse(
                 **resolution.to_api_dict(),
                 gwas_source="upload",

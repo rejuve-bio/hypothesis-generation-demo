@@ -4,6 +4,7 @@ from prefect import task
 from loguru import logger
 import gzip
 import re
+from src.services import files_api
 from src.utils import (
     analysis_state_for_public_api,
     emit_analysis_update,
@@ -52,7 +53,14 @@ def prepare_gwas_file_task(
     final_path = gwas_file_path
     dest_dir = output_dir or os.path.join("data", "temp", str(user_id))
 
-    if source_minio_path and storage:
+    file_meta = files_handler.get_file_metadata(user_id, file_metadata_id) if file_metadata_id else None
+    if file_meta and file_meta.get("source") == "files_api":
+        project = projects_handler.get_projects(user_id, project_id) or {}
+        os.makedirs(dest_dir, exist_ok=True)
+        final_path = os.path.join(dest_dir, os.path.basename(file_meta["filename"]))
+        files_api.download_granted(project.get("file_grant_id"), final_path)
+
+    elif source_minio_path and storage:
         os.makedirs(dest_dir, exist_ok=True)
         filename = os.path.basename(source_minio_path)
         final_path = os.path.join(dest_dir, filename)

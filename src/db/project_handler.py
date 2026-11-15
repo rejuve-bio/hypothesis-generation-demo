@@ -33,7 +33,7 @@ class ProjectHandler(BaseHandler):
         except Exception as e:
             logger.warning(f"Could not create thread indexes (may already exist): {e}")
     
-    def create_project(self, user_id, name, gwas_file_id, phenotype,population, ref_genome, analysis_parameters=None, user_email=None, thread_id=None):
+    def create_project(self, user_id, name, gwas_file_id, phenotype,population, ref_genome, analysis_parameters=None, user_email=None, thread_id=None, file_grant_id=None):
         """Create a new project"""
         project_data = {
             'user_id': user_id,
@@ -49,6 +49,8 @@ class ProjectHandler(BaseHandler):
             "user_email": user_email,
             "thread_id": thread_id,
         }
+        if file_grant_id:  # grant on a file service file; the worker downloads with it
+            project_data["file_grant_id"] = file_grant_id
         result = self.projects_collection.insert_one(project_data)
         return str(result.inserted_id)
 
