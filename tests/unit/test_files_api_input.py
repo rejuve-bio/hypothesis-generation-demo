@@ -55,11 +55,18 @@ def test_service_errors_map_to_status(enabled, monkeypatch, status, expected):
     assert exc.value.status_code == expected
 
 
+def test_refusal_codes_get_their_own_message(enabled, monkeypatch):
+    _respond(monkeypatch, status=409, json={"code": "not_ready", "message": "x"})
+    with pytest.raises(files_api.FilesApiError) as exc:
+        files_api.read_head(FILE_ID, "Bearer u")
+    assert exc.value.detail == files_api.REFUSED["not_ready"]
+
+
 def test_rejected_service_key_is_not_a_sign_in_error(enabled, monkeypatch):
     _respond(monkeypatch, status=401, json={"code": "invalid_consumer_key", "message": "no"})
     with pytest.raises(files_api.FilesApiError) as exc:
         files_api.register_file(FILE_ID, "Bearer u", "user-1", MagicMock())
-    assert exc.value.status_code == 502 and "FILES_API_SERVICE_TOKEN" in exc.value.detail
+    assert exc.value.status_code == 502 and "Sign in" not in exc.value.detail
 
 
 def test_unreachable_service_returns_502(enabled, monkeypatch):
@@ -136,10 +143,10 @@ def test_download_granted_checks_and_writes(enabled, monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("kwargs", "error"),
     [
-        ({"sha256": "0" * 64}, "checksum"),
-        ({"data": DATA + b"extra"}, "checksum"),
+        ({"sha256": "0" * 64}, "Couldn't download"),
+        ({"data": DATA + b"extra"}, "Couldn't download"),
         ({"status": 404}, "no longer available"),
-        ({"redirect": 200}, "download failed"),
+        ({"redirect": 200}, "Couldn't download"),
     ],
 )
 def test_download_granted_refuses_bad_or_dead(enabled, monkeypatch, tmp_path, kwargs, error):

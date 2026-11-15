@@ -9,6 +9,7 @@ import os
 import re
 
 import requests
+from loguru import logger
 
 TIMEOUT = 30
 DOWNLOAD_TIMEOUT = 600
@@ -18,6 +19,12 @@ FILE_ID = re.compile(r"^f_[0-9a-f]{32}$")
 SERVICE_HEADER = "X-Consumer-Key"
 
 FILE_GONE = "This file is no longer available. Pick it again to rerun."
+DOWNLOAD_FAILED = "Couldn't download the file from the file service. Try again in a moment."
+TRY_AGAIN = "The file service isn't available right now. Try again in a moment."
+REFUSED = {  # file service error code -> what the user sees
+    "not_ready": "This file is still being processed. Try again once it's ready.",
+    "not_compatible": "This file can't be used for an analysis. Pick a GWAS summary statistics file.",
+}
 
 
 class FilesApiError(Exception):
@@ -45,25 +52,33 @@ def _error(resp) -> dict:
 
 def _call(method: str, path: str, headers: dict, **kwargs) -> requests.Response:
     if not (_base_url() and os.getenv("FILES_API_SERVICE_TOKEN")):
-        raise FilesApiError(503, "File service is not configured")
+        logger.error("[FILES_API] FILES_API_URL or FILES_API_SERVICE_TOKEN is not set")
+        raise FilesApiError(503, "Files from the file service can't be used right now.")
     try:
         resp = requests.request(
             method, f"{_base_url()}{path}", headers=headers, timeout=TIMEOUT, **kwargs
         )
     except requests.RequestException as exc:
-        raise FilesApiError(502, f"File service unreachable: {exc}")
+        logger.warning(f"[FILES_API] {method} {path} failed: {exc}")
+        raise FilesApiError(502, TRY_AGAIN)
     status = resp.status_code
-    if status == 401 and _error(resp).get("code") == "invalid_consumer_key":
-        raise FilesApiError(502, "File service rejected FILES_API_SERVICE_TOKEN")
+    if status < 400:
+        return resp
+    error = _error(resp)
+    code = error.get("code")
+    logger.warning(f"[FILES_API] {method} {path} -> {status} {code}: {error.get('message')}")
+    if code == "invalid_consumer_key":
+        logger.error("[FILES_API] The file service rejected FILES_API_SERVICE_TOKEN")
+        raise FilesApiError(502, TRY_AGAIN)
     if status == 401:
-        raise FilesApiError(401, "Sign in again to use this file")
+        raise FilesApiError(401, "Your session has expired. Sign in again and retry.")
     if status in (403, 404):
-        raise FilesApiError(404, "File not found")
-    if status in (409, 429):  # not ready / not usable by Hypothesis, or too many links
-        raise FilesApiError(status, _error(resp).get("message") or f"File service refused ({status})")
-    if status >= 400:
-        raise FilesApiError(502, f"File service error {status}")
-    return resp
+        raise FilesApiError(404, "File not found. It may have been deleted.")
+    if status == 409:
+        raise FilesApiError(409, REFUSED.get(code, "This file can't be used right now."))
+    if status == 429:
+        raise FilesApiError(429, "Too many requests to the file service. Try again in a few minutes.")
+    raise FilesApiError(502, TRY_AGAIN)
 
 
 def read_head(file_id: str, authorization: str) -> bytes:
@@ -77,7 +92,7 @@ def register_file(file_id: str, authorization: str, user_id: str, files) -> tupl
     The file service refuses with 409 when the file is not ready or not usable by Hypothesis.
     """
     if not FILE_ID.match(file_id):
-        raise FilesApiError(400, "file_id must be a file service id (f_...)")
+        raise FilesApiError(400, "file_id must be a file service id (starting with f_).")
     headers = {"Authorization": authorization, **_service_headers()}
     meta = _call(
         "POST", f"/v1/files/{file_id}/grants", headers, json={"for": "hypothesis"}
@@ -115,16 +130,16 @@ def download_granted(grant_id: str | None, dest_path: str) -> None:
     size, expected = link["size"], link.get("sha256")
     digest, written = hashlib.sha256(), 0
     partial = f"{dest_path}.part"
-    # The link redirects exactly once, to a short storage URL.
-    first = requests.get(link["url"], allow_redirects=False, timeout=TIMEOUT)
-    location = first.headers.get("Location")
-    if first.status_code not in (302, 303, 307) or not location:
-        raise RuntimeError(f"File download failed: HTTP {first.status_code}")
     try:
+        # The link redirects exactly once, to a short storage URL.
+        first = requests.get(link["url"], allow_redirects=False, timeout=TIMEOUT)
+        location = first.headers.get("Location")
+        if first.status_code not in (302, 303, 307) or not location:
+            raise RuntimeError(f"link answered HTTP {first.status_code}, expected a redirect")
         with requests.get(location, stream=True, allow_redirects=False,
                           timeout=DOWNLOAD_TIMEOUT) as resp:
             if resp.status_code != 200:
-                raise RuntimeError(f"File download failed: HTTP {resp.status_code}")
+                raise RuntimeError(f"storage answered HTTP {resp.status_code}")
             with open(partial, "wb") as fh:
                 for chunk in resp.iter_content(chunk_size=1024 * 1024):
                     written += len(chunk)
@@ -133,8 +148,11 @@ def download_granted(grant_id: str | None, dest_path: str) -> None:
                     digest.update(chunk)
                     fh.write(chunk)
         if written != size or (expected and digest.hexdigest() != expected):
-            raise RuntimeError("Downloaded file does not match the file service's size or checksum")
+            raise RuntimeError(f"got {written} bytes, expected {size} with sha256 {expected}")
         os.replace(partial, dest_path)
+    except (requests.RequestException, RuntimeError) as exc:
+        logger.error(f"[FILES_API] Download for grant {grant_id} failed: {exc}")
+        raise RuntimeError(DOWNLOAD_FAILED) from exc
     finally:
         if os.path.exists(partial):
             os.remove(partial)
