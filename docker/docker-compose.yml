@@ -86,6 +86,8 @@ services:
       - MONGODB_URI=${MONGODB_URI}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - FILES_API_URL=${FILES_API_URL}
+      - FILES_API_SERVICE_TOKEN=${FILES_API_SERVICE_TOKEN}
       - GO_LLM_URL=${LLM_BASE_URL}
       - GO_LLM_KEY=${LLM_API_KEY}
       - GO_LLM_MODEL=${LLM_MODEL}
@@ -132,6 +134,7 @@ services:
           memory: 180G
     networks:
       - app_network
+      - file_service_net
     restart: unless-stopped
 
   api-service:
@@ -155,6 +158,8 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - JWT_SECRET=${JWT_SECRET}
+      - FILES_API_URL=${FILES_API_URL}
+      - FILES_API_SERVICE_TOKEN=${FILES_API_SERVICE_TOKEN}
       - MAIL_PASSWORD=${MAIL_PASSWORD}
       - GO_LLM_URL=${LLM_BASE_URL}
       - GO_LLM_KEY=${LLM_API_KEY}
@@ -195,6 +200,7 @@ services:
       --error-logfile -
     networks:
       - app_network
+      - file_service_net
     restart: unless-stopped
 
   prefect-postgres:
@@ -418,3 +424,8 @@ volumes:
 networks:
   app_network:
     driver: bridge
+  # The platform file service's network (FILES_API_URL=http://file-service:8000).
+  # Created by the file service's own deployment; must exist before `up`.
+  file_service_net:
+    name: file-service-net
+    external: true

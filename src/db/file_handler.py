@@ -10,7 +10,7 @@ class FileHandler(BaseHandler):
         super().__init__(uri, db_name)
         self.file_metadata_collection = self.db['file_metadata']
     
-    def create_file_metadata(self, user_id, filename, original_filename, file_path, file_type, file_size, md5_hash=None, record_count=None, download_url=None, storage_key=None, source=None):
+    def create_file_metadata(self, user_id, filename, original_filename, file_path, file_type, file_size, md5_hash=None, record_count=None, download_url=None, storage_key=None, source=None, external_file_id=None):
         """Create file metadata entry"""
         file_data = {
             'user_id': user_id,
@@ -24,7 +24,8 @@ class FileHandler(BaseHandler):
             'record_count': record_count,
             'download_url': download_url,
             'storage_key': storage_key,  # MinIO object key
-            'source': source  # 'user_upload', 'gwas_library', etc.
+            'source': source,  # 'user_upload', 'gwas_library', 'files_api'
+            'external_file_id': external_file_id,  # id in the platform file service
         }
         result = self.file_metadata_collection.insert_one(file_data)
         return str(result.inserted_id)
@@ -52,6 +53,14 @@ class FileHandler(BaseHandler):
             {"$set": updates},
         )
         return result.matched_count > 0
+
+    def find_by_external_id(self, user_id, external_file_id):
+        file_meta = self.file_metadata_collection.find_one(
+            {'user_id': user_id, 'external_file_id': external_file_id}
+        )
+        if file_meta:
+            file_meta['_id'] = str(file_meta['_id'])
+        return file_meta
 
     def find_file_by_md5(self, user_id, md5_hash):
         """
