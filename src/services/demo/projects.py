@@ -15,6 +15,7 @@ from src.db import (
     ProjectHandler,
 )
 from src.services.demo.access import resolve_project_access_or_none
+from src.config import resolve_results_genome
 from src.utils import get_population_label, normalize_status_responses, project_running_task
 
 
@@ -249,6 +250,7 @@ def build_project_summary(
 
     enhanced["total_credible_sets_count"] = total_credible_sets
     enhanced["total_variants_count"] = total_variants
+    enhanced["results_genome"] = resolve_results_genome(project_doc, total_credible_sets > 0)
 
     hypothesis_count = 0
     try:

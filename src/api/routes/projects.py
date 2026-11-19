@@ -26,7 +26,7 @@ from src.api.dependencies import (
     get_project_handler,
     get_storage,
 )
-from src.config import Config
+from src.config import Config, resolve_results_genome
 from src.db import (
     AnalysisHandler,
     DemoTemplateHandler,
@@ -197,6 +197,7 @@ async def get_projects(
 
         enhanced["total_credible_sets_count"] = total_credible_sets
         enhanced["total_variants_count"] = total_variants
+        enhanced["results_genome"] = resolve_results_genome(project, total_credible_sets > 0)
 
         hypothesis_count = 0
         try:

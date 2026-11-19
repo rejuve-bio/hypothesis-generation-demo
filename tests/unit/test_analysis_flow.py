@@ -163,6 +163,7 @@ def _configure_flow(monkeypatch, immediate_task_factory):
     monkeypatch.setattr(flow_module, "run_combined_ldsc_tissue_analysis", ldsc_task)
     monkeypatch.setattr(flow_module, "save_analysis_state_task", immediate_task_factory(lambda _u, _p, state: saved_states.append(state) or True))
     monkeypatch.setattr(flow_module, "send_pipeline_notification", notify)
+    monkeypatch.setattr(flow_module, "save_results_genome_task", immediate_task_factory(lambda *_: None))
     monkeypatch.setattr(flow_module.Config, "from_env", MagicMock(return_value=MagicMock()))
     return saved_states, ldsc_task, notify
 
@@ -437,3 +438,62 @@ def test_superseded_run_stops_without_writing_a_failed_state(monkeypatch, immedi
 
     assert saved_states[-1]["stage"] == "Filtering"
     notify.assert_not_called()
+
+
+def test_results_genome_is_saved_once_harmonization_succeeds(monkeypatch, immediate_task_factory):
+    _configure_flow(monkeypatch, immediate_task_factory)
+    save_genome = immediate_task_factory(lambda *_: None)
+    monkeypatch.setattr(flow_module, "save_results_genome_task", save_genome)
+    monkeypatch.setattr(flow_module, "filter_significant_variants", immediate_task_factory(_raise_no_significant_variants))
+
+    with pytest.raises(NoSignificantVariantsError):
+        flow_module.analysis_pipeline_flow.fn(
+            "user-1", "project-1", ref_genome="GRCh37",
+            user_email="user@example.com", project_name="Wrist",
+        )
+
+    assert save_genome.calls == [(("user-1", "project-1", "GRCh38"), {})]
+
+
+def test_results_genome_is_not_saved_when_harmonization_fails(monkeypatch, immediate_task_factory):
+    _configure_flow(monkeypatch, immediate_task_factory)
+    save_genome = immediate_task_factory(lambda *_: None)
+    monkeypatch.setattr(flow_module, "save_results_genome_task", save_genome)
+
+    def harmonize(*_args, **_kwargs):
+        raise RuntimeError("Nextflow harmonization failed")
+
+    monkeypatch.setattr(flow_module, "harmonize_sumstats_with_nextflow", immediate_task_factory(harmonize))
+
+    with pytest.raises(RuntimeError):
+        _run_flow()
+
+    assert save_genome.calls == []
+
+
+def test_failing_to_save_results_genome_does_not_stop_the_analysis(monkeypatch, immediate_task_factory):
+    _configure_flow(monkeypatch, immediate_task_factory)
+
+    def save_genome(*_args):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(flow_module, "save_results_genome_task", immediate_task_factory(save_genome))
+    filter_task = immediate_task_factory(_raise_no_significant_variants)
+    monkeypatch.setattr(flow_module, "filter_significant_variants", filter_task)
+
+    with pytest.raises(NoSignificantVariantsError):
+        _run_flow()
+
+    assert len(filter_task.calls) == 1
+
+
+def test_resumed_run_still_saves_results_genome(monkeypatch, immediate_task_factory):
+    _configure_resume(monkeypatch, immediate_task_factory)
+    save_genome = immediate_task_factory(lambda *_: None)
+    monkeypatch.setattr(flow_module, "save_results_genome_task", save_genome)
+    monkeypatch.setattr(flow_module, "filter_significant_variants", immediate_task_factory(_raise_no_significant_variants))
+
+    with pytest.raises(NoSignificantVariantsError):
+        _resume("filtering", {"harmonized_file": "harmonized.tsv.gz"})
+
+    assert save_genome.calls == [(("user-1", "project-1", "GRCh38"), {})]

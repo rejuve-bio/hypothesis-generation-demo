@@ -61,6 +61,16 @@ class ProjectHandler(BaseHandler):
         result = self.projects_collection.insert_one(project_data)
         return str(result.inserted_id)
 
+    def set_results_genome(self, user_id, project_id, genome_build):
+        """Record the genome build of the project's analysis results."""
+        self.projects_collection.update_one(
+            {'_id': ObjectId(project_id), 'user_id': user_id},
+            {'$set': {
+                'results_genome': genome_build,
+                'updated_at': datetime.now(timezone.utc),
+            }},
+        )
+
     def get_projects(self, user_id, project_id=None, thread_id=None):
         """Get a user's projects; with thread_id, those created or used in that chat."""
         query = {'user_id': user_id}

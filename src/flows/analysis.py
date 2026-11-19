@@ -11,7 +11,7 @@ from src.pipeline_stages import cleanup_targets, get_stage, resumable_from, runs
 from src.utils import analysis_stage_label, get_deps
 from src.services.mail import send_pipeline_notification
 
-from src.config import Config
+from src.config import Config, RESULTS_GENOME_BUILD
 from src.tasks import (
     get_project_analysis_path_task,
     ensure_harmonized_file_task,
@@ -27,6 +27,7 @@ from src.tasks import (
     cleanup_sumstats_file,
     save_analysis_state_task,
     record_analysis_event_task,
+    save_results_genome_task,
     create_analysis_result_task,
     get_results_from_opentargets_task,
 )
@@ -114,6 +115,13 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         return run_combined_ldsc_tissue_analysis.submit(
             harmonized_file, output_dir, project_id, user_id
         )
+
+    def save_results_genome():
+        """Record the build of the results; the harmonizer always outputs this build."""
+        try:
+            save_results_genome_task.submit(user_id, project_id, RESULTS_GENOME_BUILD).result()
+        except Exception as genome_e:
+            logger.warning(f"[PIPELINE] Could not save results_genome: {genome_e}")
 
     def harmonize(output_dir):
         nonlocal gwas_file_path
@@ -484,6 +492,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             harmonized_file = harmonize(output_dir)
         else:
             harmonized_file = prepare_resume(output_dir)
+        save_results_genome()
 
         summary = dict.fromkeys(RESULT_KEYS)
         ldsc_tissue_future = None

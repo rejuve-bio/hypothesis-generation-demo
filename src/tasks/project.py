@@ -5,6 +5,7 @@ from prefect.runtime import flow_run
 from loguru import logger
 import gzip
 import re
+from src.config import resolve_results_genome
 from src.services.storage import harmonized_object_key
 from src.utils import (
     analysis_state_for_public_api,
@@ -106,6 +107,14 @@ def prepare_gwas_file_task(
         f"[FILE_PREP] Done: {record_count} records, path={final_path}, project={project_id}"
     )
     return final_path
+
+
+@task()
+def save_results_genome_task(user_id, project_id, genome_build):
+    """Store the genome build of the project's results on the project document."""
+    projects_handler = get_deps()["projects"]
+    projects_handler.set_results_genome(user_id, project_id, genome_build)
+    logger.info(f"Saved results_genome={genome_build} for project {project_id}")
 
 
 @task()
@@ -280,6 +289,9 @@ def get_project_with_full_data(projects_handler, analysis_handler, hypotheses_ha
         except Exception as cs_e:
             logger.warning(f"Could not load credible sets for project {project_id}: {cs_e}")
             credible_sets_data = []
+        analysis_parameters["results_genome"] = resolve_results_genome(
+            project, total_credible_sets_count > 0
+        )
         
         # Get analysis state
         analysis_state = projects_handler.load_analysis_state(query_user_id, project_id)

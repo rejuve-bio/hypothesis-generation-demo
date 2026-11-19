@@ -3,10 +3,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
-from src.api.dependencies import get_analysis_handler, get_demo_template_handler
+from src.api.dependencies import (
+    get_analysis_handler,
+    get_demo_template_handler,
+    get_project_handler,
+)
 from src.api.auth import get_current_user_id
 from src.api.schemas import CredibleSetsResponse
-from src.db import AnalysisHandler, DemoTemplateHandler
+from src.config import resolve_results_genome
+from src.db import AnalysisHandler, DemoTemplateHandler, ProjectHandler
 from src.services.demo import resolve_project_access
 from src.utils import convert_variants_to_object_array, serialize_datetime_fields
 
@@ -24,6 +29,7 @@ async def get_credible_sets(
     current_user_id: str = Depends(get_current_user_id),
     analysis: AnalysisHandler = Depends(get_analysis_handler),
     demo_templates: DemoTemplateHandler = Depends(get_demo_template_handler),
+    projects: ProjectHandler = Depends(get_project_handler),
 ):
 
     if not project_id:
@@ -51,7 +57,11 @@ async def get_credible_sets(
         variants = variants_data.get("data", {})
         variants_array = convert_variants_to_object_array(variants)
         variants_array = serialize_datetime_fields(variants_array)
-        return CredibleSetsResponse(variants=variants_array)
+        project = projects.get_projects(access.owner_user_id, project_id)
+        return CredibleSetsResponse(
+            variants=variants_array,
+            results_genome=resolve_results_genome(project, has_results=True),
+        )
 
     except HTTPException:
         raise
