@@ -30,7 +30,12 @@ from src.tasks import (
     create_analysis_result_task,
     get_results_from_opentargets_task,
 )
-from src.tasks.analysis import NoSignificantVariantsError, count_credible_sets
+from src.tasks.analysis import (
+    CojoError,
+    HarmonizationError,
+    NoSignificantVariantsError,
+    count_credible_sets,
+)
 from src.tasks.gene_expression import LdscExitError
 from src.tasks.project import HarmonizedFileMissingError
 from src.db.credible_sets_handler import CredibleSetsHandler
@@ -85,10 +90,14 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
     started_at = datetime.now(timezone.utc).isoformat()
     artifacts = dict(artifacts or {})
     last_state = {}
+    # Notes the user must still see after later stages replace the message
+    user_notes = []
 
     def save_state(state):
         nonlocal last_state
         state = {**state, "flow_run_id": flow_run_id}
+        if user_notes:
+            state["warnings"] = list(user_notes)
         if state.get("status") == "Failed":
             state["resumable_from"] = resumable_from(
                 {**state, "artifacts": artifacts, "resumed_from": resume_from}
@@ -141,10 +150,20 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         })
 
         logger.info(f"[PIPELINE] Stage 1: Harmonization (Nextflow, or pass-through if opentargets_study_id is confirmed in OpenTargets' own tables)")
-        harmonized_file_result = harmonize_sumstats_with_nextflow.submit(
-            gwas_file_path, output_dir, ref_genome=ref_genome, sample_size=sample_size,
-            user_id=user_id, project_id=project_id, opentargets_study_id=opentargets_study_id
-        ).result()
+        try:
+            harmonized_file_result = harmonize_sumstats_with_nextflow.submit(
+                gwas_file_path, output_dir, ref_genome=ref_genome, sample_size=sample_size,
+                user_id=user_id, project_id=project_id, opentargets_study_id=opentargets_study_id
+            ).result()
+        except HarmonizationError as e:
+            save_state({
+                "status": "Failed",
+                "stage": "Harmonization",
+                "progress": 10,
+                "message": str(e),
+                "error_detail": e.as_detail(),
+            })
+            raise
 
         # harmonize_sumstats_with_nextflow now returns just the file path.
         # Keep tuple handling for backward compatibility with older task versions.
@@ -218,6 +237,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
                 _ot_check.close()
 
         cojo_output_path = None
+        cojo_report = None
         region_batches = []
         successful_batches = 0
         combined_results = None
@@ -295,14 +315,22 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
 
                 config = Config.from_env()
                 plink_dir = config.plink_dir_38
-                cojo_result = run_cojo_per_chromosome.submit(user_id, project_id, significant_df, plink_dir, output_dir, maf_threshold=maf_threshold, population=population, ref_genome=ref_genome).result()
-
-                # Extract the actual DataFrame
-                if isinstance(cojo_result, tuple):
-                    cojo_results, cojo_output_path = cojo_result
-                else:
-                    cojo_results = cojo_result
-                    cojo_output_path = None
+                try:
+                    cojo_results, cojo_output_path, cojo_report = run_cojo_per_chromosome.submit(
+                        user_id, project_id, significant_df, plink_dir, output_dir,
+                        maf_threshold=maf_threshold, population=population, ref_genome=ref_genome,
+                    ).result()
+                except CojoError as e:
+                    save_state({
+                        "status": "Failed",
+                        "stage": "Cojo",
+                        "progress": 50,
+                        "message": str(e),
+                        "error_detail": e.as_detail(),
+                    })
+                    raise
+                if cojo_report.get("message"):
+                    user_notes.append(cojo_report["message"])
 
                 # Cleanup
                 if sig_output_path and os.path.exists(sig_output_path):
@@ -315,7 +343,10 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
             enter_stage("fine_mapping", {
                 "stage": "Fine_mapping",
                 "progress": 70,
-                "message": "COJO analysis completed, starting fine-mapping"
+                "message": " ".join(
+                    ["COJO analysis completed, starting fine-mapping.", *user_notes]
+                ),
+                **({"cojo_report": cojo_report} if cojo_report else {}),
             })
 
             logger.info(f"[PIPELINE] Stage 4: Multiprocessing fine-mapping")
@@ -468,7 +499,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         save_state({
             "status": "Completed",
             "progress": 100,
-            "message": "Analysis completed successfully",
+            "message": " ".join(["Analysis completed successfully.", *user_notes]),
             "ldsc_status": "completed"
         })
         send_pipeline_notification(

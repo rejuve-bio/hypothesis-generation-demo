@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 from pathlib import Path
 import logging
 from prefect import task
@@ -111,6 +112,139 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
     return result
 
 # === NEXTFLOW HARMONIZATION ===
+class HarmonizationError(RuntimeError):
+    """The harmonizer stopped; the message says why in terms a user can act on."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        step: str | None = None,
+        exit_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.step = step
+        self.exit_code = exit_code
+
+    def as_detail(self) -> dict:
+        return {
+            "error_type": "harmonization_failed",
+            "message": str(self),
+            "step": self.step,
+            "exit_code": self.exit_code,
+        }
+
+
+# Plain-language names for the harmonization pipeline's Nextflow processes
+HARMONIZER_STEP_DESCRIPTIONS = {
+    "map_to_build": "mapping variants to the GRCh38 reference build",
+    "ten_percent_counts": "checking strand orientation on a sample of variants",
+    "ten_percent_counts_sum": "checking strand orientation on a sample of variants",
+    "generate_strand_counts": "checking strand orientation against the reference panel",
+    "summarise_strand_counts": "checking strand orientation against the reference panel",
+    "harmonization": "harmonizing alleles against the reference panel",
+    "concatenate_chr_splits": "combining the per-chromosome results",
+    "qc": "quality control of the harmonized variants",
+    "update_meta_yaml": "writing the harmonized output",
+    "harmonization_log": "writing the harmonized output",
+    "get_vcf_files": "preparing the reference panel",
+    "get_variation_tables": "preparing the reference panel",
+    "make_local_synonyms_table": "preparing the reference panel",
+}
+
+_MAX_ERROR_CHARS = 300
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# Errors printed by our own scripts start the line with "ERROR:" or "Error:".
+# Nextflow's own "ERROR ~ ..." and indented "... Error: ..." text do not match.
+_SCRIPT_ERROR_LINE = re.compile(r"^(?:ERROR|Error):\s*(\S.*)$")
+_NEXTFLOW_FAILED_PROCESS = re.compile(r"Error executing process > '([^']+)'")
+_NEXTFLOW_EXIT_STATUS = re.compile(r"^Command exit status:\s*\n\s*(\d+)", re.MULTILINE)
+# Nextflow stopped before or outside any process (e.g. a pipeline script error)
+_NEXTFLOW_ERROR_LINE = re.compile(r"^ERROR ~ (\S.*)$", re.MULTILINE)
+_NEXTFLOW_PROGRESS_LINE = re.compile(
+    r"^(\[[0-9a-f-]{2}/[0-9a-f-]{6}\]|\[-\s*\]|executor >|N E X T F L O W|Launching |"
+    r"Monitor the execution|-- Check '\.nextflow\.log'|Nextflow \S+ is available)"
+)
+
+
+def _truncate(text: str, limit: int = _MAX_ERROR_CHARS) -> str:
+    text = text.strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _nextflow_command_error(output: str) -> str | None:
+    """Last non-empty line of the first failed process's ``Command error:`` block."""
+    lines = output.splitlines()
+    start = next((i + 1 for i, line in enumerate(lines) if line.strip() == "Command error:"), None)
+    if start is None:
+        return None
+    block = []
+    for line in lines[start:]:
+        if not line.startswith("  "):
+            break
+        if line.strip() and line.strip() != "(empty)":
+            block.append(line.strip())
+    return block[-1] if block else None
+
+
+def describe_harmonizer_failure(stdout: str, stderr: str) -> tuple[str, str | None]:
+    """Turn harmonizer output into a one-line reason and the failing Nextflow step.
+
+    Prefers the failing Nextflow process, then the first ``ERROR:``/``Error:``
+    line our scripts print, then Nextflow's own ``ERROR ~`` line, then the
+    last few meaningful output lines.
+    """
+    stdout = _ANSI_ESCAPE.sub("", stdout or "")
+    stderr = _ANSI_ESCAPE.sub("", stderr or "")
+    combined = f"{stderr}\n{stdout}"
+
+    process = _NEXTFLOW_FAILED_PROCESS.search(combined)
+    if process:
+        step = process.group(1).split(" (")[0].split(":")[-1]
+        description = HARMONIZER_STEP_DESCRIPTIONS.get(step, step.replace("_", " "))
+        exit_status = _NEXTFLOW_EXIT_STATUS.search(combined[process.end():])
+        exit_status = int(exit_status.group(1)) if exit_status else None
+        command_error = _nextflow_command_error(combined[process.start():])
+        if exit_status == 137 or (command_error and " Killed " in f" {command_error} "):
+            reason = (
+                "the step was stopped by the system (exit status 137), "
+                "most likely because it ran out of memory"
+            )
+        elif command_error:
+            reason = _truncate(command_error)
+        elif exit_status is not None:
+            reason = f"the step exited with status {exit_status} without an error message"
+        else:
+            reason = "the step failed without an error message"
+        return f"Harmonization failed while {description} ({step}): {reason}", step
+
+    for text in (stderr, stdout):
+        for line in text.splitlines():
+            match = _SCRIPT_ERROR_LINE.match(line)
+            if match:
+                return f"Harmonization failed: {_truncate(match.group(1))}", None
+
+    nextflow_error = _NEXTFLOW_ERROR_LINE.search(combined)
+    if nextflow_error:
+        return (
+            f"Harmonization failed: the Nextflow pipeline stopped: {_truncate(nextflow_error.group(1))}",
+            None,
+        )
+
+    meaningful = [
+        line.strip() for line in combined.splitlines()
+        if line.strip() and not _NEXTFLOW_PROGRESS_LINE.match(line.strip())
+    ]
+    if meaningful:
+        return f"Harmonization failed: {_truncate(' | '.join(meaningful[-3:]))}", None
+    return "Harmonization failed without any output from the harmonizer.", None
+
+
+def _harmonization_error(stdout: str, stderr: str, exit_code: int) -> HarmonizationError:
+    message, step = describe_harmonizer_failure(stdout, stderr)
+    return HarmonizationError(message, step=step, exit_code=exit_code)
+
+
 @task()
 def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRCh37",
                                      ref_dir=None, code_repo=None, script_dir=None,
@@ -208,8 +342,12 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
                 )
                 remap_result = subprocess.run(remap_cmd, shell=True, capture_output=True, text=True)
                 if remap_result.returncode != 0:
-                    logger.error(f"[HARMONIZE] SSF remap failed: {remap_result.stderr}")
-                    raise RuntimeError(f"SSF remap failed: {remap_result.stderr}")
+                    logger.error(f"[HARMONIZE] SSF remap failed with exit code {remap_result.returncode}")
+                    logger.error(f"[HARMONIZE] STDOUT: {remap_result.stdout}")
+                    logger.error(f"[HARMONIZE] STDERR: {remap_result.stderr}")
+                    raise _harmonization_error(
+                        remap_result.stdout, remap_result.stderr, remap_result.returncode
+                    )
 
                 harmonized_output_path = remap_result.stdout.strip().splitlines()[-1]
                 if not os.path.exists(harmonized_output_path):
@@ -249,7 +387,7 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
                 logger.error(f"[HARMONIZE] Harmonizer failed with exit code {result.returncode}")
                 logger.error(f"[HARMONIZE] STDOUT: {result.stdout}")
                 logger.error(f"[HARMONIZE] STDERR: {result.stderr}")
-                raise RuntimeError(f"Harmonization failed with exit code {result.returncode}")
+                raise _harmonization_error(result.stdout, result.stderr, result.returncode)
 
             logger.info(f"[HARMONIZE] Harmonizer completed successfully")
             logger.info(f"[HARMONIZE] Last 20 lines of output:")
@@ -498,7 +636,9 @@ NR==1 {
                     logger.info(f"[HARMONIZE] Preserved logs on failure: {output_log_dir}")
         except Exception as log_e:
             logger.warning(f"[HARMONIZE] Could not preserve logs: {log_e}")
-        raise RuntimeError(f"Harmonization timeout after {timeout_seconds} seconds")
+        raise HarmonizationError(
+            f"Harmonization did not finish within {timeout_seconds / 3600:g} hours and was stopped."
+        )
     except Exception as e:
         logger.error(f"[HARMONIZE] Error in harmonization: {str(e)}")
         # Preserve logs on failure
@@ -629,10 +769,156 @@ def filter_significant_variants(user_id, project_id, harmonized_df, output_dir, 
 
 
 # ===  COJO ANALYSIS ===
+class CojoError(RuntimeError):
+    """COJO produced no usable result; the message says why."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        gcta_error: str | None = None,
+        failed_chromosomes: list | None = None,
+        exclusions: dict | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.gcta_error = gcta_error
+        self.failed_chromosomes = failed_chromosomes or []
+        self.exclusions = exclusions
+
+    def as_detail(self) -> dict:
+        return {
+            "error_type": "cojo_failed",
+            "message": str(self),
+            "gcta_error": self.gcta_error,
+            "failed_chromosomes": self.failed_chromosomes,
+            "excluded_variants": self.exclusions,
+        }
+
+
+# GCTA cannot read a row with an empty field, so rows missing any of these are excluded.
+COJO_REQUIRED_VALUES = (
+    ("FRQ", "missing_frequency", "no allele frequency"),
+    ("BETA", "missing_beta", "no effect size (beta)"),
+    ("SE", "missing_standard_error", "no standard error"),
+    ("P", "missing_p_value", "no p-value"),
+    ("N", "missing_sample_size", "no sample size"),
+)
+
+
+def prepare_cojo_input(significant_df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Build the GCTA ``--cojo-file`` table and drop rows GCTA cannot read.
+
+    Returns the table and a summary of excluded rows: ``input_variants``,
+    ``excluded_variants`` and one count per missing value (a row missing
+    several values is counted under each).
+    """
+    a1_col = 'effect_allele' if 'effect_allele' in significant_df.columns else 'A1'
+    a2_col = 'other_allele' if 'other_allele' in significant_df.columns else 'A2'
+    frq_col = 'effect_allele_frequency' if 'effect_allele_frequency' in significant_df.columns else 'FRQ'
+    beta_col = 'beta' if 'beta' in significant_df.columns else 'BETA'
+    se_col = 'standard_error' if 'standard_error' in significant_df.columns else 'SE'
+    p_col = 'p_value' if 'p_value' in significant_df.columns else 'P'
+
+    cojo_df = significant_df[[a1_col, a2_col, frq_col, beta_col, se_col, p_col, "N"]].rename(columns={
+        a1_col: 'A1',
+        a2_col: 'A2',
+        frq_col: 'FRQ',
+        beta_col: 'BETA',
+        se_col: 'SE',
+        p_col: 'P',
+    })
+    # Use variant_id as SNP (already in colon format: chr:pos:ref:alt after harmonization)
+    cojo_df.insert(0, "SNP", significant_df.index)
+    cojo_df = cojo_df.reset_index(drop=True)
+
+    value_cols = [col for col, _, _ in COJO_REQUIRED_VALUES]
+    missing = (
+        cojo_df[value_cols].apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .isna()
+    )
+    excluded = missing.any(axis=1)
+    exclusions = {
+        "input_variants": len(cojo_df),
+        "excluded_variants": int(excluded.sum()),
+    }
+    for col, key, _ in COJO_REQUIRED_VALUES:
+        exclusions[key] = int(missing[col].sum())
+    return cojo_df[~excluded].reset_index(drop=True), exclusions
+
+
+def describe_cojo_exclusions(exclusions: dict | None) -> str | None:
+    """User-facing sentence about variants left out of COJO, or None if none were."""
+    if not exclusions or not exclusions.get("excluded_variants"):
+        return None
+    excluded = exclusions["excluded_variants"]
+    total = exclusions["input_variants"]
+    reasons = [
+        (exclusions[key], label)
+        for _, key, label in COJO_REQUIRED_VALUES
+        if exclusions.get(key)
+    ]
+    if len(reasons) == 1:
+        return (
+            f"{excluded:,} of {total:,} significant variants had {reasons[0][1]} "
+            "and were excluded from COJO."
+        )
+    listed = ", ".join(f"{count:,} with {label}" for count, label in reasons)
+    return (
+        f"{excluded:,} of {total:,} significant variants were excluded from COJO "
+        f"because of missing values ({listed})."
+    )
+
+
+def _gcta_error_line(*texts: str) -> str | None:
+    """First ``Error...`` line GCTA printed, joined with the line it refers to."""
+    for text in texts:
+        lines = (text or "").splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("Error"):
+                message = line.strip()
+                if message.endswith(":") and i + 1 < len(lines):
+                    message = f"{message} {lines[i + 1].strip()}"
+                return _truncate(message)
+    return None
+
+
+def _cojo_failure(chromosomes, chromosome_errors, exclusions, exclusion_note) -> CojoError:
+    """Error for a COJO run that produced no signal on any chromosome."""
+    count = f"{len(chromosomes)} chromosome{'s' if len(chromosomes) != 1 else ''}"
+    gcta_error = None
+    if chromosome_errors:
+        first = min(chromosome_errors)
+        gcta_error = chromosome_errors[first]
+        if len(chromosome_errors) == len(chromosomes):
+            message = f"COJO failed on all {count} with significant variants."
+        else:
+            message = (
+                f"COJO found no independent signals: it failed on {len(chromosome_errors)} "
+                f"of the {count} with significant variants and found none on the rest."
+            )
+        message += f" GCTA reported on chromosome {first}: {gcta_error}"
+    else:
+        message = f"COJO found no independent signals on the {count} with significant variants."
+    if exclusion_note:
+        message += f" {exclusion_note}"
+    return CojoError(
+        message,
+        gcta_error=gcta_error,
+        failed_chromosomes=sorted(chromosome_errors),
+        exclusions=exclusions,
+    )
+
+
 @task()
 def run_cojo_per_chromosome(user_id, project_id, significant_df, plink_dir, output_dir, maf_threshold=0.01, population="EUR", ref_genome="GRCh38"):
     """
     Run GCTA COJO analysis per chromosome and combine results.
+
+    Returns ``(results, results_path, report)``. ``report["message"]`` is a
+    user-facing note (or None) about variants excluded for missing values and
+    chromosomes where GCTA failed; the rest of ``report`` holds the counts.
+    Raises CojoError when no chromosome yields an independent signal.
     """
     logger.info(f"[COJO] Starting per-chromosome COJO analysis for population {population}")
     
@@ -647,38 +933,35 @@ def run_cojo_per_chromosome(user_id, project_id, significant_df, plink_dir, outp
         temp_dir = temp_base
         logger.info(f"[COJO] Using isolated temporary directory: {temp_dir}")
         
-        # Support both old and new column names
-        a1_col = 'effect_allele' if 'effect_allele' in significant_df.columns else 'A1'
-        a2_col = 'other_allele' if 'other_allele' in significant_df.columns else 'A2'
-        frq_col = 'effect_allele_frequency' if 'effect_allele_frequency' in significant_df.columns else 'FRQ'
-        beta_col = 'beta' if 'beta' in significant_df.columns else 'BETA'
-        se_col = 'standard_error' if 'standard_error' in significant_df.columns else 'SE'
-        p_col = 'p_value' if 'p_value' in significant_df.columns else 'P'
-        
-        # Prepare COJO input format
-        cojo_df = significant_df[[a1_col, a2_col, frq_col, beta_col, se_col, p_col, "N"]].copy()
-        
-        # Use variant_id as SNP (already in colon format: chr:pos:ref:alt after harmonization)
-        cojo_df["SNP"] = significant_df.index
-        
-        # Rename to GCTA expected column names
-        cojo_df = cojo_df.rename(columns={
-            a1_col: 'A1',
-            a2_col: 'A2',
-            frq_col: 'FRQ',
-            beta_col: 'BETA',
-            se_col: 'SE',
-            p_col: 'P'
-        })
-        cojo_df = cojo_df[['SNP', 'A1', 'A2', 'FRQ', 'BETA', 'SE', 'P', 'N']]
-        
+        cojo_df, exclusions = prepare_cojo_input(significant_df)
+        exclusion_note = describe_cojo_exclusions(exclusions)
+        if exclusion_note:
+            logger.warning(f"[COJO] {exclusion_note} Counts: {exclusions}")
+            record_analysis_event(
+                user_id, project_id, "Cojo", exclusion_note,
+                level="warning", details=exclusions,
+            )
+        if cojo_df.empty:
+            raise CojoError(
+                f"No significant variants could be used for COJO. {exclusion_note}",
+                exclusions=exclusions,
+            )
+
         # Save COJO input file
         cojo_input_path = os.path.join(temp_dir, "cojo_input.txt")
         cojo_df.to_csv(cojo_input_path, sep=' ', index=False)
         logger.info(f"[COJO] COJO input prepared: {len(cojo_df)} variants")
-        
+        # GCTA exits with an error for chromosomes without input SNPs, so skip those
+        input_chromosomes = set(cojo_df["SNP"].astype(str).str.split(":").str[0])
+        chromosomes = [chrom for chrom in range(1, 23) if str(chrom) in input_chromosomes]
+        if not chromosomes:
+            raise CojoError(
+                "None of the significant variants are on chromosomes 1-22, so COJO cannot run.",
+                exclusions=exclusions,
+            )
+
         def run_cojo_for_chromosome(chrom):
-            """Run COJO analysis for a single chromosome"""
+            """Run COJO for one chromosome; return (results or None, error or None)."""
             try:
                 logger.info(f"[COJO] Processing chromosome {chrom}")
                 
@@ -691,7 +974,7 @@ def run_cojo_per_chromosome(user_id, project_id, significant_df, plink_dir, outp
                 # Check if PLINK files exist
                 if not os.path.exists(f"{plink_prefix}.bed"):
                     logger.warning(f"[COJO] PLINK files not found for chromosome {chrom}: {plink_prefix}")
-                    return None
+                    return None, f"No reference panel genotypes found for chromosome {chrom}"
 
                 # Run GCTA COJO directly for this chromosome
                 sumstats_basename = os.path.basename(cojo_input_path)
@@ -711,66 +994,69 @@ def run_cojo_per_chromosome(user_id, project_id, significant_df, plink_dir, outp
                 result = subprocess.run(cojo_cmd, capture_output=True, text=True, timeout=1800)
                 
                 if result.returncode != 0:
-                    logger.warning(f"[COJO] GCTA failed for chromosome {chrom}")
-                    failed_chromosomes.append(chrom)
-                    return None
-                
-                # Read COJO results for this chromosome  
+                    gcta_log = ""
+                    if os.path.exists(f"{cojo_output_prefix}.log"):
+                        with open(f"{cojo_output_prefix}.log") as log_file:
+                            gcta_log = log_file.read()
+                    error = _gcta_error_line(result.stdout, result.stderr, gcta_log) or (
+                        f"gcta64 exited with status {result.returncode}"
+                    )
+                    logger.warning(f"[COJO] GCTA failed for chromosome {chrom}: {error}")
+                    logger.warning(f"[COJO] GCTA output for chromosome {chrom}:\n{result.stdout}{result.stderr}")
+                    return None, error
+
+                # Read COJO results for this chromosome
                 cojo_result_file = f"{cojo_output_prefix}.jma.cojo"
                 if os.path.exists(cojo_result_file):
                     chr_results = pd.read_csv(cojo_result_file, sep='\s+')
                     if len(chr_results) > 0:
-                        chr_results['CHR'] = chrom  
+                        chr_results['CHR'] = chrom
                         logger.info(f"[COJO] Chromosome {chrom}: {len(chr_results)} independent signals")
-                        
-                        return chr_results
+
+                        return chr_results, None
                     else:
                         logger.info(f"[COJO] Chromosome {chrom}: No independent signals found")
-                        return None
+                        return None, None
                 else:
                     logger.warning(f"[COJO] No output file generated for chromosome {chrom}")
-                    return None
-                    
+                    return None, None
+
             except subprocess.TimeoutExpired:
                 logger.error(f"[COJO] Timeout for chromosome {chrom}")
-                failed_chromosomes.append(chrom)
-                return None
+                return None, f"GCTA did not finish within 30 minutes on chromosome {chrom}"
             except Exception as e:
                 logger.error(f"[COJO] Error processing chromosome {chrom}: {str(e)}")
-                failed_chromosomes.append(chrom)
-                return None
-        
-        # Run all chromosomes in parallel
+                return None, str(e)
+
+        # Run the chromosomes that have variants in parallel
         combined_results = []
-        successful_chromosomes = []
-        failed_chromosomes = []
-        max_workers = 4 
-        
-        # GCTA exits with an error for chromosomes without input SNPs, so skip those
-        input_chromosomes = set(cojo_df["SNP"].astype(str).str.split(":").str[0])
+        chromosome_errors = {}
+        max_workers = 4
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_chrom = {
-                executor.submit(run_cojo_for_chromosome, chrom): chrom 
-                for chrom in range(1, 23)
-                if str(chrom) in input_chromosomes
+                executor.submit(run_cojo_for_chromosome, chrom): chrom
+                for chrom in chromosomes
             }
-            
+
             # Process completed tasks
             for future in as_completed(future_to_chrom):
                 chrom = future_to_chrom[future]
                 try:
-                    result = future.result()
-                    if result is not None:
-                        combined_results.append(result)
-                        successful_chromosomes.append(chrom)
+                    result, error = future.result()
                 except Exception as e:
                     logger.error(f"[COJO] Exception in chromosome {chrom}: {str(e)}")
+                    result, error = None, str(e)
+                if result is not None:
+                    combined_results.append(result)
+                if error:
+                    chromosome_errors[chrom] = error
 
-        for chrom in sorted(failed_chromosomes):
+        for chrom, error in sorted(chromosome_errors.items()):
             record_analysis_event(
                 user_id, project_id, "Cojo",
                 f"COJO failed on chr {chrom}; its signals are not included",
-                level="warning", details={"chromosome": chrom},
+                level="warning", details={"chromosome": chrom, "gcta_error": error},
             )
 
         if combined_results:
@@ -792,17 +1078,30 @@ def run_cojo_per_chromosome(user_id, project_id, significant_df, plink_dir, outp
             combined_cojo_df.to_csv(cojo_output_path, sep='\t', index=True)
             
             logger.info(f"[COJO] Results saved to: {cojo_output_path}")
-            chromosomes = sorted(successful_chromosomes)
+            successful_chromosomes = sorted({int(c) for c in combined_cojo_df["CHR"]})
             record_analysis_event(
                 user_id, project_id, "Cojo",
-                f"{len(combined_cojo_df)} independent signals on chr {', '.join(map(str, chromosomes))}",
-                details={"independent_signals": len(combined_cojo_df), "chromosomes": chromosomes},
+                f"{len(combined_cojo_df)} independent signals on chr {', '.join(map(str, successful_chromosomes))}",
+                details={"independent_signals": len(combined_cojo_df), "chromosomes": successful_chromosomes},
             )
-            return combined_cojo_df, cojo_output_path
-            
-        else:
-            logger.error("[COJO] No COJO results generated for any chromosome")
-            raise RuntimeError("COJO analysis failed for all chromosomes")
+            notes = [exclusion_note] if exclusion_note else []
+            if chromosome_errors:
+                failed = sorted(chromosome_errors)
+                notes.append(
+                    f"COJO failed on chromosome{'s' if len(failed) > 1 else ''} "
+                    f"{', '.join(map(str, failed))}, so no signals from "
+                    f"{'them' if len(failed) > 1 else 'it'} were fine-mapped "
+                    f"(chromosome {failed[0]}: {chromosome_errors[failed[0]]})."
+                )
+            report = {
+                "message": " ".join(notes) or None,
+                "excluded_variants": exclusions,
+                "failed_chromosomes": {str(c): e for c, e in sorted(chromosome_errors.items())},
+            }
+            return combined_cojo_df, cojo_output_path, report
+
+        logger.error("[COJO] No COJO results generated for any chromosome")
+        raise _cojo_failure(chromosomes, chromosome_errors, exclusions, exclusion_note)
     finally:
         # Cleanup isolated temp directory
         try:

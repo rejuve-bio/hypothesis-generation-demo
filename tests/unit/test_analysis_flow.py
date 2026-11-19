@@ -9,7 +9,12 @@ from fastapi import HTTPException
 from src.api.routes import projects as projects_routes
 from src.flows import analysis as flow_module
 from src.tasks import analysis as analysis_tasks
-from src.tasks.analysis import NoSignificantVariantsError, filter_significant_variants
+from src.tasks.analysis import (
+    CojoError,
+    HarmonizationError,
+    NoSignificantVariantsError,
+    filter_significant_variants,
+)
 from src.tasks import project as project_tasks
 from src.tasks.gene_expression import LdscExitError
 from src.tasks.project import HarmonizedFileMissingError
@@ -236,7 +241,7 @@ def test_unexpected_failure_keeps_the_stage_it_happened_in(monkeypatch, immediat
 def test_specific_failed_state_is_not_overwritten(monkeypatch, immediate_task_factory):
     saved_states, _, notify = _configure_flow(monkeypatch, immediate_task_factory)
     monkeypatch.setattr(flow_module, "filter_significant_variants", immediate_task_factory(lambda *_, **__: (_sumstats([1e-9]), None)))
-    monkeypatch.setattr(flow_module, "run_cojo_per_chromosome", immediate_task_factory(lambda *_, **__: (_sumstats([1e-9]), None)))
+    monkeypatch.setattr(flow_module, "run_cojo_per_chromosome", immediate_task_factory(lambda *_, **__: (_sumstats([1e-9]), None, {"message": None})))
     monkeypatch.setattr(flow_module, "create_region_batches", lambda *_, **__: [["region"]])
     monkeypatch.setattr(flow_module, "save_sumstats_for_workers", lambda *_: "/out/sumstats.pkl")
     monkeypatch.setattr(flow_module, "cleanup_sumstats_file", MagicMock())
@@ -327,7 +332,7 @@ def _configure_successful_pipeline(monkeypatch, immediate_task_factory):
     tasks = {
         "harmonization": harmonize,
         "filtering": MagicMock(**{"submit.return_value.result.return_value": (_sumstats([1e-9]), None)}),
-        "cojo": MagicMock(**{"submit.return_value.result.return_value": (_sumstats([1e-9]), None)}),
+        "cojo": MagicMock(**{"submit.return_value.result.return_value": (_sumstats([1e-9]), None, {"message": None})}),
         "fine_mapping": MagicMock(**{"map.return_value": [MagicMock(**{"result.return_value": [fine_mapped]})]}),
         "ldsc": ldsc_task,
     }
@@ -437,3 +442,92 @@ def test_superseded_run_stops_without_writing_a_failed_state(monkeypatch, immedi
 
     assert saved_states[-1]["stage"] == "Filtering"
     notify.assert_not_called()
+
+
+def test_harmonization_failure_is_saved_with_its_reason(monkeypatch, immediate_task_factory):
+    saved_states, ldsc_task, notify = _configure_flow(monkeypatch, immediate_task_factory)
+    error = HarmonizationError(
+        "Harmonization failed: the input file is empty.", step=None, exit_code=1,
+    )
+
+    def harmonize(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(flow_module, "harmonize_sumstats_with_nextflow", immediate_task_factory(harmonize))
+
+    with pytest.raises(HarmonizationError):
+        _run_flow()
+
+    assert saved_states[-1] == {
+        "status": "Failed",
+        "stage": "Harmonization",
+        "progress": 10,
+        "message": "Harmonization failed: the input file is empty.",
+        "error_detail": error.as_detail(),
+        "flow_run_id": None,
+        "resumable_from": [],
+    }
+    notify.assert_called_once_with(
+        "user@example.com", "Wrist", "project-1",
+        success=False, detail="Harmonization failed: the input file is empty.", restarted=False,
+    )
+    ldsc_task.submit.assert_not_called()
+
+
+def test_cojo_failure_is_saved_with_gcta_reason(monkeypatch, immediate_task_factory):
+    saved_states, _, notify = _configure_flow(monkeypatch, immediate_task_factory)
+    monkeypatch.setattr(flow_module, "filter_significant_variants", immediate_task_factory(lambda *_, **__: (_sumstats([1e-9]), None)))
+    error = CojoError(
+        "COJO failed on all 2 chromosomes with significant variants. "
+        "GCTA reported on chromosome 1: Error: in line: \"...\"",
+        gcta_error="Error: in line: \"...\"", failed_chromosomes=[1, 2],
+    )
+
+    def cojo(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(flow_module, "run_cojo_per_chromosome", immediate_task_factory(cojo))
+
+    with pytest.raises(CojoError):
+        _run_flow()
+
+    assert saved_states[-1] == {
+        "status": "Failed",
+        "stage": "Cojo",
+        "progress": 50,
+        "message": str(error),
+        "error_detail": error.as_detail(),
+        "flow_run_id": None,
+        "resumable_from": ["filtering"],
+    }
+    notify.assert_called_once()
+
+
+def test_cojo_exclusions_are_shown_until_the_run_completes(monkeypatch, immediate_task_factory):
+    saved_states, ldsc_task, notify = _configure_flow(monkeypatch, immediate_task_factory)
+    ldsc_task.submit.return_value.result.return_value = {"analysis_run_id": "run-1"}
+    note = "87 of 3,058 significant variants had no allele frequency and were excluded from COJO."
+    report = {
+        "message": note,
+        "excluded_variants": {"input_variants": 3058, "excluded_variants": 87, "missing_frequency": 87},
+        "failed_chromosomes": {},
+    }
+    monkeypatch.setattr(flow_module, "filter_significant_variants", immediate_task_factory(lambda *_, **__: (_sumstats([1e-9]), None)))
+    monkeypatch.setattr(flow_module, "run_cojo_per_chromosome", immediate_task_factory(lambda *_, **__: (_sumstats([1e-9]), None, report)))
+    monkeypatch.setattr(flow_module, "create_region_batches", lambda *_, **__: [["region"]])
+    monkeypatch.setattr(flow_module, "save_sumstats_for_workers", lambda *_: "/out/sumstats.pkl")
+    monkeypatch.setattr(flow_module, "cleanup_sumstats_file", MagicMock())
+    batch_future = MagicMock(**{"result.return_value": [pd.DataFrame({"PIP": [0.9]})]})
+    monkeypatch.setattr(flow_module, "finemap_region_batch_worker", MagicMock(**{"map.return_value": [batch_future]}))
+    monkeypatch.setattr(flow_module, "create_analysis_result_task", immediate_task_factory(lambda *_: "/out/analysis_results.csv"))
+
+    _run_flow()
+
+    cojo_state = next(s for s in saved_states if s.get("stage") == "Fine_mapping")
+    assert cojo_state["message"] == f"COJO analysis completed, starting fine-mapping. {note}"
+    assert cojo_state["cojo_report"] == report
+    assert saved_states[-1]["status"] == "Completed"
+    assert saved_states[-1]["message"] == f"Analysis completed successfully. {note}"
+    later_states = [s for s in saved_states[saved_states.index(cojo_state):] if "status" in s]
+    assert all(s["warnings"] == [note] for s in later_states)
+    assert "warnings" not in saved_states[0]
