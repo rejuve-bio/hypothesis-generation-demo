@@ -380,7 +380,10 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
         if missing_cols:
             raise ValueError(f"Missing required columns in harmonized output: {missing_cols}")
 
-        needs_n       = 'N' not in peek.columns
+        # The official GWAS-SSF name for sample size is lowercase "n"; downstream
+        # steps read "N", so rename it instead of overwriting it with the fallback.
+        needs_n_rename = 'N' not in peek.columns and 'n' in peek.columns
+        needs_n       = 'N' not in peek.columns and not needs_n_rename
         needs_vid_fix = 'variant_id' in peek.columns and '_' in str(peek['variant_id'].iloc[0])
         needs_vid_create = 'variant_id' not in peek.columns
 
@@ -389,17 +392,23 @@ def harmonize_sumstats_with_nextflow(gwas_file_path, output_dir, ref_genome="GRC
                 "[HARMONIZE] Sample size (N) not found in input file and not provided as parameter. "
                 "Please provide sample_size parameter or ensure input file has N column."
             )
-        if not needs_n:
-            logger.info(f"[HARMONIZE] Using sample size from input file: N={peek['N'].iloc[0]}")
+        if needs_n_rename:
+            logger.info(f"[HARMONIZE] Using sample size from input file column 'n' (renamed to N): N={peek['n'].iloc[0]}")
+        elif not needs_n:
+            logger.info(f"[HARMONIZE] Using sample size from input file column 'N': N={peek['N'].iloc[0]}")
+        else:
+            logger.info(f"[HARMONIZE] Input file has no sample size column; using N={sample_size} for every variant")
 
         del peek
         gc.collect()
 
-        needs_resave = needs_n or needs_vid_fix or needs_vid_create
+        needs_resave = needs_n or needs_n_rename or needs_vid_fix or needs_vid_create
         if needs_resave:
             reasons = []
             if needs_n:
                 reasons.append(f"N={sample_size} added")
+            if needs_n_rename:
+                reasons.append("n renamed to N")
             if needs_vid_fix:
                 reasons.append("variant_id underscores→colons")
             if needs_vid_create:
@@ -415,6 +424,9 @@ NR==1 {
     for (i=1; i<=NF; i++) {
         col[tolower($i)] = i
         header[i] = $i
+    }
+    if (RENAME_N) {
+        for (i=1; i<=NF; i++) if ($i == "n") { $i = "N"; break }
     }
     has_n       = ("n" in col)
     has_vid     = ("variant_id" in col)
@@ -451,7 +463,8 @@ NR==1 {
 """
             awk_cmd = (
                 f"bgzip -dc {shlex.quote(harmonized_file_path)} | "
-                f"awk -v N_VAL={int(sample_size) if needs_n else 0} {shlex.quote(awk_prog)} | "
+                f"awk -v N_VAL={int(sample_size) if needs_n else 0} -v RENAME_N={int(needs_n_rename)} "
+                f"{shlex.quote(awk_prog)} | "
                 f"bgzip > {shlex.quote(tmp_out)}"
             )
             ret = subprocess.run(awk_cmd, shell=True, capture_output=True, text=True)

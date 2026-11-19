@@ -79,18 +79,37 @@ to_gwas_ssf() {
   READER="cat"
   case "$SRC" in *.gz|*.bgz) READER="bgzip -dc";; esac
 
+  # Write to a temporary file and move it into place afterwards. For an
+  # uncompressed input named <stem>.tsv, OUT_TSV is the input path itself, and
+  # redirecting straight into it would truncate the input while it is read.
+  OUT_TMP="${OUT_TSV}.remap.$$"
+
   # Build minimal GWAS-SSF (Neale/PLINK2/FinnGen/SSF autodetect), force chromosome to "chr*" form
   $READER "$SRC" | awk -v OFS="\t" '
-    BEGIN{
-      print "chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta\tstandard_error\tp_value\teffect_allele_frequency\trsid"
-    }
     NR==1{
+      # Split tab-separated files on tabs only. The default whitespace split
+      # merges an empty cell into its neighbour and shifts every later column.
+      # Files without tabs keep the whitespace split.
+      if ($0 ~ /\t/) { FS = "\t"; $0 = $0 }
       for(i=1;i<=NF;i++) { col=tolower($i); gsub(/^#/, "", col); h[col]=i }
       is_neale  = h["variant"] && (h["beta"]||h["or"]) && (h["se"]||h["stderr"]||h["standard_error"]) && (h["pval"]||h["p"])
       is_plink  = ((h["chr"]||h["chrom"]) && (h["bp"]||h["pos"]) && h["a1"] && h["a2"] && (h["beta"]||h["or"]) && (h["se"]||h["stderr"]||h["standard_error"]) && (h["p"]||h["pval"]))
       is_finngen = h["chrom"] && h["pos"] && h["ref"] && h["alt"] && h["beta"] && h["sebeta"] && (h["pval"]||h["p"])
       is_ssf    = (h["chromosome"] && h["base_pair_location"] && h["effect_allele"] && h["other_allele"] && h["beta"] && h["standard_error"] && (h["p_value"]||h["p"]))
-      if(!is_neale && !is_plink && !is_finngen && !is_ssf){ print "ERROR: unknown layout" > "/dev/stderr"; exit 2 }
+      if(!is_neale && !is_plink && !is_finngen && !is_ssf){
+        cols = $1; for(i=2;i<=NF;i++) cols = cols ", " $i
+        print "ERROR: unrecognised column layout. Columns found: " cols ". Accepted layouts: " \
+          "GWAS-SSF (chromosome, base_pair_location, effect_allele, other_allele, beta, standard_error, p_value); " \
+          "PLINK (CHR or CHROM, BP or POS, A1, A2, BETA or OR, SE, P); " \
+          "FinnGen (chrom, pos, ref, alt, beta, sebeta, pval); " \
+          "Neale (variant, beta, se, pval)." > "/dev/stderr"
+        bad_layout = 1
+        exit 2
+      }
+      # Per-variant sample size, carried through as N when the input has one:
+      # N/n (any layout), OBS_CT (plink2), NMISS (plink1), n_complete_samples (Neale).
+      n_idx = h["n"] ? h["n"] : h["obs_ct"] ? h["obs_ct"] : h["nmiss"] ? h["nmiss"] : h["n_complete_samples"]
+      print "chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta\tstandard_error\tp_value\teffect_allele_frequency\trsid" (n_idx ? "\tN" : "")
       next
     }
     {
@@ -141,13 +160,34 @@ to_gwas_ssf() {
       else if(chrom=="24") chrom="Y";
       else if(chrom=="26") chrom="MT";
 
+      rows_read++
+
       # FILTER: Skip X, Y, MT chromosoems
-      if (chrom=="X" || chrom=="Y" || chrom=="MT") next
+      if (chrom=="X" || chrom=="Y" || chrom=="MT") { rows_sex_mt++; next }
 
       if(eaf=="") eaf="NA"; if(rsid=="") rsid="NA"
-      print chrom, pos, toupper(ea), toupper(oa), beta, se, p, eaf, rsid
+      if (n_idx) {
+        n = $n_idx; if (n == "") n = "NA"
+        print chrom, pos, toupper(ea), toupper(oa), beta, se, p, eaf, rsid, n
+      } else {
+        print chrom, pos, toupper(ea), toupper(oa), beta, se, p, eaf, rsid
+      }
+      rows_kept++
     }
-  ' > "$OUT_TSV"
+    END{
+      if (bad_layout) exit 2
+      if (NR == 0) {
+        print "ERROR: the input file is empty." > "/dev/stderr"
+        exit 3
+      }
+      if (rows_kept == 0) {
+        print "ERROR: no variants left after converting to GWAS-SSF: the file has " \
+          rows_read+0 " data rows, " rows_sex_mt+0 " of them on X, Y or MT, which are not harmonized." > "/dev/stderr"
+        exit 3
+      }
+    }
+  ' > "$OUT_TMP" || { local rc=$?; rm -f -- "$OUT_TMP"; return "$rc"; }
+  mv -f -- "$OUT_TMP" "$OUT_TSV"
 
   # Compress and index
   bgzip -f "$OUT_TSV"

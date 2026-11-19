@@ -172,6 +172,12 @@ chromlist_from_ssf() {
     fi
   done
 
+  # No rows at all: Nextflow would only fail later on empty per-chromosome
+  # files with an unrelated error, so stop here with the real reason.
+  if [[ ${#present[@]} -eq 0 ]]; then
+    die "no variants to harmonize: $(basename -- "$ssf") has a header but no data rows"
+  fi
+
   if [[ ${#have[@]} -eq 0 ]]; then
     echo "WARN: No chromosomes detected in SSF; using full list" >&2
     echo "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,X,Y,MT"
