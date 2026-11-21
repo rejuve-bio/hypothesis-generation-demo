@@ -27,6 +27,21 @@ class BulkDeleteProjectsRequest(BaseModel):
     )
 
 
+class AnalysisResumeRequest(BaseModel):
+    from_stage: str = Field(description="Pipeline stage to restart from, one of the state's resumable_from.")
+    p_value_threshold: float | None = Field(
+        default=None, description="New significance threshold; only when filtering reruns."
+    )
+
+
+class AnalysisResumeResponse(BaseModel):
+    status: str
+    project_id: str
+    from_stage: str
+    flow_run_id: str
+    p_value_threshold: float | None = None
+
+
 class BulkDeleteProjectsOkResponse(BaseModel):
     message: str
     deleted_count: int

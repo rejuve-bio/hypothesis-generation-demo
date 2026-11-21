@@ -11,6 +11,10 @@ from loguru import logger
 from typing import Optional, BinaryIO
 
 
+def harmonized_object_key(user_id, project_id, file_name):
+    return f"harmonized/{user_id}/{project_id}/{file_name}"
+
+
 class MinIOStorage:
     """MinIO object storage client wrapper"""
     

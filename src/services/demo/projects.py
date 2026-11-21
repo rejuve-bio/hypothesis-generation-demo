@@ -225,10 +225,8 @@ def build_project_summary(
         enhanced["running_task"] = project_running_task(analysis_state)
     except Exception as state_e:
         logger.warning(f"Could not load analysis state for project {project_id}: {state_e}")
-        enhanced["status"] = normalize_status_responses("Completed")
-        enhanced["running_task"] = project_running_task(
-            {"status": "Completed", "message": "Analysis completed successfully."}
-        )
+        enhanced["status"] = normalize_status_responses("Failed")
+        enhanced["running_task"] = "Could not load analysis state."
 
     if population is not None:
         enhanced["population"] = get_population_label(population)

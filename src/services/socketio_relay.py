@@ -16,6 +16,7 @@ SOCKETIO_RELAY_CHANNEL = "socketio:relay:v1"
 DEDUPE_KEY_PREFIX = "socketio:relay:dedupe"
 DEDUPE_TTL_SECONDS = 8
 RECONNECT_DELAY_SECONDS = 3
+SYNC_SOCKET_TIMEOUT_SECONDS = 3
 
 # Process-wide pool for worker-side publishes (Dask/Prefect); avoids new TCP per update.
 _sync_pool: redis_sync.Redis | None = None
@@ -37,6 +38,8 @@ def _get_sync_redis(redis_url: str) -> redis_sync.Redis:
         redis_url,
         decode_responses=True,
         max_connections=5,
+        socket_timeout=SYNC_SOCKET_TIMEOUT_SECONDS,
+        socket_connect_timeout=SYNC_SOCKET_TIMEOUT_SECONDS,
     )
     _sync_pool_url = redis_url
     return _sync_pool
