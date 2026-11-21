@@ -156,6 +156,14 @@ class HypothesisHandler(BaseHandler):
             'variant': variant
         })
 
+    def get_variant_hypotheses(self, user_id, project_id, variant):
+        """All of a user's hypotheses for one variant in a project."""
+        return list(self.hypothesis_collection.find({
+            'user_id': user_id,
+            'project_id': project_id,
+            '$or': [{'variant': variant}, {'variant_id': variant}],
+        }))
+
     def update_hypothesis(self, hypothesis_id, data):
         """Update hypothesis"""
         # Remove _id if present in data to avoid modification errors
@@ -208,6 +216,9 @@ class HypothesisHandler(BaseHandler):
         # Delete the hypothesis
         result = self.hypothesis_collection.delete_one({'id': hypothesis_id, 'user_id': user_id})
         if result.deleted_count > 0:
+            self.db["share_links"].delete_many(
+                {'owner_user_id': user_id, 'hypothesis_id': hypothesis_id}
+            )
             return {'message': f'Hypothesis and {enrich_result.deleted_count} associated enrichments deleted'}, 200
         return {'message': 'Hypothesis not found or not authorized'}, 404
     
@@ -253,6 +264,9 @@ class HypothesisHandler(BaseHandler):
 
         # Get the actual deleted hypothesis IDs
         deleted_hypothesis_ids = [h['id'] for h in hypotheses if h['id'] in hypothesis_ids]
+        self.db["share_links"].delete_many(
+            {'owner_user_id': user_id, 'hypothesis_id': {'$in': deleted_hypothesis_ids}}
+        )
         failed_ids = list(set(hypothesis_ids) - set(deleted_hypothesis_ids))
 
         # Check if all were deleted

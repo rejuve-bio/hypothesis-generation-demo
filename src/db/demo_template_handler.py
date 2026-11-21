@@ -507,6 +507,10 @@ class DemoTemplateHandler(BaseHandler):
         if legacy_user_id == DEMO_OWNER_USER_ID:
             return
 
+        self.db["share_links"].delete_many(
+            {"owner_user_id": legacy_user_id, "project_id": project_id}
+        )
+
         legacy_runs = list(
             self.gene_expression_runs_collection.find(
                 {"user_id": legacy_user_id, "project_id": project_id},

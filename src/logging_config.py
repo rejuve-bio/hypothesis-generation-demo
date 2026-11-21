@@ -3,7 +3,26 @@ import sys
 import logging
 from loguru import logger
 import functools
+import re
 import time
+
+_SHARE_TOKEN_PATH = re.compile(r"(/public/share/)[^/?\s\"]+")
+
+
+class ShareTokenRedactingFilter(logging.Filter):
+    """Keep public share tokens out of access logs."""
+
+    def filter(self, record):
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _SHARE_TOKEN_PATH.sub(r"\1<redacted>", arg) if isinstance(arg, str) else arg
+                for arg in record.args
+            )
+        return True
+
+
+_share_token_filter = ShareTokenRedactingFilter()
+
 
 class InterceptHandler(logging.Handler):
     """
@@ -63,6 +82,7 @@ def setup_logging(log_level='DEBUG'):
         logging_logger.handlers = [InterceptHandler()]
         logging_logger.propagate = False
         logging_logger.setLevel(logging_level)
+    logging.getLogger("uvicorn.access").addFilter(_share_token_filter)
 
     logger.info(f"Logging initialized with level: {log_level}")
     logger.info(f"Log directory: {os.path.abspath(log_dir)}")

@@ -9,6 +9,8 @@ from src.api.routes.hypothesis import router as hypothesis_router
 from src.api.routes.internal import router as internal_router
 from src.api.routes.phenotypes import router as phenotypes_router
 from src.api.routes.projects import router as projects_router
+from src.api.routes.share import router as share_router
+from src.api.routes.share_public import router as share_public_router
 
 router = APIRouter()
 router.include_router(enrichment_router)
@@ -19,3 +21,5 @@ router.include_router(gwas_router)
 router.include_router(files_router)
 router.include_router(analysis_router)
 router.include_router(internal_router)
+router.include_router(share_router)
+router.include_router(share_public_router)

@@ -51,6 +51,14 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": "Phenotype lookup and creation (public endpoints).",
     },
     {
+        "name": "share",
+        "description": (
+            "Read-only share links for completed hypotheses. Owners create, list and "
+            "revoke links; `/public/share/{token}` serves a frozen snapshot without "
+            "authentication."
+        ),
+    },
+    {
         "name": "user_files",
         "description": "User-uploaded GWAS and related files.",
     },

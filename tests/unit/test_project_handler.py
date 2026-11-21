@@ -97,6 +97,6 @@ def test_delete_project_data_removes_tissue_selections(monkeypatch):
 
     handler._delete_project_data("viewer", project_id)
 
-    handler.db["tissue_selections"].delete_many.assert_called_once_with(
+    handler.db["tissue_selections"].delete_many.assert_any_call(
         {"user_id": "viewer", "project_id": project_id}
     )

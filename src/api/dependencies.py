@@ -17,6 +17,7 @@ from src.db import (
     TaskHandler,
     UserHandler,
     DemoTemplateHandler,
+    ShareLinkHandler,
 )
 from src.services.llm import LLM
 from src.services.prolog import PrologQuery
@@ -97,6 +98,10 @@ def get_gwas_library_handler() -> GWASLibraryHandler:
 
 def get_demo_template_handler() -> DemoTemplateHandler:
     return _container.demo_template_handler()
+
+
+def get_share_link_handler() -> ShareLinkHandler:
+    return _container.share_link_handler()
 
 
 def parse_thread_id(value: str | None) -> str | None:

@@ -19,6 +19,7 @@ from src.db import (
     GWASLibraryHandler,
     PhenotypeHandler,
     DemoTemplateHandler,
+    ShareLinkHandler,
 )
 
 
@@ -88,4 +89,7 @@ class Container(containers.DeclarativeContainer):
     )
     demo_template_handler = providers.ThreadSafeSingleton(
         DemoTemplateHandler, config.provided.mongodb_uri, config.provided.db_name
+    )
+    share_link_handler = providers.ThreadSafeSingleton(
+        ShareLinkHandler, config.provided.mongodb_uri, config.provided.db_name
     )

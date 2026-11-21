@@ -15,6 +15,7 @@ from .gene_expression_handler import GeneExpressionHandler
 from .phenotype_handler import PhenotypeHandler
 from .gwas_library_handler import GWASLibraryHandler
 from .demo_template_handler import DemoTemplateHandler
+from .share_link_handler import ShareLinkHandler
 
 
 
@@ -32,4 +33,5 @@ __all__ = [
     'PhenotypeHandler',
     'GWASLibraryHandler',
     'DemoTemplateHandler',
+    'ShareLinkHandler',
 ]

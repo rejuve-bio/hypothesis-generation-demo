@@ -198,6 +198,11 @@ class ProjectHandler(BaseHandler):
                 'project_id': project_id
             })
             logger.info(f"Deleted {hypotheses_result.deleted_count} hypotheses for project {project_id}")
+
+            self.db["share_links"].delete_many({
+                'owner_user_id': user_id,
+                'project_id': project_id
+            })
             
             # 3. Delete task updates for the hypotheses
             if hypothesis_ids:
