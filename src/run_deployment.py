@@ -23,7 +23,8 @@ def invoke_enrichment_deployment(
 
 def invoke_analysis_pipeline_deployment(
     user_id, project_id, gwas_file_path=None, ref_genome="GRCh38", population="EUR",
-    batch_size=5, max_workers=3, maf_threshold=0.01, seed=42, window=2000, L=-1,
+    batch_size=5, max_workers=3, maf_threshold=0.01, p_value_threshold=5e-8,
+    seed=42, window=2000, L=-1,
     coverage=0.95, min_abs_corr=0.5, sample_size=None,
     user_email: str | None = None,
     project_name: str | None = None,
@@ -32,36 +33,43 @@ def invoke_analysis_pipeline_deployment(
     file_source_minio_path=None, file_source_download_url=None,
     file_minio_cache_key=None, file_gwas_library_id=None,
     opentargets_study_id=None,
+    resume_from=None,
+    artifacts=None,
 ):
-    run_deployment(
+    parameters = {
+        "user_id": user_id,
+        "project_id": project_id,
+        "gwas_file_path": gwas_file_path,
+        "ref_genome": ref_genome,
+        "population": population,
+        "batch_size": batch_size,
+        "max_workers": max_workers,
+        "maf_threshold": maf_threshold,
+        "p_value_threshold": p_value_threshold,
+        "seed": seed,
+        "window": window,
+        "L": L,
+        "coverage": coverage,
+        "min_abs_corr": min_abs_corr,
+        "sample_size": sample_size,
+        "file_metadata_id": file_metadata_id,
+        "file_needs_processing": file_needs_processing,
+        "file_storage_key": file_storage_key,
+        "file_id_new": file_id_new,
+        "file_source_minio_path": file_source_minio_path,
+        "file_source_download_url": file_source_download_url,
+        "file_minio_cache_key": file_minio_cache_key,
+        "file_gwas_library_id": file_gwas_library_id,
+        "user_email": user_email,
+        "project_name": project_name,
+        "opentargets_study_id": opentargets_study_id,
+    }
+    # Only resumed runs send these, so a worker without resume support still accepts normal runs
+    if resume_from:
+        parameters.update(resume_from=resume_from, artifacts=artifacts)
+    return run_deployment(
         name="analysis-pipeline-flow/analysis-pipeline-deployment",
-        parameters={
-            "user_id": user_id,
-            "project_id": project_id,
-            "gwas_file_path": gwas_file_path,
-            "ref_genome": ref_genome,
-            "population": population,
-            "batch_size": batch_size,
-            "max_workers": max_workers,
-            "maf_threshold": maf_threshold,
-            "seed": seed,
-            "window": window,
-            "L": L,
-            "coverage": coverage,
-            "min_abs_corr": min_abs_corr,
-            "sample_size": sample_size,
-            "file_metadata_id": file_metadata_id,
-            "file_needs_processing": file_needs_processing,
-            "file_storage_key": file_storage_key,
-            "file_id_new": file_id_new,
-            "file_source_minio_path": file_source_minio_path,
-            "file_source_download_url": file_source_download_url,
-            "file_minio_cache_key": file_minio_cache_key,
-            "file_gwas_library_id": file_gwas_library_id,
-            "user_email": user_email,
-            "project_name": project_name,
-            "opentargets_study_id": opentargets_study_id,
-        },
+        parameters=parameters,
         timeout=0
     )
 

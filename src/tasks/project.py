@@ -1,9 +1,11 @@
 import os
 import pandas as pd
 from prefect import task
+from prefect.runtime import flow_run
 from loguru import logger
 import gzip
 import re
+from src.services.storage import harmonized_object_key
 from src.utils import (
     analysis_state_for_public_api,
     emit_analysis_update,
@@ -11,6 +13,7 @@ from src.utils import (
     get_population_label,
     normalize_status_responses,
     project_running_task,
+    record_analysis_event,
 )
 
 
@@ -45,9 +48,10 @@ def prepare_gwas_file_task(
         "stage": "File_upload",
         "progress": 3,
         "message": "Uploading or preparing GWAS file...",
+        "flow_run_id": flow_run.id,
     }
-    projects_handler.save_analysis_state(user_id, project_id, uploading_state)
-    emit_analysis_update(user_id, project_id, uploading_state)
+    if projects_handler.save_analysis_state(user_id, project_id, uploading_state):
+        emit_analysis_update(user_id, project_id, uploading_state)
 
     final_path = gwas_file_path
     dest_dir = output_dir or os.path.join("data", "temp", str(user_id))
@@ -106,17 +110,26 @@ def prepare_gwas_file_task(
 
 @task()
 def save_analysis_state_task(user_id, project_id, state_data):
-    """Save analysis state to file system"""
+    """Save analysis state to the project document"""
     try:
         deps = get_deps()
         projects_handler = deps["projects"]
-        projects_handler.save_analysis_state(user_id, project_id, state_data)
+        if not projects_handler.save_analysis_state(user_id, project_id, state_data):
+            logger.info(f"Analysis state for project {project_id} not saved: owned by another run")
+            return False
         logger.info(f"Saved analysis state for project {project_id}")
-        emit_analysis_update(user_id, project_id, state_data)
+        if "status" in state_data:
+            emit_analysis_update(user_id, project_id, state_data)
         return True
     except Exception as e:
         logger.info(f"Error saving analysis state: {str(e)}")
         raise
+
+
+@task()
+def record_analysis_event_task(user_id, project_id, stage, message, details=None):
+    """Add an analysis timeline event from the flow"""
+    record_analysis_event(user_id, project_id, stage, message, details=details)
 
 
 @task()
@@ -141,6 +154,41 @@ def create_analysis_result_task(user_id, project_id, combined_results, output_di
         logger.error(f"Error saving analysis results: {str(e)}")
         raise
 
+
+
+class HarmonizedFileMissingError(FileNotFoundError):
+    """The harmonized file is gone both locally and from object storage."""
+
+
+def harmonized_file_available(storage, output_dir, user_id, project_id, file_name):
+    """Whether the harmonized file is in the project's output dir or in object storage."""
+    if os.path.exists(os.path.join(output_dir, file_name)):
+        return True
+    return bool(storage and storage.exists(harmonized_object_key(user_id, project_id, file_name)))
+
+
+@task()
+def ensure_harmonized_file_task(user_id, project_id, output_dir, file_name):
+    """Local path of a recorded harmonized file, downloading it from storage if needed."""
+    path = os.path.join(output_dir, file_name)
+    if os.path.exists(path):
+        return path
+    storage = get_deps().get("storage")
+    if storage and storage.download_file(harmonized_object_key(user_id, project_id, file_name), path):
+        return path
+    raise HarmonizedFileMissingError(f"Harmonized file {file_name} is no longer available")
+
+
+@task()
+def reset_analysis_outputs_task(user_id, project_id, targets):
+    """Delete stored outputs that a resumed run will produce again."""
+    analysis_handler = get_deps()["analysis"]
+    deletes = {
+        "credible_sets": analysis_handler.delete_credible_sets,
+        "analysis_results": analysis_handler.delete_analysis_results,
+    }
+    for target in targets:
+        deletes[target](user_id, project_id)
 
 
 @task()

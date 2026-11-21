@@ -205,6 +205,8 @@ async def handle_subscribe_analysis(
         }
         response_data = serialize_datetime_fields(response_data)
         await sio.emit("analysis_update", response_data, to=sid)
+        events = projects.get_analysis_events(user_id, project_id)
+        await sio.emit("analysis_events", serialize_datetime_fields(events), to=sid)
         return {"status": "subscribed", "room": room}
 
     except Exception as exc:

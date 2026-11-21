@@ -86,7 +86,7 @@ def test_get_projects_by_thread_includes_projects_used_in_thread():
     ]
 
 
-def test_fork_does_not_inherit_template_thread_id(monkeypatch):
+def test_fork_does_not_inherit_template_thread_id():
     handler = _project_handler()
     template_id = "64b000000000000000000001"
     handler.projects_collection.find_one.return_value = {
@@ -96,7 +96,6 @@ def test_fork_does_not_inherit_template_thread_id(monkeypatch):
         "thread_id": "owner-thread",
     }
     handler._copy_collection_docs = MagicMock(return_value=[])
-    monkeypatch.setattr(handler, "get_analysis_state_path", lambda *_: "/nonexistent/state")
 
     handler.fork_project_from_template("owner", template_id, "viewer")
 

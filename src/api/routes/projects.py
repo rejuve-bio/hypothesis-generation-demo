@@ -9,6 +9,7 @@ from datetime import datetime
 
 from typing import Union
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -36,11 +37,19 @@ from src.db import (
     HypothesisHandler,
     ProjectHandler,
 )
-from src.tasks.project import count_gwas_records, get_project_with_full_data
+from src.pipeline_stages import STAGE_INDEX, cleanup_targets, get_stage, rerun_params
+from src.services.prefect_runs import cancel_flow_run
+from src.tasks.project import (
+    count_gwas_records,
+    get_project_with_full_data,
+    harmonized_file_available,
+)
 from src.api.auth import get_current_user_id, get_current_user_email
 from src.api.dependencies import get_demo_template_handler, parse_thread_id
 from src.api.schemas import (
     AnalysisPipelineStartResponse,
+    AnalysisResumeRequest,
+    AnalysisResumeResponse,
     BulkDeleteProjectsOkResponse,
     BulkDeleteProjectsPartialResponse,
     BulkDeleteProjectsRequest,
@@ -58,6 +67,7 @@ from src.run_deployment import invoke_analysis_pipeline_deployment
 from src.utils import (
     allowed_file,
     compute_file_md5,
+    emit_analysis_update,
     get_population_label,
     get_shared_temp_dir,
     normalize_status_responses,
@@ -66,6 +76,32 @@ from src.utils import (
 )
 
 router = APIRouter(tags=["projects"])
+
+RESUME_FLOW_PARAMETERS = (
+    "maf_threshold", "p_value_threshold", "seed", "window", "L", "coverage",
+    "min_abs_corr", "batch_size", "max_workers", "sample_size", "opentargets_study_id",
+)
+
+SAMPLE_SIZE_SOURCE_LABELS = {
+    "user_provided": "provided by you",
+    "library_verified": "from library metadata",
+    "library_default": "library default",
+    "upload_default": "default, used if the file has no N column",
+}
+
+
+def _parse_p_value_threshold(value) -> float:
+    error = HTTPException(
+        status_code=400,
+        detail="p_value_threshold must be greater than 0 and at most 1e-5",
+    )
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        raise error
+    if not 0 < threshold <= 1e-5:
+        raise error
+    return threshold
 
 
 @router.get(
@@ -139,10 +175,8 @@ async def get_projects(
             enhanced["running_task"] = project_running_task(analysis_state)
         except Exception as state_e:
             logger.warning(f"Could not load analysis state for project {project['id']}: {state_e}")
-            enhanced["status"] = normalize_status_responses("Completed")
-            enhanced["running_task"] = project_running_task(
-                {"status": "Completed", "message": "Analysis completed successfully."}
-            )
+            enhanced["status"] = normalize_status_responses("Failed")
+            enhanced["running_task"] = "Could not load analysis state."
 
         enhanced["population"] = get_population_label(project.get("population"))
         enhanced["ref_genome"] = project.get("ref_genome")
@@ -280,6 +314,158 @@ async def bulk_delete_projects(
     raise HTTPException(status_code=500, detail="Failed to delete projects")
 
 
+@router.get(
+    "/projects/{project_id}/analysis-events",
+    summary="List a project's analysis timeline events",
+)
+async def get_analysis_events(
+    project_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+    projects: ProjectHandler = Depends(get_project_handler),
+):
+    if not ObjectId.is_valid(project_id) or not projects.get_projects(current_user_id, project_id):
+        raise HTTPException(status_code=404, detail="Project not found or access denied")
+    events = projects.get_analysis_events(current_user_id, project_id)
+    return JSONResponse(content=serialize_datetime_fields(events))
+
+
+def _resume_overrides(body: AnalysisResumeRequest, state: dict, previous_parameters: dict) -> dict:
+    """Validated parameter overrides for a resume request."""
+    overrides = body.model_dump(exclude={"from_stage"}, exclude_none=True)
+    not_rerun = set(overrides) - rerun_params(body.from_stage)
+    if not_rerun:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{', '.join(sorted(not_rerun))} cannot be changed when restarting "
+                f"from {get_stage(body.from_stage)['label']}"
+            ),
+        )
+    if "p_value_threshold" in overrides:
+        overrides["p_value_threshold"] = _parse_p_value_threshold(overrides["p_value_threshold"])
+    # A study that failed for lack of significant variants would fail again at the same threshold
+    min_p_value = (state.get("error_detail") or {}).get("min_p_value")
+    threshold = overrides.get("p_value_threshold", previous_parameters.get("p_value_threshold"))
+    if min_p_value is not None and threshold is not None and threshold <= min_p_value:
+        raise HTTPException(
+            status_code=400,
+            detail=f"p_value_threshold must be above the most significant p-value ({min_p_value:.2g})",
+        )
+    return overrides
+
+
+@router.post(
+    "/projects/{project_id}/analysis/resume",
+    status_code=202,
+    response_model=AnalysisResumeResponse,
+    summary="Restart a failed analysis from a pipeline stage",
+)
+async def resume_analysis(
+    project_id: str,
+    body: AnalysisResumeRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    projects: ProjectHandler = Depends(get_project_handler),
+    demo_templates: DemoTemplateHandler = Depends(get_demo_template_handler),
+    storage=Depends(get_storage),
+):
+    project = ObjectId.is_valid(project_id) and projects.get_projects(current_user_id, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or access denied")
+    if demo_templates.is_registered_template_project(project_id):
+        raise HTTPException(status_code=403, detail="Demo template projects cannot be restarted")
+    if body.from_stage not in STAGE_INDEX:
+        raise HTTPException(status_code=400, detail=f"Unknown stage: {body.from_stage}")
+
+    state = projects.load_analysis_state(current_user_id, project_id) or {}
+    if state.get("status") != "Failed":
+        raise HTTPException(status_code=409, detail="Only a failed analysis can be restarted")
+    if body.from_stage not in state.get("resumable_from", []):
+        raise HTTPException(
+            status_code=409,
+            detail=f"This analysis cannot be restarted from {get_stage(body.from_stage)['label']}",
+        )
+
+    previous_parameters = project.get("analysis_parameters") or {}
+    overrides = _resume_overrides(body, state, previous_parameters)
+    parameters = {**previous_parameters, **overrides}
+    if "credible_sets" in cleanup_targets(body.from_stage) and projects.has_hypotheses(
+        current_user_id, project_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Hypotheses already use this project's results; start a new analysis instead",
+        )
+    if not harmonized_file_available(
+        storage, projects.get_project_analysis_path(current_user_id, project_id),
+        current_user_id, project_id, state["artifacts"]["harmonized_file"],
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Intermediate files are no longer available, start a new analysis",
+        )
+
+    if state.get("flow_run_id"):
+        cancel_flow_run(state["flow_run_id"])
+    queued = projects.claim_analysis_resume(current_user_id, project_id, state, body.from_stage)
+    if not queued:
+        raise HTTPException(status_code=409, detail="A restart is already in progress")
+    emit_analysis_update(current_user_id, project_id, queued)
+    changes = {
+        name: {"previous": previous_parameters.get(name), "new": value}
+        for name, value in overrides.items()
+    }
+    message = f"Restarted from {get_stage(body.from_stage)['label']}"
+    if changes:
+        message += " with " + ", ".join(
+            f"{name} {change['new']} (was {change['previous']})" for name, change in changes.items()
+        )
+    projects.add_analysis_event(
+        current_user_id, project_id, "Setup", message,
+        details={"from_stage": body.from_stage, "changes": changes},
+    )
+
+    try:
+        loop = asyncio.get_running_loop()
+        flow_run = await loop.run_in_executor(
+            None,
+            lambda: invoke_analysis_pipeline_deployment(
+                user_id=current_user_id,
+                project_id=project_id,
+                ref_genome=project.get("ref_genome"),
+                population=project.get("population"),
+                user_email=project.get("user_email"),
+                project_name=project.get("name"),
+                resume_from=body.from_stage,
+                artifacts=queued["artifacts"],
+                **{name: parameters[name] for name in RESUME_FLOW_PARAMETERS if name in parameters},
+            ),
+        )
+    except Exception as exc:
+        logger.error(f"[API] Could not restart analysis for project {project_id}: {exc}")
+        failed = {
+            "status": "Failed",
+            "message": "The analysis could not be started",
+            "resumable_from": [body.from_stage],
+            "error_detail": state.get("error_detail"),
+        }
+        projects.save_analysis_state(current_user_id, project_id, failed)
+        emit_analysis_update(current_user_id, project_id, failed)
+        raise HTTPException(status_code=500, detail="The analysis could not be started") from exc
+
+    flow_run_id = str(flow_run.id)
+    projects.save_analysis_state(current_user_id, project_id, {"flow_run_id": flow_run_id})
+    if overrides:
+        projects.update_analysis_parameters(current_user_id, project_id, overrides)
+
+    return AnalysisResumeResponse(
+        status="started",
+        project_id=project_id,
+        from_stage=body.from_stage,
+        flow_run_id=flow_run_id,
+        p_value_threshold=parameters.get("p_value_threshold"),
+    )
+
+
 @router.post(
     "/analysis-pipeline",
     status_code=202,
@@ -294,6 +480,7 @@ async def post_analysis_pipeline(
     is_uploaded: str = Form("false"),
     gwas_file_input: UploadFile | str | None = File(None, alias="gwas_file"),
     maf_threshold: str = Form("0.01"),
+    p_value_threshold: str = Form("5e-8"),
     seed: str = Form("42"),
     window: str = Form("2000"),
     L: str = Form("-1"),
@@ -333,6 +520,9 @@ async def post_analysis_pipeline(
 
         maf_threshold = float(
             preserve_explicit_empty("maf_threshold", maf_threshold)
+        )
+        p_value_threshold = _parse_p_value_threshold(
+            preserve_explicit_empty("p_value_threshold", p_value_threshold)
         )
         seed = int(preserve_explicit_empty("seed", seed))
         window = int(preserve_explicit_empty("window", window))
@@ -642,6 +832,7 @@ async def post_analysis_pipeline(
 
         analysis_parameters = {
             "maf_threshold": maf_threshold,
+            "p_value_threshold": p_value_threshold,
             "seed": seed,
             "window": window,
             "L": L,
@@ -653,6 +844,7 @@ async def post_analysis_pipeline(
             "sample_size_source": sample_size_resolution.source,
             "sample_size_message": sample_size_resolution.message,
             "sample_size_is_user_provided": sample_size_resolution.is_user_provided,
+            "opentargets_study_id": opentargets_study_id,
         }
 
         project_id = projects.create_project(
@@ -692,36 +884,60 @@ async def post_analysis_pipeline(
             f"library_entry={not is_uploaded and gwas_entry is not None})"
         )
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: invoke_analysis_pipeline_deployment(
-                user_id=current_user_id,
-                project_id=project_id,
-                gwas_file_path=file_path,
-                ref_genome=ref_genome,
-                population=population,
-                batch_size=batch_size,
-                max_workers=max_workers,
-                maf_threshold=maf_threshold,
-                seed=seed,
-                window=window,
-                L=L,
-                coverage=coverage,
-                min_abs_corr=min_abs_corr,
-                sample_size=sample_size_n,
-                file_metadata_id=file_metadata_id if _file_needs_processing else None,
-                file_needs_processing=_file_needs_processing,
-                file_storage_key=object_key if _file_needs_processing else None,
-                file_id_new=file_id_new if _file_needs_processing else None,
-                file_source_minio_path=_source_minio_path,
-                file_source_download_url=_source_download_url,
-                file_minio_cache_key=_minio_cache_key,
-                file_gwas_library_id=_gwas_library_id,
-                user_email=current_user_email,
-                project_name=project_name,
-                opentargets_study_id=opentargets_study_id,
-            ),
+        projects.save_analysis_state(
+            current_user_id, project_id, {"status": "Queued", "flow_run_id": None}
+        )
+        sample_size_label = SAMPLE_SIZE_SOURCE_LABELS.get(
+            sample_size_resolution.source, sample_size_resolution.source
+        )
+        projects.add_analysis_event(
+            current_user_id, project_id, "Setup",
+            f"p < {p_value_threshold:g} · MAF ≥ {maf_threshold:g} · window {window} kb · "
+            f"coverage {coverage:g} · {population} · {ref_genome} · "
+            f"N = {sample_size_n:,} ({sample_size_label})",
+            details={**analysis_parameters, "population": population, "ref_genome": ref_genome},
+        )
+        try:
+            loop = asyncio.get_running_loop()
+            flow_run = await loop.run_in_executor(
+                None,
+                lambda: invoke_analysis_pipeline_deployment(
+                    user_id=current_user_id,
+                    project_id=project_id,
+                    gwas_file_path=file_path,
+                    ref_genome=ref_genome,
+                    population=population,
+                    batch_size=batch_size,
+                    max_workers=max_workers,
+                    maf_threshold=maf_threshold,
+                    p_value_threshold=p_value_threshold,
+                    seed=seed,
+                    window=window,
+                    L=L,
+                    coverage=coverage,
+                    min_abs_corr=min_abs_corr,
+                    sample_size=sample_size_n,
+                    file_metadata_id=file_metadata_id if _file_needs_processing else None,
+                    file_needs_processing=_file_needs_processing,
+                    file_storage_key=object_key if _file_needs_processing else None,
+                    file_id_new=file_id_new if _file_needs_processing else None,
+                    file_source_minio_path=_source_minio_path,
+                    file_source_download_url=_source_download_url,
+                    file_minio_cache_key=_minio_cache_key,
+                    file_gwas_library_id=_gwas_library_id,
+                    user_email=current_user_email,
+                    project_name=project_name,
+                    opentargets_study_id=opentargets_study_id,
+                ),
+            )
+        except Exception:
+            projects.save_analysis_state(
+                current_user_id, project_id,
+                {"status": "Failed", "message": "The analysis could not be started"},
+            )
+            raise
+        projects.save_analysis_state(
+            current_user_id, project_id, {"flow_run_id": str(flow_run.id)}
         )
 
         return AnalysisPipelineStartResponse(
