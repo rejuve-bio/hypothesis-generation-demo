@@ -19,6 +19,26 @@ def significance_floor(override: float | None = None) -> float:
     return float(os.getenv("GO_SIGNIFICANCE_MAX_P", "0.05"))
 
 
+# Genome build of every analysis output (harmonized sumstats, credible sets).
+# The harmonizer lifts inputs to build 38 (`--to_build "38"` in
+# scripts/1000Genomes_phase3/6_harmoniser.sh), COJO and fine-mapping use the b38
+# LD panel (plink_dir_38), and OpenTargets data is GRCh38. A project's
+# `ref_genome` is only the build of the uploaded file.
+RESULTS_GENOME_BUILD = "GRCh38"
+
+
+def resolve_results_genome(project: dict | None, has_results: bool) -> str | None:
+    """Genome build of a project's results, or None if it has none.
+
+    Projects analysed before `results_genome` was stored fall back to
+    RESULTS_GENOME_BUILD, but only when they actually have results.
+    """
+    stored = (project or {}).get("results_genome")
+    if stored:
+        return stored
+    return RESULTS_GENOME_BUILD if has_results else None
+
+
 class Config:
     """Centralized configuration for the application"""
     

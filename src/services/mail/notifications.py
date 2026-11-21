@@ -16,16 +16,21 @@ def send_pipeline_notification(
     *,
     success: bool,
     detail: str | None = None,
+    restarted: bool = False,
 ) -> None:
     """Send a completion or failure notification for an analysis pipeline run. Never raises."""
     if not user_email:
         logger.info("[PIPELINE] No user_email provided — skipping notification")
         return
 
+    project_name = project_name or project_id
+    if restarted:
+        project_name = f"{project_name} (restarted)"
+
     if success:
         payload = build_complete_email(
             to=user_email,
-            project_name=project_name or project_id,
+            project_name=project_name,
             project_id=project_id,
             app_base_url=os.getenv("APP_BASE_URL", "https://dev.rejuve.bio"),
         )
@@ -34,7 +39,7 @@ def send_pipeline_notification(
     else:
         payload = build_failed_email(
             to=user_email,
-            project_name=project_name or project_id,
+            project_name=project_name,
             error=detail,
         )
         ok_log = f"Failure notification email sent to {user_email}"

@@ -29,6 +29,8 @@ from src.api.schemas.phenotypes import (
 )
 from src.api.schemas.projects import (
     AnalysisPipelineStartResponse,
+    AnalysisResumeRequest,
+    AnalysisResumeResponse,
     BulkDeleteProjectsOkResponse,
     BulkDeleteProjectsPartialResponse,
     BulkDeleteProjectsRequest,
@@ -38,6 +40,8 @@ from src.api.schemas.projects import (
 
 __all__ = [
     "AnalysisPipelineStartResponse",
+    "AnalysisResumeRequest",
+    "AnalysisResumeResponse",
     "BulkDeleteHypothesesRequest",
     "BulkDeleteHypothesesResponse",
     "BulkDeleteProjectsOkResponse",

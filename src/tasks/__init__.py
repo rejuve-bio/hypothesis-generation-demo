@@ -47,8 +47,12 @@ from src.tasks.gene_expression import (
 from src.tasks.project import (
     prepare_gwas_file_task,
     save_analysis_state_task,
+    record_analysis_event_task,
+    save_results_genome_task,
     create_analysis_result_task,
     get_project_analysis_path_task,
+    ensure_harmonized_file_task,
+    reset_analysis_outputs_task,
     count_gwas_records,
     get_project_with_full_data,
 )

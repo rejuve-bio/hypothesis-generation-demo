@@ -81,6 +81,18 @@ class AnalysisHandler(BaseHandler):
             logger.error(f"Error saving credible set: {str(e)}")
             raise
 
+    def delete_credible_sets(self, user_id, project_id):
+        result = self.credible_sets_collection.delete_many(
+            {'user_id': user_id, 'project_id': project_id}
+        )
+        logger.info(f"Deleted {result.deleted_count} credible sets for project {project_id}")
+
+    def delete_analysis_results(self, user_id, project_id):
+        result = self.analysis_results_collection.delete_many(
+            {'user_id': user_id, 'project_id': project_id}
+        )
+        logger.info(f"Deleted {result.deleted_count} analysis results for project {project_id}")
+
     def get_credible_sets_for_project(self, user_id, project_id):
         """Get all credible sets for a project"""
         try:
