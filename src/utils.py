@@ -313,7 +313,7 @@ def transform_credible_sets_to_locuszoom(credible_sets_data):
             "position": df[bp_col].astype(int).tolist(),
             "ref_allele": df[a2_col].astype(str).tolist(),
             "minor_allele": df[a1_col].astype(str).tolist(),
-            "ref_allele_freq": df[frq_col].astype(float).tolist(),
+            "ref_allele_freq": [None if pd.isna(f) else float(f) for f in df[frq_col]],
             "variant": [f"{row[chr_col]}:{row[bp_col]}:{row[a2_col]}:{row[a1_col]}" for _, row in df.iterrows()],
             "posterior_prob": df['PIP'].astype(float).tolist(),
             "is_member": (df.get('cs', 0) != 0).tolist(),

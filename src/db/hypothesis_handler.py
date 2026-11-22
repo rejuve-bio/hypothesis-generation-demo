@@ -51,8 +51,8 @@ class HypothesisHandler(BaseHandler):
         return hypotheses if hypotheses else []
 
     def check_hypothesis(self, user_id=None, enrich_id=None, go_id=None):
-        """Check if hypothesis exists"""
-        query = {}
+        """Check if a generated hypothesis (one with a summary) exists"""
+        query = {'summary': {'$ne': None}}
         
         if user_id:
             query['user_id'] = user_id
@@ -69,7 +69,8 @@ class HypothesisHandler(BaseHandler):
         query = {
             'enrich_id': enrich_id,
             'go_id': go_id,
-            'user_id': user_id
+            'user_id': user_id,
+            'summary': {'$ne': None},
         }
         hypothesis = self.hypothesis_collection.find_one(query)
         if hypothesis:
