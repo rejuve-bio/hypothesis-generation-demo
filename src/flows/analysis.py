@@ -125,7 +125,8 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
         # Start LDSC + tissue analysis immediately after harmonization (runs in parallel)
         logger.info(f"[PIPELINE] Starting LDSC + tissue analysis in parallel after harmonization")
         ldsc_tissue_future = run_combined_ldsc_tissue_analysis.submit(
-            harmonized_file, output_dir, project_id, user_id
+            harmonized_file, output_dir, project_id, user_id,
+            opentargets_study_id=opentargets_study_id, sample_size=sample_size,
         )
         logger.info(f"[PIPELINE] LDSC + tissue analysis started in background")
 
@@ -332,6 +333,7 @@ def analysis_pipeline_flow(user_id, project_id, gwas_file_path=None, ref_genome=
 
                 logger.info(f"[PIPELINE] LDSC + tissue analysis completed successfully!")
                 logger.info(f"[PIPELINE] - Analysis run ID: {ldsc_tissue_result['analysis_run_id']}")
+                logger.info(f"[PIPELINE] - LDSC source: {ldsc_tissue_result.get('ldsc_source')}")
                 ldsc_status = "completed"
 
             except Exception as ldsc_e:
