@@ -25,6 +25,7 @@ from statsmodels.stats.multitest import fdrcorrection
 from src.config import Config
 from src.utils import get_deps
 from src.tasks.ldsc_sumstats import harmonized_to_ldsc_sumstats_zhang
+from src.services.ldsc_precomputed import fetch_precomputed, reference_fingerprint
 from src.catlas_census_mapping import (
     CatlasMappingError,
     ResolvedCensusCellFilter,
@@ -1009,12 +1010,19 @@ def get_coexpression_matrix_for_tissue(gene, cell_type, k=500, batch_size=1000):
     return top_positive, top_negative, context.genes
 
 @task(log_prints=True)
-def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_id):
-    """Combined LDSC + tissue analysis as part of main analysis pipeline"""
+def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_id,
+                                      opentargets_study_id=None, sample_size=None):
+    """Combined LDSC + tissue analysis as part of main analysis pipeline.
+
+    For OpenTargets studies with precomputed LDSC results in MinIO (see
+    src/services/ldsc_precomputed.py) the LDSC run itself is skipped; ranking,
+    Census mapping and saving are the same either way.
+    """
     analysis_run_id = None
 
     deps = get_deps()
     gene_expression = deps["gene_expression"]
+    storage = deps.get("storage")
 
     try:
         logger.info("[PIPELINE] Starting combined LDSC + tissue analysis")
@@ -1034,25 +1042,41 @@ def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_
         # Update status to running
         gene_expression.update_gene_expression_run_status(analysis_run_id, 'running')
         
-        # Step 1: Setup LDSC environment
-        logger.info("[PIPELINE] Setting up LDSC environment...")
-        ldsc_dir = setup_ldsc_environment(ldsc_work_dir)
-        
-        # Step 2: Run LDSC analysis
-        logger.info("[PIPELINE] Running LDSC heritability analysis...")
         output_prefix = f"{output_dir}/ldsc_project_analysis"
-        ldsc_success = run_ldsc_analysis(ldsc_dir, munged_file, output_prefix)
-        
-        if not ldsc_success:
-            raise RuntimeError("LDSC analysis failed")
-        
+
+        ldsc_source = "computed"
+        if opentargets_study_id and storage:
+            try:
+                fingerprint = reference_fingerprint(Config.from_env())
+            except OSError as e:
+                logger.warning(f"[PIPELINE] Cannot fingerprint LDSC references ({e}); running LDSC live")
+                fingerprint = None
+            if fingerprint and fetch_precomputed(
+                storage, opentargets_study_id, sample_size, fingerprint,
+                f"{output_prefix}.cell_type_results.txt",
+            ):
+                ldsc_source = "precomputed"
+
+        if ldsc_source == "computed":
+            # Step 1: Setup LDSC environment
+            logger.info("[PIPELINE] Setting up LDSC environment...")
+            ldsc_dir = setup_ldsc_environment(ldsc_work_dir)
+
+            # Step 2: Run LDSC analysis
+            logger.info("[PIPELINE] Running LDSC heritability analysis...")
+            ldsc_success = run_ldsc_analysis(ldsc_dir, munged_file, output_prefix)
+
+            if not ldsc_success:
+                raise RuntimeError("LDSC analysis failed")
+        else:
+            logger.info(f"[PIPELINE] Using precomputed LDSC results for {opentargets_study_id}")
+
         # Step 3: Process LDSC results
         logger.info("[PIPELINE] Processing LDSC results...")
         top_tissues, ldsc_results_data = process_ldsc_results(
             output_dir, "ldsc_project_analysis", 10
         )
 
-        storage = deps.get("storage")
         if storage and user_id and project_id:
             for suffix in (".cell_type_results.txt", "_ranked.csv"):
                 path = f"{output_prefix}{suffix}"
@@ -1091,11 +1115,12 @@ def run_combined_ldsc_tissue_analysis(munged_file, output_dir, project_id, user_
 
         significant_count = len([t for t in mapped_ldsc_results_data if t.get('Coefficient_P_value', 1) < 0.05])
 
-        logger.info(f"[PIPELINE] LDSC + tissue analysis completed successfully!, Analyzed {len(mapped_ldsc_results_data)} tissues, found {significant_count} significant")
+        logger.info(f"[PIPELINE] LDSC + tissue analysis completed successfully! ({ldsc_source}), Analyzed {len(mapped_ldsc_results_data)} tissues, found {significant_count} significant")
 
         return {
             "success": True,
             "analysis_run_id": analysis_run_id,
+            "ldsc_source": ldsc_source,
             "tissues_analyzed": len(mapped_ldsc_results_data),
             "significant_tissues": significant_count,
             "top_tissues": mapped_ldsc_results_data[:10]
