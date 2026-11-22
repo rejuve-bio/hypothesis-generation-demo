@@ -127,3 +127,16 @@ def test_tissue_copy_does_nothing_without_source():
     handler.save_tissue_selection = MagicMock()
     handler.ensure_tissue_selection_copy("owner", "template", "viewer", "fork", "rs1")
     handler.save_tissue_selection.assert_not_called()
+
+
+def test_hypothesis_lookup_ignores_placeholders_without_summary():
+    handler = _bare(HypothesisHandler)
+    handler.hypothesis_collection = MagicMock()
+    handler.hypothesis_collection.find_one.return_value = None
+
+    handler.check_hypothesis("user-1", "enrich-1", "GO:1")
+    handler.get_hypothesis_by_enrich_and_go("enrich-1", "GO:1", "user-1")
+
+    assert handler.hypothesis_collection.find_one.call_count == 2
+    for call in handler.hypothesis_collection.find_one.call_args_list:
+        assert call.args[0]["summary"] == {"$ne": None}
